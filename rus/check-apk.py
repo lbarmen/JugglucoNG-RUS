@@ -204,7 +204,7 @@ def check_watchface_resources(apk):
     if not check(len(wanted) >= 13, f'const-only watch face resources found in sources: {len(wanted)}'):
         return
     out = run([build_tool('aapt2'), 'dump', 'resources', apk])
-    ids = {(t, n): int(i, 16) for i, t, n in re.findall(r'resource (0x[0-9a-f]+) (\w+)/(\w+)', out)}
+    ids = {(t, n): int(i, 16) for i, t, n in re.findall(r'resource (0x[0-9a-f]+) (\w+)/(\S+)', out)}
     missing = [f'{t}/{n}' for t, n in wanted if (t, n) not in ids]
     check(not missing, f'wear APK keeps {len(wanted)} watch face resources (rus_keep.xml)'
           + (f' (missing: {missing})' if missing else ''))
@@ -222,6 +222,13 @@ def check_watchface_resources(apk):
     unused = [f'{t}/{n}' for t, n in wanted if (t, n) in ids and ids[(t, n)] not in literals]
     check(not missing and not unused, f'wear code uses the real ids of {len(wanted)} watch face resources (not 0)'
           + (f' (not referenced: {unused})' if unused else ''))
+    # Wear is built with the previous resource shrinker (rus/gradlew-rus.sh): no id in the code may point to a
+    # resource it removed. Literals of a resource type that exists in the APK are taken as resource ids.
+    types = {i >> 16 for i in ids.values()}
+    known = set(ids.values())
+    dangling = sorted(hex(x) for x in literals if x >> 16 in types and x not in known)
+    check(not dangling, f'wear code: every resource id in the code exists in the APK ({len(literals)} literals)'
+          + (f' (missing: {dangling[:20]})' if dangling else ''))
 
 
 def check_upstream_untouched():
