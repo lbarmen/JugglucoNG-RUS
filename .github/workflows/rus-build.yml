@@ -1,0 +1,94 @@
+# JugglucoNG-RUS: build of build type `rus` (phone + wear) and checks on the APKs.
+#
+# test-build: no environment, no secrets. Signed with a one-time key the job creates and
+# deletes itself; release number 0 (versionName ...-rus0). Its APKs are for checks and the
+# emulator only, never for a phone or a watch (an APK with our key comes from a tagged release).
+#
+# The signed release job (tag rus-*, environment rus-signing) is added later in this file.
+name: RUS build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rus-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test-build:
+    name: rus test build (one-time key, -rus0)
+    if: github.repository == 'lbarmen/JugglucoNG-RUS'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # .gitmodules stays upstream's; our copy is used only when upstream's libjuice is unreachable.
+      - name: libjuice submodule (upstream, our copy as fallback)
+        run: |
+          git submodule update --init --recursive || {
+            echo "::warning::upstream libjuice unreachable, using lbarmen/libjuice"
+            git config submodule.Common/src/main/cpp/libjuice.url https://github.com/lbarmen/libjuice.git
+            git submodule update --init --recursive
+          }
+
+      - name: Fetch upstream main (for the "upstream files untouched" check)
+        run: |
+          git remote add upstream https://github.com/ctqvva/JugglucoNG.git
+          git fetch --no-tags upstream main
+
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install NDK and CMake (upstream script, versions from Common/build.gradle)
+        run: bash scripts/dist/install-sdk.sh
+
+      - name: Restore vendor libraries from upstream APK 1.2.3 (upstream script, sha256-checked)
+        run: bash scripts/restore-build-inputs.sh
+
+      - name: Build rus phone + wear with a one-time signing key
+        run: |
+          set -euo pipefail
+          umask 077
+          kdir=$(mktemp -d "$RUNNER_TEMP/rus-onetime.XXXXXX")
+          trap 'rm -rf "$kdir"' EXIT
+          pw=$(openssl rand -hex 24)
+          echo "::add-mask::$pw"
+          keytool -genkeypair -keystore "$kdir/onetime.p12" -storetype PKCS12 \
+            -storepass "$pw" -keypass "$pw" -alias onetime -keyalg RSA -keysize 2048 -validity 2 \
+            -dname "CN=JugglucoNG-RUS one-time test key" > /dev/null 2>&1
+          export ORG_GRADLE_PROJECT_thekeyfile="$kdir/onetime.p12"
+          export ORG_GRADLE_PROJECT_thepassword="$pw"
+          export ORG_GRADLE_PROJECT_thekeyalias=onetime
+          export ORG_GRADLE_PROJECT_thekeypassword="$pw"
+          bash rus/gradlew-rus.sh :Common:assembleMobileRus :Common:assembleWearRus \
+            -PrusRelease=0 --no-daemon --no-configuration-cache --stacktrace
+
+      - name: Checks on the APKs
+        run: |
+          set -euo pipefail
+          phone=$(ls Common/build/outputs/apk/mobile/rus/*.apk)
+          wear=$(ls Common/build/outputs/apk/wear/rus/*.apk)
+          echo "phone: $phone"; echo "wear: $wear"
+          python3 rus/check-apk.py --phone "$phone" --wear "$wear" --release 0 --mode test | tee rus-checks.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: rus-test-${{ github.sha }}
+          path: |
+            Common/build/outputs/apk/mobile/rus/*.apk
+            Common/build/outputs/apk/wear/rus/*.apk
+            rus-checks.txt
+          if-no-files-found: warn
+          retention-days: 14
