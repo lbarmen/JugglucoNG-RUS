@@ -9,7 +9,8 @@
   запасной источник обновлений выключен.
 - 2026-11-14 — циферблат часов: в официальном 1.3.2 он падает с «String resource ID #0x0» — названия и значки
   цветов попадают в код как 0 и выбрасываются при сжатии. Часы собираются с настоящими номерами ресурсов
-  (`rus/gradlew-rus.sh`, `-Pandroid.nonFinalResIds=false`), сами ресурсы сохраняет
+  и прежним способом сжатия ресурсов (`rus/gradlew-rus.sh`: `-Pandroid.nonFinalResIds=false`,
+  `-Pandroid.r8.optimizedResourceShrinking=false`), сами ресурсы на всякий случай сохраняет
   `Common/src/wearRus/res/raw/rus_keep.xml`.
 - 2026-11-14 — сборка и проверки APK в GitHub Actions (`rus-build.yml`, `rus/check-apk.py`), проверка секретов
   перед коммитом (`rus/check-secrets.sh`).
