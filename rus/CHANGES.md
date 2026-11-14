@@ -1,0 +1,20 @@
+# Изменения JugglucoNG RUS
+
+Что изменено по сравнению с JugglucoNG, по выпускам (GPL-3.0 требует отмечать изменения с датой).
+Изменения в коде автора JugglucoNG — 0 файлов, пока не сказано иное (см. HOOKS.md).
+
+## rus-1.3.2-1 — готовится (на основе JugglucoNG 1.3.2-Alpha)
+- 2026-11-14 — тип сборки `rus`: пакет `tk.glucodata.ng.rus`, название «JugglucoNG RUS» на 16 языках, значок
+  с другим фоном, циферблат «Juggluco RUS», свой номер версии (103201, часы 1103201), обновления из этого репозитория,
+  запасной источник обновлений выключен.
+- 2026-11-14 — циферблат часов: в официальном 1.3.2 он падает с «String resource ID #0x0» — названия и значки
+  цветов попадают в код как 0 и выбрасываются при сжатии. Часы собираются с настоящими номерами ресурсов
+  (`rus/gradlew-rus.sh`, `-Pandroid.nonFinalResIds=false`), сами ресурсы сохраняет
+  `Common/src/wearRus/res/raw/rus_keep.xml`.
+- 2026-11-14 — сборка и проверки APK в GitHub Actions (`rus-build.yml`, `rus/check-apk.py`), проверка секретов
+  перед коммитом (`rus/check-secrets.sh`).
+
+---
+English: per-release list of our changes against JugglucoNG. First release rus-1.3.2-1 (in preparation): build type
+`rus` (package, name, icon background, version code, update source), wear watch face fix (keep color names and icons),
+CI build with APK checks.

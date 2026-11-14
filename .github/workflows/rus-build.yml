@@ -71,7 +71,10 @@ jobs:
           export ORG_GRADLE_PROJECT_thepassword="$pw"
           export ORG_GRADLE_PROJECT_thekeyalias=onetime
           export ORG_GRADLE_PROJECT_thekeypassword="$pw"
-          bash rus/gradlew-rus.sh :Common:assembleMobileRus :Common:assembleWearRus \
+          # phone and wear in separate calls: wear needs final R ids (see rus/gradlew-rus.sh)
+          bash rus/gradlew-rus.sh :Common:assembleMobileRus \
+            -PrusRelease=0 --no-daemon --no-configuration-cache --stacktrace
+          bash rus/gradlew-rus.sh :Common:assembleWearRus \
             -PrusRelease=0 --no-daemon --no-configuration-cache --stacktrace
 
       - name: Checks on the APKs
