@@ -90,11 +90,31 @@ def build_gradle_value(name):
 
 
 def buildconfig_version_code(variant_dir):
-    files = glob.glob(f'Common/build/generated/source/buildConfig/{variant_dir}/**/BuildConfig.java', recursive=True)
-    if not files:
-        return None
-    m = re.search(r'VERSION_CODE\s*=\s*(\d+)', open(files[0], encoding='utf-8').read())
-    return int(m.group(1)) if m else None
+    """VERSION_CODE from the generated BuildConfig: .java source, or compiled .class / .jar (AGP may emit bytecode)."""
+    rx = re.compile(r'VERSION_CODE\s*=\s*(\d+)')
+    for f in glob.glob(f'Common/build/generated/**/{variant_dir}/**/BuildConfig.java', recursive=True):
+        m = rx.search(open(f, encoding='utf-8').read())
+        if m:
+            print(f'      BuildConfig: {f}')
+            return int(m.group(1))
+    targets = glob.glob(f'Common/build/intermediates/**/{variant_dir}/**/tk/glucodata/BuildConfig.class', recursive=True)
+    for jar in glob.glob(f'Common/build/intermediates/**/{variant_dir}/**/*.jar', recursive=True):
+        try:
+            with zipfile.ZipFile(jar) as z:
+                if 'tk/glucodata/BuildConfig.class' in z.namelist():
+                    targets.append(jar)
+        except zipfile.BadZipFile:
+            pass
+    for t in targets:
+        cmd = ['javap', '-constants', '-cp', t, 'tk.glucodata.BuildConfig'] if t.endswith('.jar') \
+            else ['javap', '-constants', t]
+        m = rx.search(run(cmd))
+        if m:
+            print(f'      BuildConfig: {t}')
+            return int(m.group(1))
+    found = [f for f in glob.glob('Common/build/**/BuildConfig*', recursive=True) if variant_dir in f]
+    print(f'      BuildConfig not found for {variant_dir}; candidates: {found[:10]}')
+    return None
 
 
 def check_names():
