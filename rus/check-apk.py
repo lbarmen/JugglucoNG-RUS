@@ -44,7 +44,8 @@ def check(cond, msg):
 
 
 def run(cmd):
-    return subprocess.run(cmd, check=True, capture_output=True, text=True).stdout
+    # errors='replace': dexdump prints raw bytes of dex strings, not always valid UTF-8
+    return subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8', errors='replace').stdout
 
 
 def build_tool(name):
@@ -183,6 +184,46 @@ def check_watchface_name(apk):
           + ('' if m else ' (not found)') + (f' (got "{m.group(1)}")' if m and m.group(1) != WATCHFACE_NAME else ''))
 
 
+def const_only_resources():
+    """Resources the wear sources reach via `const val X = R.type.name`, plus every upstream *_style_name.
+
+    R8 resource shrinking misses these references (upstream 1.3.2 watch face crash: "String resource ID #0x0");
+    Common/src/wearRus/res/raw/rus_keep.xml keeps them. Taken from the sources, so a new color fails loudly."""
+    res = set()
+    for f in glob.glob('Common/src/wear/java/**/*.kt', recursive=True):
+        res.update(re.findall(r'const\s+val\s+\w+\s*(?::\s*Int\s*)?=\s*R\.(\w+)\.(\w+)',
+                              open(f, encoding='utf-8').read()))
+    strings = open('Common/src/wear/res/values/strings.xml', encoding='utf-8').read()
+    res.update(('string', n) for n in re.findall(r'name="(\w+_style_name)"', strings))
+    return sorted(res)
+
+
+def check_watchface_resources(apk):
+    """Each const-only resource exists in the wear APK and its id is used as a literal in the wear dex code."""
+    wanted = const_only_resources()
+    if not check(len(wanted) >= 13, f'const-only watch face resources found in sources: {len(wanted)}'):
+        return
+    out = run([build_tool('aapt2'), 'dump', 'resources', apk])
+    ids = {(t, n): int(i, 16) for i, t, n in re.findall(r'resource (0x[0-9a-f]+) (\w+)/(\w+)', out)}
+    missing = [f'{t}/{n}' for t, n in wanted if (t, n) not in ids]
+    check(not missing, f'wear APK keeps {len(wanted)} watch face resources (rus_keep.xml)'
+          + (f' (missing: {missing})' if missing else ''))
+    literals = set()
+    with zipfile.ZipFile(apk) as z:
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        tmp = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'rus-wear-dex')
+        os.makedirs(tmp, exist_ok=True)
+        for n in dexes:
+            path = z.extract(n, tmp)
+            code = run([build_tool('dexdump'), '-d', path])
+            literals.update(int(h, 16) for h in re.findall(r'\bconst v\d+, .*// #([0-9a-f]{8})$', code, re.M))
+            literals.update(int(h, 16) << 16 for h in re.findall(r'\bconst/high16 v\d+, .*// #([0-9a-f]{4})$', code, re.M))
+            os.remove(path)
+    unused = [f'{t}/{n}' for t, n in wanted if (t, n) in ids and ids[(t, n)] not in literals]
+    check(not missing and not unused, f'wear code uses the real ids of {len(wanted)} watch face resources (not 0)'
+          + (f' (not referenced: {unused})' if unused else ''))
+
+
 def check_upstream_untouched():
     """Only added files compared with the common ancestor with upstream main."""
     try:
@@ -229,6 +270,7 @@ def main():
     check_icon()
     check_native()
     check_watchface_name(a.wear)
+    check_watchface_resources(a.wear)
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_untouched()
