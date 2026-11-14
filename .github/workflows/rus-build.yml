@@ -77,6 +77,26 @@ jobs:
           bash rus/gradlew-rus.sh :Common:assembleWearRus \
             -PrusRelease=0 --no-daemon --no-configuration-cache --stacktrace
 
+      # TEMPORARY: where do the watch face resource ids become 0? Remove after the fix.
+      - name: Watch face id diagnostics (temporary)
+        if: always()
+        run: |
+          {
+            echo "== compiled ColorStyleIdAndResourceIds classes"
+            find Common/build -path '*wearRus*' -name 'ColorStyleIdAndResourceIds*.class' | while read -r c; do
+              echo "--- $c"; javap -p -c -constants "$c" | grep -nE 'static final int|ambient|AMBIENT|ldc|sipush|iconst|bipush|<clinit>|invokespecial' | head -60
+            done
+            echo "== R classes with ambient_style_name (wearRus)"
+            find Common/build -path '*wearRus*' \( -name 'R.jar' -o -name 'R$string.class' \) | while read -r j; do
+              echo "--- $j"
+              if [ "${j##*.}" = jar ]; then javap -constants -cp "$j" 'tk.glucodata.R$string' 2>&1 | grep -E 'ambient_style_name|class' | head -5
+              else javap -constants "$j" | grep -E 'ambient_style_name' | head -3; fi
+            done
+            echo "== kotlin const in source"
+            grep -n 'AMBIENT_COLOR_STYLE_NAME_RESOURCE_ID' Common/src/wear/java/tk/glucodata/watchface/data/watchface/ColorStyleIdAndResourceIds.kt
+          } > rus-diag.txt 2>&1 || true
+          cat rus-diag.txt
+
       - name: Checks on the APKs
         run: |
           set -euo pipefail
@@ -93,5 +113,6 @@ jobs:
             Common/build/outputs/apk/mobile/rus/*.apk
             Common/build/outputs/apk/wear/rus/*.apk
             rus-checks.txt
+            rus-diag.txt
           if-no-files-found: warn
           retention-days: 14
