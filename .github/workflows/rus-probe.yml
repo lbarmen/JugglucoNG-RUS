@@ -16,6 +16,8 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 2
       - run: |
           set -u
           git config user.name rus-probe
@@ -23,12 +25,12 @@ jobs:
           git checkout -q -b test/probe-token-workflow
           echo "# probe" >> .github/workflows/rus-probe.yml
           git commit -qam "probe: workflow file change pushed with the job token"
-          git push origin test/probe-token-workflow > push1.txt 2>&1; r1=$?
+          r1=0; git push origin test/probe-token-workflow > push1.txt 2>&1 || r1=$?
           cat push1.txt
           git checkout -q -b test/probe-token-plain HEAD~1
           echo probe > rus-probe.txt
           git add rus-probe.txt
           git commit -qm "probe: plain change pushed with the job token"
-          git push origin test/probe-token-plain > push2.txt 2>&1; r2=$?
+          r2=0; git push origin test/probe-token-plain > push2.txt 2>&1 || r2=$?
           cat push2.txt
           echo "RESULT workflow-change push exit=$r1; plain push exit=$r2" | tee -a "$GITHUB_STEP_SUMMARY"
