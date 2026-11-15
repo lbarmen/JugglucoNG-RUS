@@ -23,6 +23,10 @@
   задачи, отчёт, врезки, бюджет, секреты, сборка, тесты автора и наши эталоны; секретов нет, ничего не отправляет.
 - 2026-11-15 — главная страница репозитория `.github/README.md` с таблицей отличий (README автора не тронут);
   этот список разбит по версиям.
+- 2026-11-15 — вливание выпуска через PR `sync/<выпуск>` (`rus/sync-merge.sh`, порядок — `rus/SYNC.md`, журнал —
+  `rus/SYNC-LOG.md`), сводка Juggluco раз в месяц (`rus/juggluco-summary.py`); кандидат на телефон — только когда
+  код автора в `main` ровно его выпуск старше 7 дней; напоминание о блоках на тесте дольше 7 дней
+  (`rus-remind.yml`); `main` защищён набором правил (`rus/ruleset-main.json`).
 
 ## rus-1.3.2-2 — 2026-11-15 (на основе JugglucoNG 1.3.2-Alpha)
 Первая версия с тегом. Кандидат 1 тега не получил: циферблат на часах падал (вторая ошибка ниже).
@@ -52,7 +56,8 @@
 ---
 English: per-version list of our changes against JugglucoNG; a version is a tag `rus-<JugglucoNG version>-<our number>`.
 After rus-1.3.2-2 (in main, not tagged): nothing user-visible; tooling only — keeping the last 5 candidate APKs,
-upstream sync tools and daily sync check workflow, golden runs of upstream alarm/forecast code, repository front page
+upstream sync tools and daily sync check workflow, release merge through a sync PR, candidate only on an upstream
+release 7+ days old, reminder for blocks on test, main protected by a ruleset, golden runs of upstream alarm/forecast code, repository front page
 `.github/README.md` with the table of differences. rus-1.3.2-2 (2026-11-15, first tagged version): build type `rus`
 (package, name, icon background, version code, update source), wear watch face fixes (resource ids and names kept,
 no-arg constructor of ComplicationDrawable kept; checked on a watch), CI build with APK checks, signed candidate
