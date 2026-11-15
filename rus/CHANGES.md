@@ -14,6 +14,9 @@
   `Common/src/wearRus/res/raw/rus_keep.xml`.
 - 2026-11-14 — сборка и проверки APK в GitHub Actions (`rus-build.yml`, `rus/check-apk.py`), проверка секретов
   перед коммитом (`rus/check-secrets.sh`).
+- 2026-11-15 — циферблат часов, вторая ошибка (на часах после починки «#0x0»): цвета `complication_*_style.xml`
+  создаются по имени класса `ComplicationDrawable`, а прежний способ сжатия ресурсов не сохраняет его конструктор —
+  чёрный экран, `NoSuchMethodException`. Своё правило `rus/proguard-rus.pro` и проверка конструкторов в сборке.
 - 2026-11-15 — сборка-кандидат: `main` + ветки блоков, подпись своим ключом (окружение `rus-signing` с ручным
   подтверждением, только `main`), проверка «ветки не приносят нового кода автора», отпечаток сертификата сверяется
   с `rus/rus-cert.sha256`, `update-manifest.json` (`rus/make-update-manifest.py`). APK — на странице сборки;
