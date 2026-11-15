@@ -1,0 +1,31 @@
+# JugglucoNG-RUS: risk areas of upstream code (ТЗ 3.5). An upstream change here needs a manual review and a check on
+# the phone before install. Format: <area> | <glob>; `*` matches across directories, case-insensitive.
+# Classes the Sibionics driver depends on are found by rus/sync-report.py from the driver's imports, not listed here.
+датчик | Common/src/main/java/tk/glucodata/drivers/sibionics/*
+датчик | Common/src/main/cpp/sibionics/*
+датчик | *V116A*
+тревоги | Common/src/main/java/tk/glucodata/alerts/*
+тревоги | Common/src/mobile/java/tk/glucodata/ui/alerts/*
+тревоги | */Notify.java
+тревоги | */AlarmActivity*
+тревоги | */*AlarmActivityHost*
+прогноз | */data/prediction/*
+прогноз | */*Prediction*
+прогноз | */*Forecast*
+журнал и база | */data/journal/*
+журнал и база | */HistoryDatabase*
+журнал и база | */*Migration*
+журнал и база | Common/schemas/*
+Nightscout | */NightPost*
+Nightscout | */Nightscout*
+Nightscout | */JournalTreatment*
+Nightscout | */nightscout*
+часы | Common/src/wear/*
+часы | */Wear*
+сборка | *.gradle
+сборка | gradle/*
+сборка | gradle.properties
+сборка | .github/*
+сборка | scripts/*
+нативный код | Common/src/main/cpp/*
+разрешения | *AndroidManifest.xml
