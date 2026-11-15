@@ -9,7 +9,9 @@
 # may be empty): main + those branches merged in this run, signed with our key; the APKs stay on the
 # run page (artifact, 14 days) and are installed by hand. No GitHub release: owner's decision
 # 15.11.2026 - a block goes to main only after it was tested on the phone, each block on its own.
-#   candidate-precheck  no secrets: inputs, release N above every rus-X.Y.Z-M tag, branches exist,
+#   candidate-precheck  no secrets: inputs, release N above every rus-X.Y.Z-M tag and every earlier
+#                       candidate of this version that built APKs or has not finished, never again in
+#                       a re-run (rus/candidate-number.sh, again first in candidate-build), branches exist,
 #                       they merge into main cleanly and bring no upstream commit that main does not
 #                       have (sync/... branches with fresh upstream code never get the key);
 #                       their code in main is exactly one of their releases without the pre-release
@@ -34,7 +36,7 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: '0 = test build (one-time key); 1..99 = candidate with our key (must be above every rus-X.Y.Z-N tag)'
+        description: '0 = test build (one-time key); 1..99 = candidate with our key (above every rus-X.Y.Z-N tag and earlier candidate)'
         required: true
         default: '0'
       blocks:
@@ -144,6 +146,9 @@ jobs:
       inputs.release != '0'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read   # earlier candidate runs of this workflow (release number)
     outputs:
       release: ${{ steps.check.outputs.release }}
       version: ${{ steps.check.outputs.version }}
@@ -169,12 +174,10 @@ jobs:
           [[ "$REL" =~ ^[1-9][0-9]?$ ]] || { echo "::error::release '$REL' is not 1..99"; exit 1; }
           up=$(sed -n "s/.*appVersionName *= *'\([^']*\)'.*/\1/p" Common/build.gradle | head -1)
           ver="${up%%-*}"
+          [ -n "$ver" ] || { echo "::error::appVersionName not found in Common/build.gradle"; exit 1; }
           git fetch --no-tags origin "+refs/tags/rus-*:refs/tags/rus-*" || true
-          max=0
-          for t in $(git tag -l "rus-$ver-*"); do
-            m="${t##*-}"; [[ "$m" =~ ^[0-9]+$ ]] && [ "$m" -gt "$max" ] && max="$m"
-          done
-          [ "$REL" -gt "$max" ] || { echo "::error::release $REL must be above the last tag rus-$ver-$max"; exit 1; }
+          # above every tag and every earlier candidate of this version; never again in a re-run (owner's word 15.11)
+          bash rus/candidate-number.sh "$ver" "$REL"
           git remote add upstream https://github.com/ctqvva/JugglucoNG.git
           git fetch --no-tags upstream main
           list=""; pins=""
@@ -226,11 +229,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     environment: rus-signing
+    permissions:
+      contents: read
+      actions: read   # earlier candidate runs of this workflow (release number)
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
+
+      # "Re-run failed jobs" / "Re-run this job" start here with the precheck of an earlier attempt: number again
+      - name: Release number still free (no secrets in this step)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE: ${{ needs.candidate-precheck.outputs.release }}
+          VERSION: ${{ needs.candidate-precheck.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/tags/rus-*:refs/tags/rus-*" || true
+          bash rus/candidate-number.sh "$VERSION" "$RELEASE"
 
       # exactly the commits the precheck checked: a branch moved while the run waited for approval -> stop
       - name: Merge the block branches onto main (the commits and the tree the precheck checked)

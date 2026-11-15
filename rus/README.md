@@ -40,6 +40,9 @@
 
 Сборка и проверки APK — задача GitHub Actions `.github/workflows/rus-build.yml`, проверки — `rus/check-apk.py`.
 Перед каждым коммитом — `bash rus/check-secrets.sh`. Врезки в файлы автора (сейчас их нет) — в [HOOKS.md](HOOKS.md).
+Свой адрес Nightscout и серийные номера проверка знает из личного списка — файла вне репозитория
+`../secrets-deny.txt`; его читает только проверка на компьютере владельца, в GitHub Actions его нет. Записи
+добавляет `python -X utf8 rus/secrets-deny.py add` (значение не показывается ни при вводе, ни в отчёте).
 
 Вливание выпусков JugglucoNG: каждое утро их последний выпуск проверяет `.github/workflows/rus-sync.yml` (слияние
 внутри задачи, отчёт, сборка, их тесты, наши эталоны тревог), вливает чат через PR `sync/<выпуск>` — [SYNC.md](SYNC.md).
