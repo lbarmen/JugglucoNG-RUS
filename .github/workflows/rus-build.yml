@@ -12,6 +12,9 @@
 #   candidate-precheck  no secrets: inputs, release N above every rus-X.Y.Z-M tag, branches exist,
 #                       they merge into main cleanly and bring no upstream commit that main does not
 #                       have (sync/... branches with fresh upstream code never get the key);
+#                       their code in main is exactly one of their releases without the pre-release
+#                       mark, published at least 7 days ago (ТЗ 3.6; hold=0 skips both, urgent
+#                       candidate only by the owner's word);
 #   candidate-build     environment rus-signing (manual approval, branch main only): our key from the
 #                       environment secrets, in a temp dir outside the repo, deleted; no Gradle cache,
 #                       no daemon, no configuration cache (as upstream signed-build.yml); checks with
@@ -21,6 +24,11 @@
 #                       skips drafts and pre-releases). Kept ready for when releases are wanted.
 # Tags rus-X.Y.Z-N are set by hand on main after the owner's "ok"; they build nothing.
 name: RUS build
+# Candidate runs carry their number and block branches in the run name: rus-remind.yml reads them.
+# Other runs get GitHub's default name (a run-name of only whitespace falls back to it).
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && inputs.release != '0' &&
+  format('RUS candidate {0} blocks: {1}', inputs.release, inputs.blocks || '-') || ' ' }}
 
 on:
   workflow_dispatch:
@@ -33,6 +41,10 @@ on:
         description: 'candidate only: block branches merged onto main, space-separated (empty = main alone)'
         required: false
         default: ''
+      hold:
+        description: 'candidate only: 1 = their code in main must be their release, 7+ days old; 0 = urgent, only by the owner word'
+        required: false
+        default: '1'
   push:
     branches: [main, 'feature/**']
 
@@ -144,6 +156,8 @@ jobs:
         env:
           REL: ${{ inputs.release }}
           BLOCKS: ${{ inputs.blocks }}
+          HOLD: ${{ inputs.hold }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = refs/heads/main ] || { echo "::error::run the candidate on main (Use workflow from: main)"; exit 1; }
@@ -172,6 +186,29 @@ jobs:
           ours=$(git rev-list --count HEAD "^$GITHUB_SHA" ^upstream/main)
           [ "$all" = "$ours" ] || {
             echo "::error::the block branches bring $((all - ours)) upstream commit(s) that main does not have"; exit 1; }
+          # ТЗ 3.6: their code in main = one of their releases (no pre-release mark), 7+ days old
+          case "${HOLD:-1}" in
+            0) echo "::warning::hold=0: release and 7-day checks skipped (urgent candidate, owner's word)" ;;
+            1)
+              theirs=$(git merge-base "$GITHUB_SHA" upstream/main)
+              tags=$(git ls-remote --tags upstream | awk -v c="$theirs" '
+                { n=$2; sub("refs/tags/","",n); p=sub(/\^\{\}$/,"",n); if (p || !(n in m)) m[n]=$1 }
+                END { for (n in m) if (m[n]==c) print n }')
+              rels=$(gh api "repos/ctqvva/JugglucoNG/releases?per_page=100" --jq \
+                '.[] | select(.draft | not) | select(.prerelease | not) | "\(.tag_name) \(.published_at)"')
+              match=""
+              for t in $tags; do
+                line=$(printf '%s\n' "$rels" | awk -v t="$t" '$1==t')
+                [ -n "$line" ] && match="$line"
+              done
+              [ -n "$match" ] || {
+                echo "::error::their code in main (${theirs:0:9}) is not one of their releases without the pre-release mark (tags there: ${tags:-none}); merge a release first (rus/SYNC.md) or hold=0 by the owner's word"; exit 1; }
+              age=$(( ( $(date +%s) - $(date -d "${match#* }" +%s) ) / 86400 ))
+              [ "$age" -ge 7 ] || {
+                echo "::error::their release ${match%% *} is $age day(s) old; a candidate for the phone waits 7 days (ТЗ 3.6) or hold=0 by the owner's word"; exit 1; }
+              echo "OK: their code in main = their release ${match%% *}, $age days old" ;;
+            *) echo "::error::hold '$HOLD' is not 0 or 1"; exit 1 ;;
+          esac
           echo "OK: candidate $ver-$REL = main ${GITHUB_SHA:0:7} +${list:- (no blocks)}; $all own commit(s) on top"
           echo "release=$REL" >> "$GITHUB_OUTPUT"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
