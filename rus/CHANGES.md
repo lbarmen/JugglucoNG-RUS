@@ -14,8 +14,13 @@
   `Common/src/wearRus/res/raw/rus_keep.xml`.
 - 2026-11-14 — сборка и проверки APK в GitHub Actions (`rus-build.yml`, `rus/check-apk.py`), проверка секретов
   перед коммитом (`rus/check-secrets.sh`).
+- 2026-11-15 — сборка-кандидат: `main` + ветки блоков, подпись своим ключом (окружение `rus-signing` с ручным
+  подтверждением, только `main`), проверка «ветки не приносят нового кода автора», отпечаток сертификата сверяется
+  с `rus/rus-cert.sha256`, `update-manifest.json` (`rus/make-update-manifest.py`). APK — на странице сборки;
+  выпуски на GitHub пока не делаются (задание `publish` выключено переменной `RUS_PUBLISH_RELEASES`).
 
 ---
 English: per-release list of our changes against JugglucoNG. First release rus-1.3.2-1 (in preparation): build type
 `rus` (package, name, icon background, version code, update source), wear watch face fix (keep color names and icons),
-CI build with APK checks.
+CI build with APK checks; signed candidate build (main + block branches) with certificate check and
+update-manifest.json; GitHub releases switched off for now.
