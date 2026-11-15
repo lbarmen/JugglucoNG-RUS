@@ -6,3 +6,4 @@ Common/src/rus/
 Common/src/wearRus/
 Common/src/testMobile/java/rus/
 .github/workflows/rus-*.yml
+.github/README.md

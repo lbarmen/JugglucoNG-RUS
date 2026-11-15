@@ -1,8 +1,10 @@
 # JugglucoNG RUS
 
 **Неофициальная версия [JugglucoNG](https://github.com/ctqvva/JugglucoNG).** Её делает не автор JugglucoNG.
-Об ошибках JugglucoNG RUS пишите сюда, в [Issues этого репозитория](https://github.com/lbarmen/JugglucoNG-RUS/issues),
-а не авторам JugglucoNG и Juggluco.
+Об ошибках JugglucoNG RUS не пишите авторам JugglucoNG и Juggluco. Обсуждения (Issues) в этом репозитории выключены.
+
+Эта страница — про сборку и устройство. Что это и чем отличается от официального — на
+[главной странице](/.github/README.md), изменения по версиям — в [CHANGES.md](CHANGES.md).
 
 **Не медицинское изделие.** Приложение не сертифицировано. Показания и тревоги могут быть неверными или не прийти.
 Решения о лечении принимайте по своему глюкометру и вместе с врачом. Используете на свой риск (GPL-3.0, раздел 15–16).
@@ -11,16 +13,14 @@
 Тот же JugglucoNG для Android-телефона и часов Wear OS, плюс небольшие свои изменения. Код автора не переписывается:
 всё своё лежит в своих файлах, чтобы обновления JugglucoNG вливались легко.
 
-Чем отличается от официального:
-- Имя пакета `tk.glucodata.ng.rus` и название «JugglucoNG RUS» — ставится рядом с официальным, не поверх.
-  Два приложения на одном датчике мешают друг другу: подключайте датчик только к одному.
-- Значок — их, с другим цветом фона; циферблат на часах — «Juggluco RUS».
-- Своя подпись. Обновления внутри приложения приходят из [выпусков этого репозитория](https://github.com/lbarmen/JugglucoNG-RUS/releases);
-  номер версии — их номер × 100 + наш номер выпуска (1.3.2 → 103201, 103202…), у часов + 1 000 000.
-- Починка циферблата часов: в официальном 1.3.2 он не добавляется («String resource ID #0x0»).
-- Список изменений по выпускам — [CHANGES.md](CHANGES.md).
+Таблица отличий от официального — одна, на [главной странице](/.github/README.md): новое отличие дописывается туда.
 
-Что не работает: режим Clone и сервис BloodControl (для AiDEX) — им нужны секреты автора JugglucoNG.
+## Версии
+- Версия — тег `rus-<версия JugglucoNG>-<наш номер>` на `main`, например `rus-1.3.2-2`; ставится после проверки
+  на телефоне или часах.
+- Номер версии в APK — их номер × 100 + наш номер (1.3.2 → 103201, 103202…), у часов + 1 000 000.
+- Своя подпись, отпечаток сертификата — [rus-cert.sha256](rus-cert.sha256). Обновления внутри приложения смотрят
+  в выпуски этого репозитория; выпуски пока не публикуются, APK остаётся на странице сборки.
 
 ## Закрытые библиотеки
 В APK телефона лежат 34 закрытые библиотеки производителей (`.so`, ≈ 44 МБ; например, для FreeStyle Libre 3).
@@ -52,11 +52,13 @@
 ---
 
 ## English (short)
-**Unofficial build of [JugglucoNG](https://github.com/ctqvva/JugglucoNG)**, not made by its author. Report problems
-here, not to the JugglucoNG or Juggluco authors. **Not a medical device**; use at your own risk.
+**Unofficial build of [JugglucoNG](https://github.com/ctqvva/JugglucoNG)**, not made by its author. Do not report
+problems of this build to the JugglucoNG or Juggluco authors; Issues are switched off here. **Not a medical device**;
+use at your own risk.
 
-Differences: package `tk.glucodata.ng.rus` (installs next to the official app), name "JugglucoNG RUS", own signing key,
-in-app updates from this repository's releases, fixed wear watch face. Clone mode and BloodControl do not work.
+This page is about the build. The table of differences from the official app is on the
+[front page](/.github/README.md), per-version changes are in [CHANGES.md](CHANGES.md). Version = tag
+`rus-<JugglucoNG version>-<our number>`; version code = theirs × 100 + our number (wear + 1 000 000).
 The phone APK contains 34 closed-source vendor libraries taken, like upstream does, from the published
 JugglucoNG 1.2.3-Alpha APK with hash checks. Build only via `bash rus/gradlew-rus.sh …`; upstream files are not
 modified (hooks, if any, are listed in HOOKS.md). Credits: ctqvva (JugglucoNG), Jaap Korthals Altes (Juggluco).
