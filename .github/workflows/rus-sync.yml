@@ -9,7 +9,10 @@
 # workflow_dispatch     always the full check: point = their release/commit (default: latest release),
 #                       base = our branch (default main), mode merge | overlay (release tree + our files, for the
 #                       run over past releases).
-# pull_request -> main  the full check of the PR tree as it is (no new merge); report main -> PR.
+# pull_request -> main  the full check of the PR tree as it is (no new merge); report main -> PR. A PR of our .md
+#                       files only (rus/our-paths.txt; not rus/HOOKS.md, check-hooks reads it; none under Common/,
+#                       an .md in a source set may go into the APK): check + merge jobs
+#                       only, build and tests skipped on purpose, report green in about a minute (owner's word 15.11).
 # Jobs: check -> merge (merge in the job, report, hooks/budget/secrets) -> build (one-time key, phone + wear,
 # check-apk --mode test, schema export) + tests (their JVM suites with our golden runs, guardrails, Python tests)
 # -> report (red if anything is red or skipped) -> remind (schedule only). No Gradle cache on purpose.
@@ -65,6 +68,7 @@ jobs:
       tag: ${{ steps.c.outputs.tag }}
       point: ${{ steps.c.outputs.point }}
       base: ${{ steps.c.outputs.base }}
+      docs: ${{ steps.c.outputs.docs }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -80,6 +84,7 @@ jobs:
           POINT_IN: ${{ inputs.point }}
           MODE_IN: ${{ inputs.mode }}
           SKIP: ${{ vars.RUS_SYNC_SKIP }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
           git remote add upstream "$UPSTREAM"
@@ -121,8 +126,17 @@ jobs:
               fi
             fi
           fi
-          echo "event=$EVENT kind=$kind mode=$mode tag=${tag:-none} point=${point:-none} base=$base"
-          { echo "mode=$mode"; echo "kind=$kind"; echo "tag=$tag"; echo "point=$point"; echo "base=$base"; } >> "$GITHUB_OUTPUT"
+          docs=0
+          if [ "$EVENT" = pull_request ]; then
+            # our .md files only, none under Common/ (source sets: an .md there may go into the APK); any odd,
+            # quoted or empty path list -> 0 -> the full check
+            files=$(git diff --name-only --no-renames "$PR_BASE" HEAD)
+            docs=$(printf '%s\n' "$files" | python3 -c "import sys; sys.path.insert(0, 'rus'); import rus_common as rc; f = [p for p in sys.stdin.read().splitlines() if p]; print(int(bool(f) and all(p.endswith('.md') and p != 'rus/HOOKS.md' and not p.startswith('Common/') and rc.is_ours(p) for p in f)))")
+            echo "PR files: $(printf '%s\n' "$files" | grep -c . || true); our .md only: $docs"
+            [ "$docs" = 1 ] && echo "PR только из наших .md-файлов: проверки врезок, бюджета и секретов — да, сборка и тесты — нет." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "event=$EVENT kind=$kind mode=$mode docs=$docs tag=${tag:-none} point=${point:-none} base=$base"
+          { echo "mode=$mode"; echo "kind=$kind"; echo "tag=$tag"; echo "point=$point"; echo "base=$base"; echo "docs=$docs"; } >> "$GITHUB_OUTPUT"
 
   merge:
     name: merge (in the job), report, hooks, budget, secrets
@@ -226,6 +240,7 @@ jobs:
   build:
     name: build rus phone + wear (one-time key), checks, schema export
     needs: [check, merge]
+    if: needs.check.outputs.docs != '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -327,6 +342,7 @@ jobs:
   tests:
     name: tests (their JVM suites + our golden runs, guardrails, Python tests)
     needs: [check, merge]
+    if: needs.check.outputs.docs != '1'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -443,6 +459,7 @@ jobs:
           KIND: ${{ needs.check.outputs.kind }}
           TAG: ${{ needs.check.outputs.tag }}
           BASE: ${{ needs.check.outputs.base }}
+          DOCS: ${{ needs.check.outputs.docs }}
           R_CHECK: ${{ needs.check.result }}
           R_MERGE: ${{ needs.merge.result }}
           R_BUILD: ${{ needs.build.result }}
@@ -457,6 +474,7 @@ jobs:
           if [ "$MODE" = skip ] || [ "$MODE" = remind ]; then
             echo "Полная проверка не нужна (mode=$MODE)." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
           fi
+          why=""; [ "$DOCS" = 1 ] && why=" (PR только из наших .md: не нужно)"
           p=parts
           # one matching artifact is unpacked straight into parts/ (no sync-merge/ folder): only the merge part can
           # be alone (merge red -> build and tests skipped)
@@ -469,8 +487,8 @@ jobs:
             echo "| задание | итог |"
             echo "|---|---|"
             echo "| merge: слияние, отчёт, врезки, бюджет, секреты | $(word "$R_MERGE") |"
-            echo "| build: сборка rus, проверки APK, схемы БД | $(word "$R_BUILD") |"
-            echo "| tests: их тесты и наши эталоны | $(word "$R_TESTS") |"
+            echo "| build: сборка rus, проверки APK, схемы БД | $(word "$R_BUILD")$why |"
+            echo "| tests: их тесты и наши эталоны | $(word "$R_TESTS")$why |"
             echo
             [ -f $p/sync-merge/conflict.txt ] && { cat $p/sync-merge/conflict.txt; echo; }
             if [ -f $p/sync-merge/checks.txt ]; then echo '### Проверки врезок, бюджета, секретов'; echo '```'; cat $p/sync-merge/checks.txt; echo '```'; fi
@@ -480,14 +498,17 @@ jobs:
             [ -f $p/sync-tests/out/junit-summary.txt ] && { echo; cat $p/sync-tests/out/junit-summary.txt; }
             if [ -f $p/sync-tests/out/ours.txt ]; then echo; echo 'Наши тесты (класс, тестов, упало, ошибок, пропущено, с):'; echo '```'; cat $p/sync-tests/out/ours.txt; echo '```'; fi
             g=""; for c in $p/sync-tests/Common/build/rus-golden/diff.md $p/sync-tests/rus-golden/diff.md; do [ -f "$c" ] && { g="$c"; break; }; done
-            if [ -n "$g" ]; then echo; sed 's/^# /### /' "$g"; else echo; echo '### Эталоны тревог и прогноза'; echo '**результата нет** (тесты не дошли до них)'; fi
+            if [ -n "$g" ]; then echo; sed 's/^# /### /' "$g"
+            elif [ "$DOCS" = 1 ]; then echo; echo '### Эталоны тревог и прогноза'; echo 'не нужны: PR только из наших .md'
+            else echo; echo '### Эталоны тревог и прогноза'; echo '**результата нет** (тесты не дошли до них)'; fi
             echo
             [ -f $p/sync-merge/sync-report.md ] && sed 's/^# /## /' $p/sync-merge/sync-report.md
             true
           } > sync-report.md
           cat sync-report.md >> "$GITHUB_STEP_SUMMARY"
           ok=1
-          for r in "$R_MERGE" "$R_BUILD" "$R_TESTS"; do [ "$r" = success ] || ok=0; done
+          need="$R_MERGE $R_BUILD $R_TESTS"; [ "$DOCS" = 1 ] && need="$R_MERGE"
+          for r in $need; do [ "$r" = success ] || ok=0; done
           if [ $ok = 1 ] && [ "$KIND" = merge ] && [ -n "$TAG" ]; then
             echo "verified $TAG on ${BASE}" > verified.txt
             echo "marker=verified-$TAG-${BASE:0:9}" >> "$GITHUB_ENV"

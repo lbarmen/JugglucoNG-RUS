@@ -43,7 +43,8 @@
 
 Вливание выпусков JugglucoNG: каждое утро их последний выпуск проверяет `.github/workflows/rus-sync.yml` (слияние
 внутри задачи, отчёт, сборка, их тесты, наши эталоны тревог), вливает чат через PR `sync/<выпуск>` — [SYNC.md](SYNC.md).
-В `main` — только через PR с зелёной проверкой `report` (набор правил `rus/ruleset-main.json`).
+В `main` — только через PR с зелёной проверкой `report` (набор правил `rus/ruleset-main.json`). PR только из наших
+`.md` (кроме `rus/HOOKS.md` и файлов в `Common/`) проверяется без сборки и тестов, примерно за минуту.
 
 ## Авторы и лицензия
 - [JugglucoNG](https://github.com/ctqvva/JugglucoNG) — [ctqvva](https://github.com/ctqvva) и участники.

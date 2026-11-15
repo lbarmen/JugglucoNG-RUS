@@ -1,7 +1,7 @@
 # JugglucoNG-RUS: build of build type `rus` (phone + wear) and checks on the APKs.
 #
-# test-build (push to main or feature/**, or Run workflow with release 0): no environment, no
-#   secrets. Signed with a one-time key the job creates and deletes itself; release number 0
+# test-build (push to main or feature/**, not a push of .md files only; or Run workflow with release 0):
+#   no environment, no secrets. Signed with a one-time key the job creates and deletes itself; release number 0
 #   (versionName ...-rus0). Its APKs are for checks and the emulator only, never for a phone or a
 #   watch: Android would not install the next build over it.
 #
@@ -47,6 +47,8 @@ on:
         default: '1'
   push:
     branches: [main, 'feature/**']
+    # a push of .md files only builds nothing (owner's word 15.11; its PR gets the light RUS sync check)
+    paths-ignore: ['**.md']
 
 permissions:
   contents: read
