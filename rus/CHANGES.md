@@ -12,6 +12,14 @@
 Для пользователя: изменений нет.
 
 Сборка и проверки:
+- 2026-11-15 — личный список запретов для `rus/check-secrets.sh` (свой адрес Nightscout, серийные номера): файл
+  вне репозитория, читает только проверка на компьютере владельца, значения не показываются; записи —
+  `rus/secrets-deny.py`. С ним проверяются и тексты наших коммитов и двоичные файлы; найденное по общим шаблонам
+  тоже выводится с маской.
+- 2026-11-15 — номер кандидата N выше не только тегов, но и всех прошлых кандидатов той же версии (собранных и
+  незаконченных) и не повторяется при перезапуске сборки: иначе два разных APK с одной версией
+  (`rus/candidate-number.sh`, проверка и перед сборкой с ключом). `rus/apk-keep.py` находит кандидатов по их
+  файлам на странице сборки, а о повторе номера пишет FAIL.
 - 2026-11-15 — `rus/apk-keep.py`: 5 последних APK-кандидатов на компьютере владельца (скачивает, сверяет подпись,
   номер версии и хеши).
 - 2026-11-15 — инструменты вливания обновлений JugglucoNG: списки `rus/our-paths.txt` и `rus/risk-areas.txt`,
@@ -66,7 +74,8 @@
 English: per-version list of our changes against JugglucoNG; a version is a tag `rus-<JugglucoNG version>-<our number>`.
 After rus-1.3.2-2 (in main, not tagged): nothing user-visible; tooling only — keeping the last 5 candidate APKs,
 upstream sync tools and daily sync check workflow, release merge through a sync PR, candidate only on an upstream
-release 7+ days old, reminder for blocks on test, main protected by a ruleset, golden runs of upstream alarm/forecast code, repository front page
+release 7+ days old, candidate number above every earlier candidate too, personal deny list for the secrets check
+(kept outside the repository), reminder for blocks on test, main protected by a ruleset, golden runs of upstream alarm/forecast code, repository front page
 `.github/README.md` with the table of differences. rus-1.3.2-2 (2026-11-15, first tagged version): build type `rus`
 (package, name, icon background, version code, update source), wear watch face fixes (resource ids and names kept,
 no-arg constructor of ComplicationDrawable kept; checked on a watch), CI build with APK checks, signed candidate

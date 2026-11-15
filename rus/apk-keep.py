@@ -2,8 +2,8 @@
 """JugglucoNG-RUS: keep the last 5 candidate APKs (phone + wear) on the owner's computer.
 
 Owner's decision 15.11.2026: no backup copy of the repository; instead the APKs of the last 5 candidates stay on the
-computer. A candidate is a successful `RUS build` run started by hand with release N > 0; its artifact is named
-`rus-candidate-X.Y.Z-N` and lives on the run page for 14 days only.
+computer. A candidate is a `RUS build` run started by hand with release N > 0 that uploaded its artifact
+`rus-candidate-X.Y.Z-N` (only after the APK checks passed); the artifact lives on the run page for 14 days only.
 
   python rus/apk-keep.py fetch [--run ID ...]      download every candidate not yet kept (or just these runs),
                                                     check it, then prune (to the Recycle Bin)
@@ -14,6 +14,8 @@ computer. A candidate is a successful `RUS build` run started by hand with relea
 --dest DIR   where candidates are kept (default: ../apk next to this repository, i.e. the owner's private folder).
 Checks on each download: package, signature = rus/rus-cert.sha256, versionName ends with -rusN, versionCode % 100 = N
 (wear: + 1 000 000), file hashes = the run's candidate.txt. Hashes and run data are written to record.txt.
+A candidate number is never built twice (rus-build.yml refuses it); if another run still brings a kept number, fetch
+says FAIL and keeps the one it has.
 Needs: gh (signed in), Android build-tools (aapt2, apksigner) under ANDROID_HOME or %LOCALAPPDATA%\\Android\\Sdk, Java
 (JAVA_HOME, PATH or Android Studio's jbr). Exit 0 - all OK, 1 - a check failed or something could not be done.
 """
@@ -109,26 +111,33 @@ def kept(dest):
 
 
 def candidate_runs(only_ids):
-    """[(run id, version, N, artifact)] of successful manual runs with a live candidate artifact."""
+    """[(run, version, N, artifact)] of manual rus-build.yml runs with a live candidate artifact, newest first.
+    Found by the artifact, not by the run's conclusion: candidate-build uploads it only after the APK checks
+    passed, while the run list shows the latest attempt only (a refused re-run leaves the run red, the APKs stay)."""
     if only_ids:
-        runs = [gh_api(f'repos/{REPO}/actions/runs/{i}') for i in only_ids]
+        arts = [a for i in only_ids for a in gh_api(f'repos/{REPO}/actions/runs/{i}/artifacts?per_page=100')
+                ['artifacts']]
     else:
-        runs = gh_api(f'repos/{REPO}/actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch&status=success'
-                      f'&per_page=100')['workflow_runs']
-    out = []
-    for r in runs:
-        if r.get('conclusion') != 'success' or r.get('event') != 'workflow_dispatch' or \
-                not r.get('path', '').endswith(WORKFLOW):
-            say(f'skip  run {r["id"]}: not a successful manual {WORKFLOW} run')
+        arts = [json.loads(line) for line in run(
+            ['gh', 'api', '--paginate', f'repos/{REPO}/actions/artifacts?per_page=100', '--jq',
+             '.artifacts[] | select(.name | startswith("rus-candidate-")) | tojson']).splitlines() if line.strip()]
+    arts.sort(key=lambda a: a.get('created_at') or '', reverse=True)  # the API does not promise an order
+    out, runs = [], {}
+    for a in arts:
+        m = ART_RE.match(a['name'])
+        if not m:
             continue
-        for a in gh_api(f'repos/{REPO}/actions/runs/{r["id"]}/artifacts?per_page=100')['artifacts']:
-            m = ART_RE.match(a['name'])
-            if not m:
-                continue
-            if a['expired']:
-                say(f'gone  {a["name"]} (run {r["id"]}): artifact expired on the run page')
-                continue
-            out.append((r, m.group(1), int(m.group(2)), a))
+        rid = a['workflow_run']['id']
+        if a['expired']:
+            say(f'gone  {a["name"]} (run {rid}): artifact expired on the run page')
+            continue
+        if rid not in runs:
+            runs[rid] = gh_api(f'repos/{REPO}/actions/runs/{rid}')
+        r = runs[rid]
+        if r.get('event') != 'workflow_dispatch' or not r.get('path', '').endswith(WORKFLOW):
+            say(f'skip  run {rid}: not a manual {WORKFLOW} run')
+            continue
+        out.append((r, m.group(1), int(m.group(2)), a))
     return out
 
 
@@ -189,14 +198,31 @@ def check_candidate(folder, version, n, run_info):
     return problems, head + rec
 
 
+def kept_run(folder):
+    """Run id in a kept candidate's record.txt, or None."""
+    rec = folder / 'record.txt'
+    if rec.is_file():
+        m = re.search(r'^run:\s+\S*/actions/runs/(\d+)', rec.read_text(encoding='utf-8', errors='replace'), re.M)
+        if m:
+            return int(m.group(1))
+    return None
+
+
 def fetch(args, dest):
     dest.mkdir(parents=True, exist_ok=True)
-    have = {(v, n) for v, n, _ in ((d[0], d[1], d[2]) for d in kept(dest))}
+    have = {(vt, n): d for vt, n, d in kept(dest)}
     status = 0
     for r, version, n, art in candidate_runs(args.run):
         vt = tuple(int(x) for x in version.split('.'))
         if (vt, n) in have:
-            say(f'have  rus-{version}-{n} (run {r["id"]})')
+            other = kept_run(have[(vt, n)])
+            if other is not None and other != r['id']:
+                # rus-build.yml refuses a number already used; this is the alarm if one slipped through
+                say(f'FAIL  rus-{version}-{n}: run {r["id"]} built another candidate with the number of the kept one '
+                    f'(run {other}) - two different APKs with one version; not downloaded, the kept one stays')
+                status = 1
+            else:
+                say(f'have  rus-{version}-{n} (run {r["id"]})')
             continue
         tmp = dest / f'.partial-{version}-{n}'
         if tmp.exists():
@@ -210,7 +236,7 @@ def fetch(args, dest):
             status = 1
             continue
         tmp.rename(dest / f'rus-{version}-{n}')
-        have.add((vt, n))
+        have[(vt, n)] = dest / f'rus-{version}-{n}'
         say(f'OK    rus-{version}-{n}: signature ours, version -rus{n}, hashes = candidate.txt')
     return max(status, prune(dest, args.keep, delete=True))
 
