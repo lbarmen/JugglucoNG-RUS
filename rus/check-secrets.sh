@@ -18,8 +18,9 @@ patterns=(
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   'AKIA[0-9A-Z]{16}'
   '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|apiSecret|API_SECRET)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[^"'"'"'[:space:]$]{4,}'
-  # quoted value without "=" (Gradle: storePassword "x") and generic names, quoted values only
-  '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|apiSecret|API_SECRET|[Pp]assword|PASSWORD|[Tt]oken|TOKEN)["'"'"']?[[:space:]]*[=:]?[[:space:]]*["'"'"'][^"'"'"'[:space:]$]{6,}["'"'"']'
+  # quoted value without "=" (Gradle: storePassword "x"); no generic password/token names: settings keys such
+  # as PREF_TOKEN = "api_glucose_source_token" are normal code (62 lines in upstream, 15.11)
+  '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|apiSecret|API_SECRET)["'"'"']?[[:space:]]*[=:]?[[:space:]]*["'"'"'][^"'"'"'[:space:]$]{6,}["'"'"']'
   'https?://[A-Za-z0-9.-]+\.(herokuapp\.com|fly\.dev|ns\.10be\.de|nightscoutpro\.com|t1pal\.com)'
   '[?&]token=[A-Za-z0-9-]{8,}'
 )
