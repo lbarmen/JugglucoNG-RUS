@@ -147,6 +147,18 @@ def main():
         f'Их код `{old[:9]}` → `{new[:9]}`, наш `{a.ours}` = `{ours[:9]}`, '
         f'{datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC. Коммитов автора в диапазоне: {commits}.')
     summary_at = len(R.parts)  # the short summary goes here at the end
+    if old != new and rc.git('merge-base', '--is-ancestor', new, old, ok_codes=(0, 1))[0] == 0:
+        R.p('', f'**Сводка:** их `{a.new}` ({vn[0]}) уже внутри `{a.old}` ({vo[0]}): вливать нечего, разделы отчёта '
+                'не строятся.')
+        summary.update(already_in=True, prs=0, files=0, flags={}, conflicts=[])
+        text = R.text()
+        if a.out:
+            a.out.write_text(text, encoding='utf-8')
+        else:
+            sys.stdout.write(text)
+        if a.json:
+            a.json.write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding='utf-8')
+        return 0
 
     # 1. version
     R.h('1. Их версия')

@@ -448,7 +448,8 @@ jobs:
           R_BUILD: ${{ needs.build.result }}
           R_TESTS: ${{ needs.tests.result }}
         run: |
-          set -uo pipefail
+          # no -e here: a missing part must not stop the page; the verdict is computed explicitly below
+          set +e -u
           word() { case "$1" in success) echo "зелёное";; skipped) echo "**пропущено**";; cancelled) echo "**отменено**";; *) echo "**красное**";; esac; }
           if [ "$R_CHECK" != success ]; then
             echo "Задание check: $(word "$R_CHECK")" | tee -a "$GITHUB_STEP_SUMMARY"; exit 1
@@ -473,10 +474,11 @@ jobs:
             if [ -f $p/sync-tests/out/tests.md ]; then echo; echo '### Тесты'; cat $p/sync-tests/out/tests.md; fi
             [ -f $p/sync-tests/out/junit-summary.txt ] && { echo; cat $p/sync-tests/out/junit-summary.txt; }
             if [ -f $p/sync-tests/out/ours.txt ]; then echo; echo 'Наши тесты (класс, тестов, упало, ошибок, пропущено, с):'; echo '```'; cat $p/sync-tests/out/ours.txt; echo '```'; fi
-            g=$(ls $p/sync-tests/Common/build/rus-golden/diff.md $p/sync-tests/rus-golden/diff.md 2>/dev/null | head -1)
+            g=""; for c in $p/sync-tests/Common/build/rus-golden/diff.md $p/sync-tests/rus-golden/diff.md; do [ -f "$c" ] && { g="$c"; break; }; done
             if [ -n "$g" ]; then echo; sed 's/^# /### /' "$g"; else echo; echo '### Эталоны тревог и прогноза'; echo '**результата нет** (тесты не дошли до них)'; fi
             echo
             [ -f $p/sync-merge/sync-report.md ] && sed 's/^# /## /' $p/sync-merge/sync-report.md
+            true
           } > sync-report.md
           cat sync-report.md >> "$GITHUB_STEP_SUMMARY"
           ok=1
