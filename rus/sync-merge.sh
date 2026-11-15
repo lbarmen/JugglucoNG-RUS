@@ -11,8 +11,9 @@
 #       the same from the checks on, on sync/<release>: after conflicts resolved by hand or a fix committed for
 #       red checks (alias: prepare-after-conflict). Not after the push: then fix, commit, git push, finish.
 #   bash rus/sync-merge.sh finish <PR>
-#       waits for the PR checks, report green -> switches off their new workflows, merges with a merge commit
-#       (never squash/rebase, ТЗ 3.2), switches them off again and cancels their runs; updates local main.
+#       waits for the required check report; green -> switches off their new workflows (also done right after
+#       the push), merges with a merge commit (never squash/rebase, ТЗ 3.2), switches them off again (stop if one
+#       stays on) and cancels runs that are not ours; updates local main.
 #       A red check -> stop: the chat decides (an owner-approved red merge goes through the ruleset bypass).
 # RUS_SYNC_DRY=1 with prepare: everything except push and PR (probe git, rerere check).
 # Needs: git, gh (signed in), python 3. The point and upstream main are fetched; origin is our fork.
@@ -24,6 +25,37 @@ STATE=.git/rus-sync
 PY=python3; "$PY" -c 'import sys' 2>/dev/null || PY=python
 py() { "$PY" -X utf8 "$@"; }
 die() { echo "STOP  $*" >&2; exit 1; }
+# their workflow files the sync branch adds (renames count as new: a new path is a new, enabled workflow);
+# YAML right in .github/workflows/, not ours
+their_new_wf() {
+  git diff --name-only --no-renames --diff-filter=A "origin/main...$1" -- .github/workflows |
+    grep -E '^\.github/workflows/[^/]+\.ya?ml$' | grep -v '^\.github/workflows/rus-' || true
+}
+# switch their workflows off and cancel every unfinished run that is not ours (their workflows never run here);
+# $1 = hard (stop if one stays on) or soft (GitHub may not know a file yet: finish repeats it hard)
+their_off() {
+  local mode="$1" wf w i s id; shift
+  for wf in "$@"; do
+    w=$(basename "$wf")
+    for i in 1 2 3 4 5 6; do
+      [ "$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>/dev/null || true)" = disabled_manually ] && break
+      gh workflow disable "$w" -R "$REPO" > /dev/null 2>&1 || { [ "$mode" = soft ] && break; sleep 10; }
+    done
+    if [ "$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>/dev/null || true)" = disabled_manually ]; then
+      echo "OK    their new workflow $w switched off"
+    elif [ "$mode" = hard ]; then
+      die "their new workflow $w is NOT switched off: gh workflow disable $w -R $REPO, then cancel its runs"
+    else
+      echo "NOTE  their new workflow $w is not known to GitHub yet: finish switches it off after the merge"
+    fi
+  done
+  for s in requested queued pending waiting in_progress; do
+    for id in $(gh api "repos/$REPO/actions/runs?status=$s&per_page=100" --jq \
+        '.workflow_runs[] | select(.path | startswith(".github/workflows/rus-") | not) | .id' 2>/dev/null || true); do
+      gh run cancel "$id" -R "$REPO" > /dev/null 2>&1 && echo "OK    their run $id cancelled"
+    done
+  done
+}
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
@@ -119,7 +151,7 @@ checks-and-pr)
   py rus/check-hooks.py --ref HEAD --base "$theirs" || fail=1
   bash rus/check-secrets.sh --ours "$theirs" || fail=1
   py rus/sync-report.py "$old" "$theirs" --ours origin/main --out "$STATE/report.md" --json "$STATE/report.json"
-  [ $fail = 0 ] || die "checks are red: fix on this branch, commit, then bash rus/sync-merge.sh continue ... (nothing pushed)"
+  [ $fail = 0 ] || die "checks are red: fix on this branch, commit, then bash rus/sync-merge.sh continue --decision \"...\" --minutes N --conflicts ${conflicts%% *} (nothing pushed)"
   read -r version commits flags < <(py -c "
 import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8'))
 f=', '.join(f'{k} {v}' for k,v in (d.get('flags') or {}).items()) or 'нет'
@@ -146,6 +178,9 @@ print(d.get('version_new','?'), d.get('commits',0), f)" "$STATE/report.json")
   # a PR body holds 65536 characters: cut at a whole line, in Python (no pipe, no cut inside a letter)
   py -c "import sys; t = open(sys.argv[1], encoding='utf-8').read(); n = 60000; t = t if len(t) <= n else t[:t.rfind(chr(10), 0, n) + 1] + '… (отчёт обрезан: полный — на странице запуска RUS sync)' + chr(10); open(sys.argv[2], 'w', encoding='utf-8', newline='').write(t)" "$body.full" "$body"
   git push -q -u origin "$branch"
+  # their new workflows with push or pull_request triggers would run on this branch and on the PR: off now
+  new_wf=$(their_new_wf HEAD)
+  [ -z "$new_wf" ] || { sleep 10; their_off soft $new_wf; }
   url=$(gh pr create -R "$REPO" --base main --head "$branch" --title "sync: their $point" --body-file "$body")
   echo "$url"
   echo "PR    ${url##*/}  -> next: bash rus/sync-merge.sh finish ${url##*/}"
@@ -154,46 +189,30 @@ finish)
   pr="${1:-}"; [[ "$pr" =~ ^[0-9]+$ ]] || die "usage: finish <PR number>"
   read -r head sha < <(gh pr view "$pr" -R "$REPO" --json headRefName,headRefOid --jq '"\(.headRefName) \(.headRefOid)"')
   [[ "$head" == sync/* ]] || die "PR #$pr is not a sync/<release> PR (its branch: $head)"
-  # their new workflows = workflow files the branch adds (not ours): straight from git, no saved state
+  # their new workflows: straight from git, no saved state
   git fetch -q origin main "+refs/heads/$head:refs/remotes/origin/$head"
-  new_wf=$(git diff --name-only --diff-filter=A "origin/main...$sha" -- .github/workflows | grep -v '^\.github/workflows/rus-' || true)
-  echo "wait  checks of PR #$pr (RUS sync takes 20-30 min)..."
-  n=0
-  for i in $(seq 1 30); do
-    n=$(gh pr view "$pr" -R "$REPO" --json statusCheckRollup --jq '.statusCheckRollup | length')
-    [ "$n" -gt 0 ] && break
-    sleep 20
+  new_wf=$(their_new_wf "$sha")
+  # wait for the required check itself: its job is queued only after build and tests, so "all checks done"
+  # may come a second before report even exists
+  echo "wait  check report of PR #$pr (RUS sync takes 20-30 min)..."
+  st=none
+  for i in $(seq 1 90); do
+    st=$(gh pr view "$pr" -R "$REPO" --json statusCheckRollup --jq \
+      '[.statusCheckRollup[] | select(.name == "report")] | if length == 0 then "none" elif all(.status == "COMPLETED") then (if all(.conclusion == "SUCCESS") then "SUCCESS" else "RED" end) else "running" end' || echo error)
+    case "$st" in SUCCESS|RED) break ;; esac
+    sleep 60
   done
-  [ "$n" -gt 0 ] || die "no checks on PR #$pr after 10 min: open the PR page"
-  if ! gh pr checks "$pr" -R "$REPO" --watch --interval 60; then
+  if [ "$st" != SUCCESS ]; then
     gh pr checks "$pr" -R "$REPO" || true
-    die "a check of PR #$pr is red: read the report on the run page; merge only by the owner's decision"
+    die "the required check report of PR #$pr is '$st': read the report on the run page; merge only by the owner's decision"
   fi
-  r=$(gh pr view "$pr" -R "$REPO" --json statusCheckRollup --jq \
-    '[.statusCheckRollup[] | select(.name == "report") | .conclusion] | if length > 0 and all(. == "SUCCESS") then "SUCCESS" else (join(" ") | if . == "" then "none" else . end) end')
-  [ "$r" = SUCCESS ] || die "the required check report of PR #$pr is '$r', not SUCCESS"
-  # before the merge: GitHub may already know the file from the branch push (if not, after the merge below)
-  for wf in $new_wf; do
-    gh workflow disable "$(basename "$wf")" -R "$REPO" > /dev/null 2>&1 && echo "OK    their new workflow $(basename "$wf") switched off before the merge" || true
-  done
+  [ -z "$new_wf" ] || their_off soft $new_wf
   gh pr merge "$pr" -R "$REPO" --merge --match-head-commit "$sha"
-  for wf in $new_wf; do
-    w=$(basename "$wf")
-    for i in 1 2 3 4 5 6; do
-      [ "$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>/dev/null || true)" = disabled_manually ] && break
-      gh workflow disable "$w" -R "$REPO" > /dev/null 2>&1 || sleep 10
-    done
-    [ "$(gh api "repos/$REPO/actions/workflows/$w" --jq .state 2>/dev/null || true)" = disabled_manually ] ||
-      die "their new workflow $w is NOT switched off: gh workflow disable $w -R $REPO, then cancel its runs"
-    for id in $(gh run list -w "$w" -R "$REPO" --json databaseId,status --jq '.[] | select(.status != "completed") | .databaseId'); do
-      gh run cancel "$id" -R "$REPO" > /dev/null && echo "OK    run $id of their $w cancelled"
-    done
-    echo "OK    their new workflow $w switched off"
-  done
+  [ -z "$new_wf" ] || { sleep 5; their_off hard $new_wf; }
   git switch -q main
   git pull -q --ff-only origin main
   echo "OK    PR #$pr merged into main; local main = $(git rev-parse --short HEAD). RUS build runs on main now."
   ;;
 *)
-  sed -n '2,18p' "$0"; exit 1 ;;
+  sed -n '2,19p' "$0"; exit 1 ;;
 esac
