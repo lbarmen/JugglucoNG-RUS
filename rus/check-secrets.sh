@@ -17,7 +17,9 @@ patterns=(
   'github_pat_[A-Za-z0-9_]{30,}'
   '-----BEGIN [A-Z ]*PRIVATE KEY-----'
   'AKIA[0-9A-Z]{16}'
-  '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|API_SECRET)[[:space:]]*[=:][[:space:]]*["'"'"']?[^"'"'"'[:space:]$]{4,}'
+  '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|apiSecret|API_SECRET)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[^"'"'"'[:space:]$]{4,}'
+  # quoted value without "=" (Gradle: storePassword "x") and generic names, quoted values only
+  '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|apiSecret|API_SECRET|[Pp]assword|PASSWORD|[Tt]oken|TOKEN)["'"'"']?[[:space:]]*[=:]?[[:space:]]*["'"'"'][^"'"'"'[:space:]$]{6,}["'"'"']'
   'https?://[A-Za-z0-9.-]+\.(herokuapp\.com|fly\.dev|ns\.10be\.de|nightscoutpro\.com|t1pal\.com)'
   '[?&]token=[A-Za-z0-9-]{8,}'
 )
@@ -58,7 +60,11 @@ if [ "${1:-}" = "--ours" ]; then
     scan "commit ${c:0:9}" "$(git show --format= -U0 --no-color "$c" | grep -E '^\+[^+]' || true)" \
       < <(git show --format= --name-only --diff-filter=AM "$c")
   done
-  [ $status -eq 0 ] && echo "OK    no secrets in our $n commit(s) on top of their ${point:0:9}"
+  # merge commits are skipped above: a conflict resolved by hand lives only there, so the whole tree against
+  # their code is scanned too
+  scan "tree vs their ${point:0:9}" "$(git diff -U0 --no-color "$point" HEAD | grep -E '^\+[^+]' || true)" \
+    < <(git diff --name-only --diff-filter=AM "$point" HEAD)
+  [ $status -eq 0 ] && echo "OK    no secrets in our $n commit(s) and in the tree on top of their ${point:0:9}"
   exit $status
 fi
 

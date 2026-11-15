@@ -37,6 +37,8 @@ def main():
     lines = [f'# Сводка Juggluco за {a.days} дн. (с {since[:10]})', '',
              f'Репозиторий {REPO}, ветка `{repo["default_branch"]}`: коммитов {len(commits)}. '
              'Сообщения у автора — номера версий, поэтому ниже — затронутые файлы по областям.', '']
+    if len(commits) >= 100:  # one page only: older commits of the period are not in the list
+        lines += ['**Коммитов 100 или больше: в сводке только последние 100** — запусти с меньшим `--days`.', '']
     total = {}
     for c in reversed(commits):
         full = rc.gh_api(f'repos/{REPO}/commits/{c["sha"]}')

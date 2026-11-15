@@ -104,7 +104,7 @@ jobs:
           fi
           point=""
           if [ -n "$tag" ]; then
-            [[ "$tag" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::point '$tag' has odd characters"; exit 1; }
+            [[ "$tag" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]] || { echo "::error::point '$tag' has odd characters"; exit 1; }
             if git fetch --no-tags -q upstream "+refs/tags/$tag:refs/tags/$tag" 2>/dev/null; then
               point=$(git rev-parse "refs/tags/$tag^{commit}")
             else
@@ -128,11 +128,11 @@ jobs:
           fi
           docs=0
           if [ "$EVENT" = pull_request ]; then
-            # our .md files only, none under Common/ (source sets: an .md there may go into the APK); any odd,
-            # quoted or empty path list -> 0 -> the full check
-            files=$(git diff --name-only --no-renames "$PR_BASE" HEAD)
-            docs=$(printf '%s\n' "$files" | python3 -c "import sys; sys.path.insert(0, 'rus'); import rus_common as rc; f = [p for p in sys.stdin.read().splitlines() if p]; print(int(bool(f) and all(p.endswith('.md') and p != 'rus/HOOKS.md' and not p.startswith('Common/') and rc.is_ours(p) for p in f)))")
-            echo "PR files: $(printf '%s\n' "$files" | grep -c . || true); our .md only: $docs"
+            # our .md files only, plain files (mode 100644: no submodule, link or executable), none under Common/
+            # (source sets: an .md there may go into the APK); any odd, quoted or empty list -> 0 -> the full check
+            raw=$(git diff --raw --no-renames --no-abbrev "$PR_BASE" HEAD)
+            docs=$(printf '%s\n' "$raw" | python3 -c "import sys; sys.path.insert(0, 'rus'); import rus_common as rc; r = [l.split('\t', 1) for l in sys.stdin.read().splitlines() if l]; print(int(bool(r) and all(len(x) == 2 and set(x[0].lstrip(':').split()[:2]) <= {'000000', '100644'} and x[1].endswith('.md') and x[1] != 'rus/HOOKS.md' and not x[1].startswith('Common/') and rc.is_ours(x[1]) for x in r)))")
+            echo "PR files: $(printf '%s\n' "$raw" | grep -c . || true); our .md only: $docs"
             [ "$docs" = 1 ] && echo "PR только из наших .md-файлов: проверки врезок, бюджета и секретов — да, сборка и тесты — нет." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "event=$EVENT kind=$kind mode=$mode docs=$docs tag=${tag:-none} point=${point:-none} base=$base"
@@ -221,11 +221,13 @@ jobs:
           THEIRS: ${{ steps.m.outputs.theirs }}
         run: |
           set -uo pipefail
-          fail=0
-          { python3 rus/check-hooks.py --ref HEAD --base "$THEIRS" || fail=1
-            bash rus/check-secrets.sh --ours "$THEIRS" || fail=1
-            python3 rus/golden/scenarios.py --check || fail=1
-          } 2>&1 | tee out/checks.txt
+          # each command runs in this shell, not in a pipeline subshell: a crash (no FAIL line) still turns it red
+          fail=0; : > out/checks.txt
+          run() { "$@" >> out/checks.txt 2>&1 || { echo "FAIL  $1 ${2:-}: exit $?" >> out/checks.txt; fail=1; }; }
+          run python3 rus/check-hooks.py --ref HEAD --base "$THEIRS"
+          run bash rus/check-secrets.sh --ours "$THEIRS"
+          run python3 rus/golden/scenarios.py --check
+          cat out/checks.txt
           grep -q '^FAIL' out/checks.txt && fail=1
           exit $fail
 
@@ -440,7 +442,9 @@ jobs:
           retention-days: 7
 
   report:
-    name: report
+    # 'report' is the required check of the main ruleset: only a PR run may carry that name (a manual run on a
+    # PR branch checks main + their point, not the PR, and must not satisfy the PR's required check)
+    name: ${{ github.event_name == 'pull_request' && 'report' || 'report (not a PR)' }}
     needs: [check, merge, build, tests]
     if: always() && github.repository == 'lbarmen/JugglucoNG-RUS'
     runs-on: ubuntu-24.04
@@ -533,7 +537,7 @@ jobs:
       - name: Verdict
         if: needs.check.outputs.mode == 'full'
         run: |
-          [ "$ok" = 1 ] || { echo "::error::something is red or skipped - see the report on this page"; exit 1; }
+          [ "$ok" = 1 ] || { echo "::error::Проверка красная: что-то упало или пропущено — таблица в отчёте на этой странице."; exit 1; }
           echo "all green"
 
   remind:
@@ -545,8 +549,13 @@ jobs:
     steps:
       - env:
           TAG: ${{ needs.check.outputs.tag }}
+          R_REPORT: ${{ needs.report.result }}
         run: |
-          echo "::error::Их выпуск $TAG проверен и ждёт вливания в main: открой чат и напиши «продолжи нитку вливание»."
+          if [ "$R_REPORT" = success ]; then
+            echo "::error::Их выпуск $TAG проверен и ждёт вливания в main: открой чат и напиши «продолжи нитку вливание»."
+          else
+            echo "::error::Их выпуск $TAG ждёт вливания, но проверка красная или не дошла до конца (report: $R_REPORT): открой чат и напиши «продолжи нитку вливание», чат разберёт отчёт на этой странице."
+          fi
           exit 1
 
   mail-probe:
