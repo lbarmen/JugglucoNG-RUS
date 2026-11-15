@@ -1,0 +1,8 @@
+# JugglucoNG-RUS: our paths - the one list for every rus/ script (sync report, hook budget, overlay of old releases).
+# Everything else in this repository is upstream's (ctqvva/JugglucoNG) and is changed only by RUS-HOOK lines.
+# A line is a directory (ending in /) or a glob; `*` matches across directories.
+rus/
+Common/src/rus/
+Common/src/wearRus/
+Common/src/testMobile/java/rus/
+.github/workflows/rus-*.yml

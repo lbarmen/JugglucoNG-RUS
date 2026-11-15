@@ -9,5 +9,9 @@
 Сейчас врезок нет: тип сборки `rus` подключается init-скриптом (`rus/rus-init.gradle`), ресурсы — своими папками
 `Common/src/rus/` и `Common/src/wearRus/`.
 
+Проверка — `python3 rus/check-hooks.py`: пометки и таблица в обе стороны, бюджет — не больше 15 их файлов и 60 строк
+(ТЗ 3.3 п. 5); наши пути — `rus/our-paths.txt`. С первой врезкой станет красной строгая проверка `check-apk.py`
+(«0 changes in upstream files», функция `check_upstream_untouched`): в том же PR её убрать — её место занимает бюджет.
+
 ---
 Hooks into upstream files: none so far. Each hook is 1–3 lines marked `RUS-HOOK:<id>` and listed in this table.
