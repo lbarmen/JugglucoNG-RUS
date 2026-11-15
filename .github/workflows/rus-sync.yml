@@ -194,7 +194,11 @@ jobs:
           if [ "$(git rev-parse HEAD)" != "$BASE" ]; then
             git bundle create out/merged.bundle "$BASE..rus-sync-merged"
           fi
-          echo "theirs=$new" >> "$GITHUB_OUTPUT"
+          # their code in the checked tree: for the hooks budget and "our commits only" (base may already hold
+          # their code newer than the point, e.g. main on unreleased upstream code before the first sync)
+          if [ "$KIND" = overlay ]; then theirs="$POINT"; else theirs=$(git merge-base HEAD upstream/main); fi
+          echo "theirs=$theirs" >> "$GITHUB_OUTPUT"
+          echo "their code in the tree: ${theirs:0:9}"
           echo "Дерево проверки: $(git log --oneline -1)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Hooks registry, budget, secrets in our commits, golden scenarios unchanged
