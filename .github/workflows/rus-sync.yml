@@ -458,6 +458,11 @@ jobs:
             echo "Полная проверка не нужна (mode=$MODE)." | tee -a "$GITHUB_STEP_SUMMARY"; exit 0
           fi
           p=parts
+          # one matching artifact is unpacked straight into parts/ (no sync-merge/ folder): only the merge part can
+          # be alone (merge red -> build and tests skipped)
+          if [ ! -d $p/sync-merge ] && { [ -f $p/merged.sha ] || [ -f $p/sync-report.md ] || [ -f $p/conflict.txt ]; }; then
+            mkdir $p/sync-merge && find $p -maxdepth 1 -type f -exec mv {} $p/sync-merge/ \;
+          fi
           {
             echo "# RUS sync: ${TAG:-PR} — ${KIND}"
             echo

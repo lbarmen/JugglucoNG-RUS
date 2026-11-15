@@ -41,6 +41,10 @@
 Сборка и проверки APK — задача GitHub Actions `.github/workflows/rus-build.yml`, проверки — `rus/check-apk.py`.
 Перед каждым коммитом — `bash rus/check-secrets.sh`. Врезки в файлы автора (сейчас их нет) — в [HOOKS.md](HOOKS.md).
 
+Вливание выпусков JugglucoNG: каждое утро их последний выпуск проверяет `.github/workflows/rus-sync.yml` (слияние
+внутри задачи, отчёт, сборка, их тесты, наши эталоны тревог), вливает чат через PR `sync/<выпуск>` — [SYNC.md](SYNC.md).
+В `main` — только через PR с зелёной проверкой `report` (набор правил `rus/ruleset-main.json`).
+
 ## Авторы и лицензия
 - [JugglucoNG](https://github.com/ctqvva/JugglucoNG) — [ctqvva](https://github.com/ctqvva) и участники.
 - [Juggluco](https://github.com/j-kaltes/Juggluco) — Jaap Korthals Altes; JugglucoNG вырос из него.
