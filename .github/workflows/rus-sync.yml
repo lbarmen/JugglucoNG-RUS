@@ -378,7 +378,8 @@ jobs:
             ./gradlew :Common:testMobileDebugUnitTest :Common:testWearDebugUnitTest --continue --no-daemon --stacktrace
           t "UI guardrails" python3 scripts/ui-guardrails.py
           t "UI guardrails: тесты" python3 -m unittest discover -s scripts/tests -v
-          t "Distribution: scripts/dist/tests" python3 -m unittest discover -s scripts/dist/tests -v
+          # without GITHUB_REPOSITORY, as on a developer's computer: test_readme_downloads expects their name or none
+          t "Distribution: scripts/dist/tests" env -u GITHUB_REPOSITORY python3 -m unittest discover -s scripts/dist/tests -v
           t "Clone через TURN" python3 tools/test-clone-turn.py --streams
           t "TURN TLS и потоки" python3 tools/test-turn-stream.py
           t "HTTPS-ответы токена" python3 tools/test-context-https.py
