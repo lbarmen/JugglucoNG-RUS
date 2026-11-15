@@ -52,7 +52,8 @@ jobs:
           declare -A first
           while IFS='|' read -r n blocks created; do
             [ -n "${n:-}" ] || continue
-            for b in $blocks; do
+            # an urgent candidate carries " (hold=0)" after its blocks (rus-build.yml run-name)
+            for b in ${blocks% (hold=0)}; do
               [ "$b" = "-" ] && continue
               t=$(date -d "$created" +%s)
               if [ -z "${first[$b]:-}" ] || [ "$t" -lt "${first[$b]%% *}" ]; then first[$b]="$t $n"; fi
@@ -61,9 +62,11 @@ jobs:
           stale=""; ok=0
           for b in "${!first[@]}"; do
             t="${first[$b]%% *}"; n="${first[$b]#* }"
-            if ! git fetch -q --no-tags origin "+refs/heads/$b:refs/remotes/origin/$b" 2>/dev/null; then
-              echo "gone   $b (candidate $n): branch deleted"; continue
-            fi
+            # exit 2 = no such branch (deleted); any other failure = GitHub not answering -> red, never silent
+            set +e; git ls-remote --exit-code --heads origin "refs/heads/$b" > /dev/null; rc=$?; set -e
+            if [ "$rc" = 2 ]; then echo "gone   $b (candidate $n): branch deleted"; continue; fi
+            [ "$rc" = 0 ] || { echo "::error::cannot read branch $b from GitHub (git exit $rc): today's reminder is not reliable"; exit 1; }
+            git fetch -q --no-tags origin "+refs/heads/$b:refs/remotes/origin/$b"
             if git merge-base --is-ancestor "origin/$b" origin/main; then
               echo "merged $b (candidate $n)"; continue
             fi
