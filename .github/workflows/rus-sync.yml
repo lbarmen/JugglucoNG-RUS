@@ -43,7 +43,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: rus-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  # manual runs: one group per base + point + mode, so two different manual runs never cancel each other
+  group: rus-sync-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ inputs.base }}-${{ inputs.point }}-${{ inputs.mode }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
