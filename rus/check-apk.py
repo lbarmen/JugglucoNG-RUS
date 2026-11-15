@@ -7,6 +7,7 @@ Run from the repository root after `bash rus/gradlew-rus.sh ... assembleMobileRu
 --mode test     signature must differ from both upstream keys (one-time key of the run)
 --mode release  additionally the signature must equal rus/rus-cert.sha256
 --no-vendor     skip the vendor library check (emulator x86_64 build has no vendor libraries)
+--manifest P    update-manifest.json must describe the phone APK (required with --mode release)
 """
 import argparse
 import fnmatch
@@ -243,6 +244,22 @@ def check_upstream_untouched():
     check(not changed, f'0 changes in upstream files since {base[:7]}' + (f': {changed}' if changed else ''))
 
 
+def check_manifest(path, phone, phone_code):
+    """update-manifest.json = the phone APK: package, versionCode, file name, size, sha256; schema 1."""
+    m = json.load(open(path, encoding='utf-8'))
+    check(m.get('schema') == 1, f'manifest: schema {m.get("schema")} (updater understands 1)')
+    check(m.get('versionCode') == phone_code, f'manifest: versionCode {m.get("versionCode")} = phone APK {phone_code}')
+    arts = m.get('artifacts') or []
+    check(len(arts) == 1 and arts[0].get('applicationId') == PACKAGE,
+          f'manifest: exactly one artifact, for {PACKAGE} (wear never offered to a phone)')
+    if arts:
+        data = open(phone, 'rb').read()
+        art = arts[0]
+        check(art.get('file') == os.path.basename(phone), f'manifest: file {art.get("file")} = phone asset name')
+        check(art.get('size') == len(data), f'manifest: size {art.get("size")} = {len(data)}')
+        check(art.get('sha256') == hashlib.sha256(data).hexdigest(), 'manifest: sha256 = phone APK')
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--phone', required=True)
@@ -250,7 +267,9 @@ def main():
     ap.add_argument('--release', type=int, required=True)
     ap.add_argument('--mode', choices=['test', 'release'], required=True)
     ap.add_argument('--no-vendor', action='store_true')
+    ap.add_argument('--manifest', help='update-manifest.json to check against the phone APK')
     a = ap.parse_args()
+    codes = {}
 
     up_code = int(build_gradle_value('appVersionCode'))
     expect = {'phone': up_code * 100 + a.release, 'wear': 1000000 + up_code * 100 + a.release}
@@ -258,6 +277,7 @@ def main():
 
     for kind, apk in (('phone', a.phone), ('wear', a.wear)):
         pkg, code, name, labels = badging(apk)
+        codes[kind] = code
         check(pkg == PACKAGE, f'{kind}: package {pkg}')
         check(code == expect[kind], f'{kind}: versionCode {code} (expected {expect[kind]})')
         check(name.endswith(f'-rus{a.release}'), f'{kind}: versionName {name} ends with -rus{a.release}')
@@ -281,6 +301,10 @@ def main():
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_untouched()
+    if a.manifest:
+        check_manifest(a.manifest, a.phone, codes['phone'])
+    elif a.mode == 'release':
+        fail('--mode release needs --manifest (every release carries update-manifest.json)')
 
     print(f'\n{len(failures)} check(s) failed' if failures else '\nAll checks passed')
     sys.exit(1 if failures else 0)
