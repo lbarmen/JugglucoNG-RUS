@@ -28,7 +28,7 @@ name: RUS build
 # Other runs get GitHub's default name (a run-name of only whitespace falls back to it).
 run-name: >-
   ${{ github.event_name == 'workflow_dispatch' && inputs.release != '0' &&
-  format('RUS candidate {0} blocks: {1}', inputs.release, inputs.blocks || '-') || ' ' }}
+  format('RUS candidate {0} blocks: {1}{2}', inputs.release, inputs.blocks || '-', inputs.hold == '0' && ' (hold=0)' || '') || ' ' }}
 
 on:
   workflow_dispatch:
@@ -54,7 +54,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: rus-build-${{ github.event_name }}-${{ github.ref }}
+  # manual runs: a group of their own, so a candidate waiting for approval never holds or cancels another run
+  group: rus-build-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
@@ -147,6 +148,8 @@ jobs:
       release: ${{ steps.check.outputs.release }}
       version: ${{ steps.check.outputs.version }}
       blocks: ${{ steps.check.outputs.blocks }}
+      pins: ${{ steps.check.outputs.pins }}
+      tree: ${{ steps.check.outputs.tree }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -174,7 +177,7 @@ jobs:
           [ "$REL" -gt "$max" ] || { echo "::error::release $REL must be above the last tag rus-$ver-$max"; exit 1; }
           git remote add upstream https://github.com/ctqvva/JugglucoNG.git
           git fetch --no-tags upstream main
-          list=""
+          list=""; pins=""
           for b in $BLOCKS; do
             [[ "$b" =~ ^[A-Za-z0-9._/-]+$ ]] || { echo "::error::branch name '$b' has odd characters"; exit 1; }
             case "$b" in main|upstream|upstream/*|sync/*) echo "::error::'$b' is not a block branch"; exit 1;; esac
@@ -182,7 +185,7 @@ jobs:
               echo "::error::branch '$b' is not on GitHub"; exit 1; }
             git -c user.name=rus-candidate -c user.email=rus-candidate@users.noreply.github.com \
               merge --no-ff --no-edit "origin/$b" || { echo "::error::'$b' does not merge cleanly onto main + earlier blocks"; exit 1; }
-            list="$list $b"
+            list="$list $b"; pins="${pins:-} $b@$(git rev-parse "origin/$b")"
           done
           all=$(git rev-list --count HEAD "^$GITHUB_SHA")
           ours=$(git rev-list --count HEAD "^$GITHUB_SHA" ^upstream/main)
@@ -198,14 +201,13 @@ jobs:
                 END { for (n in m) if (m[n]==c) print n }')
               rels=$(gh api "repos/ctqvva/JugglucoNG/releases?per_page=100" --jq \
                 '.[] | select(.draft | not) | select(.prerelease | not) | "\(.tag_name) \(.published_at)"')
-              match=""
-              for t in $tags; do
-                line=$(printf '%s\n' "$rels" | awk -v t="$t" '$1==t')
-                [ -n "$line" ] && match="$line"
-              done
+              # several of their releases on this commit -> the oldest one (same code, public since then)
+              match=$(for t in $tags; do printf '%s\n' "$rels" | awk -v t="$t" '$1==t'; done | sort -k2 | head -1)
               [ -n "$match" ] || {
                 echo "::error::their code in main (${theirs:0:9}) is not one of their releases without the pre-release mark (tags there: ${tags:-none}); merge a release first (rus/SYNC.md) or hold=0 by the owner's word"; exit 1; }
-              age=$(( ( $(date +%s) - $(date -d "${match#* }" +%s) ) / 86400 ))
+              # a tag moved onto a newer commit counts from that commit, not from the release date
+              t_pub=$(date -d "${match#* }" +%s); t_commit=$(git show -s --format=%ct "$theirs")
+              age=$(( ( $(date +%s) - (t_pub > t_commit ? t_pub : t_commit) ) / 86400 ))
               [ "$age" -ge 7 ] || {
                 echo "::error::their release ${match%% *} is $age day(s) old; a candidate for the phone waits 7 days (ТЗ 3.6) or hold=0 by the owner's word"; exit 1; }
               echo "OK: their code in main = their release ${match%% *}, $age days old" ;;
@@ -215,6 +217,8 @@ jobs:
           echo "release=$REL" >> "$GITHUB_OUTPUT"
           echo "version=$ver" >> "$GITHUB_OUTPUT"
           echo "blocks=${list# }" >> "$GITHUB_OUTPUT"
+          echo "pins=${pins# }" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
 
   candidate-build:
     name: rus candidate build with our key (environment rus-signing)
@@ -228,16 +232,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Merge the block branches onto main (same as precheck)
+      # exactly the commits the precheck checked: a branch moved while the run waited for approval -> stop
+      - name: Merge the block branches onto main (the commits and the tree the precheck checked)
         env:
-          BLOCKS: ${{ needs.candidate-precheck.outputs.blocks }}
+          PINS: ${{ needs.candidate-precheck.outputs.pins }}
+          TREE: ${{ needs.candidate-precheck.outputs.tree }}
         run: |
           set -euo pipefail
-          for b in $BLOCKS; do
+          for p in $PINS; do
+            b="${p%@*}"; sha="${p##*@}"
             git fetch --no-tags origin "+refs/heads/$b:refs/remotes/origin/$b"
+            [ "$(git rev-parse "origin/$b")" = "$sha" ] || {
+              echo "::error::branch '$b' moved after the precheck (${sha:0:9} -> $(git rev-parse --short "origin/$b")): run the candidate again"; exit 1; }
             git -c user.name=rus-candidate -c user.email=rus-candidate@users.noreply.github.com \
               merge --no-ff --no-edit "origin/$b"
           done
+          [ "$(git rev-parse 'HEAD^{tree}')" = "$TREE" ] || { echo "::error::the tree differs from the one the precheck checked"; exit 1; }
           git log --oneline -1
 
       - name: libjuice submodule (upstream, our copy as fallback)
