@@ -232,6 +232,46 @@ def check_watchface_resources(apk):
           + (f' (missing: {dangling[:20]})' if dangling else ''))
 
 
+def xml_drawable_classes():
+    """Classes that drawable XML of the wear sources inflates by name (<drawable class="..."> or <a.b.C>)."""
+    found = {}
+    for f in glob.glob('Common/src/wear*/res/drawable*/*.xml'):
+        m = re.search(r'<(?:drawable\s[^>]*?class="([\w.$]+)"|([a-z]\w*(?:\.\w+)+)[\s>/])', open(f, encoding='utf-8').read())
+        if m:
+            found.setdefault(m.group(1) or m.group(2), []).append(os.path.basename(f))
+    return found
+
+
+def check_xml_drawable_constructors(apk):
+    """Each class inflated from drawable XML keeps its no-arg constructor in the wear dex (rus/proguard-rus.pro).
+
+    Wear `rus` uses the previous resource shrinker, which does not keep these constructors itself: without the
+    rule the watch face crashed with NoSuchMethodException: ComplicationDrawable.<init> []."""
+    classes = xml_drawable_classes()
+    if not check(classes, f'classes inflated from wear drawable XML found in sources: {sorted(classes)}'):
+        return
+    ctors = set()
+    with zipfile.ZipFile(apk) as z:
+        tmp = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'rus-wear-dex-ctor')
+        os.makedirs(tmp, exist_ok=True)
+        for n in [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]:
+            path = z.extract(n, tmp)
+            cls, after_init = None, False
+            for line in run([build_tool('dexdump'), path]).splitlines():
+                m = re.match(r"\s*Class descriptor\s*:\s*'L([^;]+);'", line)
+                if m:
+                    cls, after_init = m.group(1).replace('/', '.'), False
+                elif re.match(r"\s*name\s*:\s*'<init>'", line):
+                    after_init = True
+                else:
+                    if after_init and cls and re.match(r"\s*type\s*:\s*'\(\)V'", line):
+                        ctors.add(cls)
+                    after_init = False
+            os.remove(path)
+    for c, files in sorted(classes.items()):
+        check(c in ctors, f'wear dex: {c} has its no-arg constructor (inflated from {len(files)} drawable XML)')
+
+
 def check_upstream_untouched():
     """Only added files compared with the common ancestor with upstream main."""
     try:
@@ -298,6 +338,7 @@ def main():
     check_native()
     check_watchface_name(a.wear)
     check_watchface_resources(a.wear)
+    check_xml_drawable_constructors(a.wear)
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_untouched()
