@@ -43,6 +43,9 @@ class CareLinkConfigTest {
         assertFalse(us.auth0)
         assertEquals("EU", CareLinkConfig.region(discovery, "XX")!!.region)
         assertFalse(CareLinkConfig.region(CareLinkConfig.parse(CareLinkTestData.DISCOVERY_NO_AUTH0)!!, null)!!.auth0)
+        // an address in the clear from the cloud is refused: keys never go over plain http
+        val plain = CareLinkTestData.DISCOVERY.replace("https://cl.example.eu", "http://cl.example.eu")
+        assertNull(CareLinkConfig.region(CareLinkConfig.parse(plain)!!, null))
     }
 
     @Test

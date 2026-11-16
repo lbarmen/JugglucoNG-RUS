@@ -47,10 +47,14 @@ object CareLinkConfig {
     data class Claims(val country: String?, val username: String?, val expMs: Long?)
 
     /** Return address of the sign-in page: [code] - one-time code, [error] - the page refused (Auth0 error). */
-    data class Redirect(val code: String?, val state: String?, val error: String?)
+    data class Redirect(val code: String?, val state: String?, val error: String?) {
+        override fun toString(): String = "Redirect(code=${code != null}, state=${state != null}, error=${error != null})"
+    }
 
     /** Answer to a key request: access, refresh (may be absent on refresh - then the old one), lifetime in seconds. */
-    data class Tokens(val access: String, val refresh: String?, val expiresInSec: Long?)
+    data class Tokens(val access: String, val refresh: String?, val expiresInSec: Long?) {
+        override fun toString(): String = "Tokens(refresh=${refresh != null}, expiresInSec=$expiresInSec)"
+    }
 
     fun parse(text: String?): JSONObject? {
         if (text == null) return null
@@ -84,7 +88,7 @@ object CareLinkConfig {
             if (list != null) {
                 for (i in 0 until list.length()) {
                     val item = list.optJSONObject(i) ?: continue
-                    found = item.optJSONObject(c)?.str("region")
+                    found = item.optJSONObject(c)?.clStr("region")
                     if (found != null) break
                 }
             }
@@ -94,38 +98,38 @@ object CareLinkConfig {
         var c: JSONObject? = null
         for (i in 0 until cp.length()) {
             val o = cp.optJSONObject(i) ?: continue
-            if (o.str("region").equals(wanted, ignoreCase = true)) {
+            if (o.clStr("region").equals(wanted, ignoreCase = true)) {
                 c = o
                 break
             }
         }
         if (c == null) return null
-        val key = c.str("UseSSOConfiguration") ?: return null
+        val key = c.clStr("UseSSOConfiguration") ?: return null
         return Region(
-            region = c.str("region") ?: wanted,
-            ssoUrl = c.str(key) ?: return null,
+            region = c.clStr("region") ?: wanted,
+            ssoUrl = c.clStr(key)?.takeIf(::isHttps) ?: return null,
             auth0 = key.contains("Auth0", ignoreCase = true),
-            baseUrlCareLink = c.str("baseUrlCareLink")?.trimEnd('/') ?: return null,
-            baseUrlCumulus = c.str("baseUrlCumulus")?.trimEnd('/') ?: return null,
+            baseUrlCareLink = c.clStr("baseUrlCareLink")?.takeIf(::isHttps)?.trimEnd('/') ?: return null,
+            baseUrlCumulus = c.clStr("baseUrlCumulus")?.takeIf(::isHttps)?.trimEnd('/') ?: return null,
         )
     }
 
     /** Auth0 sign-in settings: `server` (hostname, port, prefix), `system_endpoints` (paths), `client` (client_id...). */
     fun sso(config: JSONObject): Sso? {
         val server = config.optJSONObject("server") ?: return null
-        val host = server.str("hostname") ?: return null
-        val port = server.int("port") ?: 443
-        val prefix = server.str("prefix").orEmpty().trim('/')
+        val host = server.clStr("hostname") ?: return null
+        val port = server.clInt("port") ?: 443
+        val prefix = server.clStr("prefix").orEmpty().trim('/')
         val base = "https://$host:$port" + if (prefix.isEmpty()) "" else "/$prefix"
         val endpoints = config.optJSONObject("system_endpoints") ?: return null
         val client = config.optJSONObject("client") ?: return null
         return Sso(
-            authorizeUrl = base + (endpoints.str("authorization_endpoint_path") ?: return null),
-            tokenUrl = base + (endpoints.str("token_endpoint_path") ?: return null),
-            clientId = client.str("client_id") ?: return null,
-            scope = client.str("scope").orEmpty(),
-            redirectUri = client.str("redirect_uri") ?: return null,
-            audience = client.str("audience"),
+            authorizeUrl = base + (endpoints.clStr("authorization_endpoint_path") ?: return null),
+            tokenUrl = base + (endpoints.clStr("token_endpoint_path") ?: return null),
+            clientId = client.clStr("client_id") ?: return null,
+            scope = client.clStr("scope").orEmpty(),
+            redirectUri = client.clStr("redirect_uri") ?: return null,
+            audience = client.clStr("audience"),
         )
     }
 
@@ -159,6 +163,9 @@ object CareLinkConfig {
         "grant_type" to "refresh_token",
     )
 
+    /** Only https: keys and data never go in the clear, whatever an answer of the cloud names. */
+    fun isHttps(url: String): Boolean = url.startsWith("https://", ignoreCase = true)
+
     /** Is the address the return from the sign-in page ([redirectUri], scheme and host in any case)? */
     fun isRedirect(url: String, redirectUri: String): Boolean {
         val u = url.substringBefore('?').substringBefore('#').trimEnd('/')
@@ -191,21 +198,21 @@ object CareLinkConfig {
         } ?: return Claims(null, null, null)
         val details = o.optJSONObject("token_details")
         return Claims(
-            country = details?.str("country"),
-            username = details?.str("preferred_username") ?: o.str("preferred_username"),
-            expMs = o.long("exp")?.let { it * 1000 },
+            country = details?.clStr("country"),
+            username = details?.clStr("preferred_username") ?: o.clStr("preferred_username"),
+            expMs = o.clLong("exp")?.let { it * 1000 },
         )
     }
 
     fun tokens(o: JSONObject): Tokens? = Tokens(
-        access = o.str("access_token") ?: return null,
-        refresh = o.str("refresh_token"),
-        expiresInSec = o.long("expires_in"),
+        access = o.clStr("access_token") ?: return null,
+        refresh = o.clStr("refresh_token"),
+        expiresInSec = o.clLong("expires_in"),
     )
 
     /** Error of the key server (Auth0: `error`, `error_description`); no secrets in them. */
     fun tokenError(o: JSONObject?): String? =
-        o?.let { listOfNotNull(it.str("error"), it.str("error_description")).joinToString(": ").ifEmpty { null } }
+        o?.let { listOfNotNull(it.clStr("error"), it.clStr("error_description")).joinToString(": ").ifEmpty { null } }
 
     fun encode(s: String): String = URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 
@@ -213,29 +220,29 @@ object CareLinkConfig {
         val eq = part.indexOf('=')
         if (eq <= 0) null else part.substring(0, eq) to URLDecoder.decode(part.substring(eq + 1), "UTF-8")
     }.toMap()
-
-    /** A string or number field as text; no field or JSON null - null. */
-    internal fun JSONObject.str(key: String): String? {
-        if (!has(key) || isNull(key)) return null
-        return when (val v = opt(key)) {
-            is String -> v
-            is Number, is Boolean -> v.toString()
-            else -> null
-        }
-    }
-
-    /** A whole number field (a number or a numeric string); no field, JSON null or not a number - null. */
-    internal fun JSONObject.long(key: String): Long? {
-        if (!has(key) || isNull(key)) return null
-        return when (val v = opt(key)) {
-            is Int -> v.toLong()
-            is Long -> v
-            is Number -> v.toDouble().takeIf { it.isFinite() }?.toLong()
-            is String -> v.trim().toLongOrNull()
-            else -> null
-        }
-    }
-
-    internal fun JSONObject.int(key: String): Int? =
-        long(key)?.takeIf { it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
 }
+
+/** A string or number field as text; no field or JSON null - null (the same on Android's org.json and JSON-java). */
+internal fun JSONObject.clStr(key: String): String? {
+    if (!has(key) || isNull(key)) return null
+    return when (val v = opt(key)) {
+        is String -> v
+        is Number, is Boolean -> v.toString()
+        else -> null
+    }
+}
+
+/** A whole number field (a number or a numeric string); no field, JSON null or not a number - null. */
+internal fun JSONObject.clLong(key: String): Long? {
+    if (!has(key) || isNull(key)) return null
+    return when (val v = opt(key)) {
+        is Int -> v.toLong()
+        is Long -> v
+        is Number -> v.toDouble().takeIf { it.isFinite() }?.toLong()
+        is String -> v.trim().toLongOrNull()
+        else -> null
+    }
+}
+
+internal fun JSONObject.clInt(key: String): Int? =
+    clLong(key)?.takeIf { it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()

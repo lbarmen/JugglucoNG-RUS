@@ -62,6 +62,9 @@ internal class FakeCareLinkHttp : CareLinkHttp {
     val forms = mutableListOf<Map<String, String>>()
     private val routes = mutableMapOf<String, ArrayDeque<HttpResult>>()
 
+    /** Runs inside a form request, before its answer (e.g. a sign-out racing a key renewal). */
+    var onForm: (() -> Unit)? = null
+
     fun on(url: String, vararg answers: HttpResult) {
         routes[url] = ArrayDeque(answers.toList())
     }
@@ -79,6 +82,7 @@ internal class FakeCareLinkHttp : CareLinkHttp {
     override fun postForm(url: String, form: Map<String, String>, headers: Map<String, String>): HttpResult {
         calls += "FORM $url ${form["grant_type"]}"
         forms += form
+        onForm?.invoke()
         return answer(url)
     }
 

@@ -51,12 +51,15 @@ interface CareLinkHttp {
  * [CareLinkHttp] on HttpURLConnection and no library (upstream has no OkHttp). As the CareLink app: `User-Agent` is
  * the system `http.agent` (Dalvik/2.1.0 ...), not a library name - the cloud expects the mobile app; gzip asked for by
  * hand and unpacked here (a hand-set Accept-Encoding turns off the transparent unpacking); timeouts connect 15 s,
- * read 30 s and the whole request at most 30 s (a watchdog disconnects it). Nothing is logged here.
+ * read 30 s and the whole request at most 30 s (a watchdog disconnects it). Only https ([requireHttps]; tests of
+ * this class talk to a local plain server). POST does not follow redirects (its body cannot be sent twice). An answer
+ * whose body breaks off keeps its status code (a cut 400 is still a 400, not "no network"). Nothing is logged here.
  */
 internal class UrlConnectionCareLinkHttp(
     private val connectTimeoutMs: Int = 15_000,
     private val readTimeoutMs: Int = 30_000,
     private val totalTimeoutMs: Long = 30_000,
+    private val requireHttps: Boolean = true,
 ) : CareLinkHttp {
 
     override fun get(url: String, headers: Map<String, String>): HttpResult = request("GET", url, headers, null, null)
@@ -78,6 +81,7 @@ internal class UrlConnectionCareLinkHttp(
         body: ByteArray?,
         contentType: String?,
     ): HttpResult {
+        if (requireHttps && !CareLinkConfig.isHttps(url)) return HttpResult(0, null, IllegalArgumentException("not https"))
         val conn = AtomicReference<HttpURLConnection?>(null)
         val timedOut = AtomicBoolean(false)
         val watchdog = try {
@@ -98,7 +102,7 @@ internal class UrlConnectionCareLinkHttp(
             c.readTimeout = readTimeoutMs
             c.requestMethod = method
             c.useCaches = false
-            c.instanceFollowRedirects = true
+            c.instanceFollowRedirects = method == "GET"
             c.setRequestProperty("User-Agent", USER_AGENT)
             c.setRequestProperty("Accept-Encoding", "gzip")
             if (headers.keys.none { it.equals("Accept", ignoreCase = true) }) {
@@ -108,16 +112,21 @@ internal class UrlConnectionCareLinkHttp(
             if (body != null) {
                 c.doOutput = true
                 if (contentType != null) c.setRequestProperty("Content-Type", contentType)
-                c.setFixedLengthStreamingMode(body.size)
                 c.outputStream.use { it.write(body) }
             }
             val code = c.responseCode
-            val stream: InputStream? = if (code >= 400) c.errorStream else c.inputStream
-            val text = stream?.let { s ->
-                val unpacked = if ("gzip".equals(c.contentEncoding, ignoreCase = true)) GZIPInputStream(s) else s
-                unpacked.use { readCapped(it) }
+            if (code == HttpURLConnection.HTTP_NO_CONTENT) return HttpResult(code, null, null)
+            return try {
+                val stream: InputStream? = if (code >= 400) c.errorStream else c.inputStream
+                val text = stream?.let { s ->
+                    val unpacked = if ("gzip".equals(c.contentEncoding, ignoreCase = true)) GZIPInputStream(s) else s
+                    unpacked.use { readCapped(it) }
+                }
+                HttpResult(code, text, null)
+            } catch (t: Throwable) {
+                // the status is known: keep it, the body is lost
+                HttpResult(code, null, if (timedOut.get()) SocketTimeoutException("total timeout") else t)
             }
-            return HttpResult(code, text, null)
         } catch (t: Throwable) {
             val error = if (timedOut.get()) SocketTimeoutException("total timeout") else t
             return HttpResult(0, null, error)

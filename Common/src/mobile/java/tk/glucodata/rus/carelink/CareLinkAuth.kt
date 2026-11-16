@@ -12,8 +12,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import tk.glucodata.rus.carelink.CareLinkConfig.long
-import tk.glucodata.rus.carelink.CareLinkConfig.str
 import java.io.File
 import java.security.SecureRandom
 import java.util.Base64
@@ -40,7 +38,10 @@ enum class LoginFail { NO_NETWORK, SERVER, BAD_ANSWER, UNSUPPORTED, DENIED, STAT
 
 /** Start of a sign-in: the Medtronic page to open, or why it cannot open. */
 sealed class LoginStart {
-    data class Ready(val uri: Uri, val redirectUri: String) : LoginStart()
+    data class Ready(val uri: Uri, val redirectUri: String) : LoginStart() {
+        /** The address carries our mark: never printed. */
+        override fun toString(): String = "Ready"
+    }
     data class Failed(val reason: LoginFail, val code: Int) : LoginStart()
 }
 
@@ -93,6 +94,9 @@ object CareLinkAuth {
 
     private const val DISCOVERY_TTL_MS = 3_600_000L
 
+    /** A waiting sign-in older than this is not finished (a code from mail takes minutes, not hours). */
+    internal const val PENDING_TTL_MS = 3_600_000L
+
     /** Refusals after which only a new sign-in helps - these statuses with `invalid_grant` only. */
     private val DEAD_GRANT_STATUSES = setOf(400, 401, 403)
 
@@ -102,12 +106,9 @@ object CareLinkAuth {
     @Volatile
     private var discovery: Pair<Long, JSONObject>? = null
 
-    /** Last session in memory: a renewed key is not lost if its write failed; [cachedUnsaved] - write again. */
+    /** Last session in memory: a renewed key is not lost if its write failed (it is written again next time). */
     @Volatile
-    private var cached: CareLinkSession? = null
-
-    @Volatile
-    private var cachedUnsaved = false
+    private var memory: Memory? = null
 
     /** Is there a session - by the file only, no decryption (for scheduling; safe on any thread, cheap). */
     fun hasSession(context: Context): Boolean = CareLinkVault.exists(context)
@@ -166,16 +167,32 @@ object CareLinkAuth {
      * why not. A session that existed before a failed attempt is not touched.
      */
     suspend fun finishLogin(context: Context, code: String, state: String?): LoginFail? = withContext(Dispatchers.IO) {
-        mutex.withLock { finishLoginLocked(context.applicationContext, code, state) }
+        val app = context.applicationContext
+        val fail = mutex.withLock { finishLoginLocked(app, code, state) }
+        // outside the lock: a listener may ask for a fresh key (the lock is not reentrant)
+        if (fail == null) {
+            try {
+                onLoginSuccess?.invoke(app)
+            } catch (t: Throwable) {
+                Log.w(TAG, "after sign-in listener failed (${t.javaClass.simpleName})")
+            }
+        }
+        fail
     }
 
     private fun finishLoginLocked(app: Context, code: String, state: String?): LoginFail? {
         val now = clock()
+        val generation = CareLinkVault.generation
         val pending = try {
             Pending.read(app)
         } catch (_: Throwable) {
             null
         } ?: return LoginFail.NO_PENDING.also { Log.w(TAG, "sign-in failed: no pending sign-in") }
+        if (now - pending.startedAtMs !in 0..PENDING_TTL_MS) {
+            Pending.clear(app)
+            Log.w(TAG, "sign-in failed: the waiting sign-in is too old")
+            return LoginFail.NO_PENDING
+        }
         if (state != pending.state) return LoginFail.STATE_MISMATCH.also { Log.w(TAG, "sign-in failed: state mismatch") }
         val tokenHttp = http.postForm(pending.tokenUrl, CareLinkConfig.codeForm(pending.clientId, pending.redirectUri, code))
         if (!tokenHttp.ok) {
@@ -205,21 +222,19 @@ object CareLinkAuth {
         val roleResult = withRole(fresh)
         val session = roleResult.first
             ?: return failOf(roleResult.second).also { logFail("finish", "users_me", roleResult.second) }
-        try {
-            CareLinkVault.save(app, session)
+        val stored = try {
+            CareLinkVault.saveNew(app, session, generation)
         } catch (t: Throwable) {
             Log.w(TAG, "sign-in failed: session not stored (${t.javaClass.simpleName})")
             return LoginFail.STORAGE
         }
-        cached = session
-        cachedUnsaved = false
+        if (!stored) {
+            Log.w(TAG, "sign-in dropped: signed out meanwhile")
+            return LoginFail.NO_PENDING
+        }
+        memory = Memory(session, generation, unsaved = false)
         Pending.clear(app)
         Log.i(TAG, "sign-in ok: region=${session.region} role=${session.role}")
-        try {
-            onLoginSuccess?.invoke(app)
-        } catch (t: Throwable) {
-            Log.w(TAG, "after sign-in listener failed (${t.javaClass.simpleName})")
-        }
         return null
     }
 
@@ -229,16 +244,19 @@ object CareLinkAuth {
     /** Renew now, whatever the expiry (the cloud answered 401/403 to the current key). */
     suspend fun forceRefresh(context: Context): FreshResult = fresh(context.applicationContext, force = true)
 
-    /** Sign out: wipe the session and a waiting sign-in, then [onSignOut] (4c: polling off). */
+    /**
+     * Sign out: wipe the session and a waiting sign-in, then [onSignOut] (4c: polling off). Fast, safe on the main
+     * thread (file deletes only). A renewal or sign-in running at this moment cannot write its session back: the
+     * vault's generation has moved on.
+     */
     fun signOut(context: Context) {
         val app = context.applicationContext
-        cached = null
-        cachedUnsaved = false
         try {
             CareLinkVault.clear(app)
         } catch (t: Throwable) {
             Log.w(TAG, "sign-out: session file not removed (${t.javaClass.simpleName})")
         }
+        memory = null
         try {
             Pending.clear(app)
         } catch (_: Throwable) {
@@ -256,15 +274,16 @@ object CareLinkAuth {
     }
 
     private suspend fun freshLocked(app: Context, force: Boolean): FreshResult {
-        val stored = when (val r = readSession(app)) {
-            is SessionRead.Found -> r.session
+        val read = when (val r = readSession(app)) {
+            is SessionRead.Found -> r
             SessionRead.None -> return FreshResult.NeedLogin
             is SessionRead.Broken -> return FreshResult.Failed(0, r.errorClass)
         }
+        val stored = read.session
         val s = if (!force && stored.expiresAtMs - clock() > REFRESH_MARGIN_MS) {
             stored
         } else {
-            when (val r = refresh(app, stored, force)) {
+            when (val r = refresh(app, stored, read.generation, force)) {
                 is FreshResult.Ok -> r.session
                 else -> return r
             }
@@ -272,15 +291,16 @@ object CareLinkAuth {
         if (s.role != null) return FreshResult.Ok(s)
         // Role not known yet (sign-in always asks it; kept for safety): ask now.
         val roleResult = withRole(s)
-        val withRole = roleResult.first ?: return FreshResult.Failed(roleResult.second.code, roleResult.second.errorClass ?: "no_role")
-        saveSession(app, withRole)
+        val withRole = roleResult.first
+            ?: return FreshResult.Failed(roleResult.second.code, roleResult.second.errorClass ?: "no_role")
+        if (!saveSession(app, withRole, read.generation)) return FreshResult.NeedLogin
         return FreshResult.Ok(withRole)
     }
 
-    private suspend fun refresh(app: Context, s: CareLinkSession, force: Boolean): FreshResult {
+    private suspend fun refresh(app: Context, s: CareLinkSession, generation: Long, force: Boolean): FreshResult {
         // Request and write without cancellation: the server may already have issued a new refresh key instead of the
         // old one, and a cancel after its answer would lose it - the next poll would come with the revoked old key.
-        val (result, next) = withContext(NonCancellable) {
+        val (result, next, kept) = withContext(NonCancellable) {
             val result = http.postForm(s.tokenUrl, CareLinkConfig.refreshForm(s.clientId, s.refreshToken))
             val tokens = if (result.ok) CareLinkConfig.parse(result.body)?.let(CareLinkConfig::tokens) else null
             val next = tokens?.let { t ->
@@ -288,11 +308,16 @@ object CareLinkAuth {
                 s.copy(
                     accessToken = t.access, refreshToken = t.refresh ?: s.refreshToken,
                     expiresAtMs = expOf(CareLinkConfig.claims(t.access), t, now), refreshedAtMs = now,
-                ).also { saveSession(app, it) }
+                )
             }
-            result to next
+            val kept = next == null || saveSession(app, next, generation)
+            Triple(result, next, kept)
         }
         if (next != null) {
+            if (!kept) {
+                Log.i(TAG, "key renewed after a sign-out: dropped")
+                return FreshResult.NeedLogin
+            }
             Log.i(TAG, "key renewed: force=$force inMin=${(next.expiresAtMs - clock()) / 60_000} rotated=${next.refreshToken != s.refreshToken}")
             return FreshResult.Ok(next)
         }
@@ -306,13 +331,12 @@ object CareLinkAuth {
             CareLinkConfig.tokenError(CareLinkConfig.parse(result.body))?.startsWith("invalid_grant") == true
         if (grantDead) {
             Log.w(TAG, "key renewal refused (${result.code} invalid_grant): sign-in needed, session wiped")
-            cached = null
-            cachedUnsaved = false
             try {
                 CareLinkVault.clear(app)
             } catch (t: Throwable) {
                 Log.w(TAG, "session file not removed (${t.javaClass.simpleName})")
             }
+            memory = null
             return FreshResult.NeedLogin
         }
         Log.w(TAG, "key renewal failed: code=${result.code} error=${result.errorClass}")
@@ -327,63 +351,74 @@ object CareLinkAuth {
         val headers = CareLinkHttp.bearer(s.accessToken)
         val me = http.get(s.baseUrlCareLink + "/users/me", headers)
         if (!me.ok) return null to me
-        val role = CareLinkConfig.parse(me.body)?.str("role") ?: return null to me
+        val role = CareLinkConfig.parse(me.body)?.clStr("role") ?: return null to me
         var next = s.copy(role = role)
         if (next.carePartner) {
             val p = http.get(next.baseUrlCareLink + "/links/patients", headers)
             if (!p.ok) return null to p
             val first = CareLinkConfig.parseArray(p.body)?.optJSONObject(0)
-            val patient = first?.str("username") ?: return null to p
+            val patient = first?.clStr("username") ?: return null to p
             next = next.copy(patientId = patient)
         }
         return next to me
     }
 
     private sealed class SessionRead {
-        data class Found(val session: CareLinkSession) : SessionRead()
+        data class Found(val session: CareLinkSession, val generation: Long) : SessionRead()
         object None : SessionRead()
         data class Broken(val errorClass: String) : SessionRead()
     }
 
+    /** The session in memory, the vault generation it belongs to, and whether its file write is still owed. */
+    private class Memory(val session: CareLinkSession, val generation: Long, val unsaved: Boolean)
+
     /**
-     * The session: from memory first (one not yet stored is written again), else from the file. No file - sign-in
-     * needed; a file that does not open - a storage failure, the file is kept (Keystore may be locked before unlock).
+     * The session: from memory first (one not yet stored is written again), else from the file. No file or a sign-out
+     * since (generation moved) - sign-in needed; a file that does not open - a storage failure, the file is kept
+     * (Keystore may be locked before unlock).
      */
     private fun readSession(app: Context): SessionRead {
-        cached?.let { c ->
-            if (!CareLinkVault.exists(app) && !cachedUnsaved) {
-                // the file is gone (app data cleared): memory must not bring the session back
-                cached = null
+        memory?.let { m ->
+            if (m.generation != CareLinkVault.generation || (!m.unsaved && !CareLinkVault.exists(app))) {
+                // signed out, or the file is gone (app data cleared): memory must not bring the session back
+                memory = null
                 return SessionRead.None
             }
-            if (cachedUnsaved) writeVault(app, c)
-            return SessionRead.Found(c)
+            if (m.unsaved && !saveSession(app, m.session, m.generation)) return SessionRead.None
+            return SessionRead.Found(m.session, m.generation)
         }
+        val generation = CareLinkVault.generation
         val s = try {
             CareLinkVault.load(app)
         } catch (t: Throwable) {
             Log.w(TAG, "session not readable (${(t.cause ?: t).javaClass.simpleName})")
             return SessionRead.Broken((t.cause ?: t).javaClass.simpleName)
         } ?: return SessionRead.None
-        cached = s
-        cachedUnsaved = false
-        return SessionRead.Found(s)
+        memory = Memory(s, generation, unsaved = false)
+        return SessionRead.Found(s, generation)
     }
 
-    /** Session to memory at once, to the file as an attempt; a failed write is marked and repeated next time. */
-    private fun saveSession(app: Context, s: CareLinkSession) {
-        cached = s
-        writeVault(app, s)
-    }
-
-    private fun writeVault(app: Context, s: CareLinkSession): Boolean = try {
-        CareLinkVault.save(app, s)
-        cachedUnsaved = false
-        true
+    /**
+     * Session to memory and to the file. A failed write keeps it in memory, marked, and the next call writes again.
+     * false - a sign-out came in between ([CareLinkVault.generation] moved): nothing kept.
+     */
+    private fun saveSession(app: Context, s: CareLinkSession, generation: Long): Boolean = try {
+        if (CareLinkVault.save(app, s, generation)) {
+            memory = Memory(s, generation, unsaved = false)
+            true
+        } else {
+            memory = null
+            false
+        }
     } catch (t: Throwable) {
-        cachedUnsaved = true
-        Log.w(TAG, "renewed key not stored, kept in memory (${t.javaClass.simpleName})")
-        false
+        if (CareLinkVault.generation != generation) {
+            memory = null
+            false
+        } else {
+            memory = Memory(s, generation, unsaved = true)
+            Log.w(TAG, "renewed key not stored, kept in memory (${t.javaClass.simpleName})")
+            true
+        }
     }
 
     /** Discovery, one request an hour. first = the answer, second = the last HTTP result (for the error code). */
@@ -416,8 +451,7 @@ object CareLinkAuth {
 
     /** Forget memory state (tests; a fresh process has none). */
     internal fun resetForTest() {
-        cached = null
-        cachedUnsaved = false
+        memory = null
         discovery = null
         onLoginSuccess = null
         onSignOut = null
@@ -438,6 +472,9 @@ object CareLinkAuth {
         val redirectUri: String,
         val startedAtMs: Long,
     ) {
+        /** The mark is never printed. */
+        override fun toString(): String = "Pending(region=$region, startedAtMs=$startedAtMs)"
+
         companion object {
             private fun file(app: Context) = File(CareLinkVault.dir(app), "pending.json")
 
@@ -453,12 +490,12 @@ object CareLinkAuth {
                 if (!f.exists()) return null
                 val o = CareLinkConfig.parse(f.readText(Charsets.UTF_8)) ?: return null
                 return Pending(
-                    state = o.str("state") ?: return null,
-                    region = o.str("region") ?: return null,
-                    tokenUrl = o.str("tokenUrl") ?: return null,
-                    clientId = o.str("clientId") ?: return null,
-                    redirectUri = o.str("redirectUri") ?: return null,
-                    startedAtMs = o.long("startedAtMs") ?: 0L,
+                    state = o.clStr("state") ?: return null,
+                    region = o.clStr("region") ?: return null,
+                    tokenUrl = o.clStr("tokenUrl") ?: return null,
+                    clientId = o.clStr("clientId") ?: return null,
+                    redirectUri = o.clStr("redirectUri") ?: return null,
+                    startedAtMs = o.clLong("startedAtMs") ?: 0L,
                 )
             }
 

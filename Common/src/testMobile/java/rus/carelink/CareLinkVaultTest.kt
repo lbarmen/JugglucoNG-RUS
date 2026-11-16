@@ -43,7 +43,7 @@ class CareLinkVaultTest {
 
     @Before
     fun setUp() {
-        CareLinkVault.cipher = AesGcmSessionCipher { key }
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
     }
 
@@ -84,7 +84,7 @@ class CareLinkVaultTest {
         CareLinkVault.save(app, session)
         val before = file.readBytes()
         // another key (as after a Keystore reset): the file must stay, the caller decides
-        CareLinkVault.cipher = AesGcmSessionCipher { KeyGenerator.getInstance("AES").apply { init(256) }.generateKey() }
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { KeyGenerator.getInstance("AES").apply { init(256) }.generateKey() })
         try {
             CareLinkVault.load(app)
             fail("expected StorageException")
@@ -93,7 +93,7 @@ class CareLinkVaultTest {
         assertTrue(file.exists())
         assertArrayEquals(before, file.readBytes())
         // a truncated file - the same
-        CareLinkVault.cipher = AesGcmSessionCipher { key }
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         file.writeBytes(byteArrayOf(1, 2, 3))
         try {
             CareLinkVault.load(app)
@@ -105,7 +105,7 @@ class CareLinkVaultTest {
 
     @Test
     fun cipherRoundTripAndTamperIsRefused() {
-        val c = AesGcmSessionCipher { key }
+        val c = AesGcmSessionCipher(keyProvider = { key })
         val sealed = c.seal("made-up".toByteArray())
         assertEquals("made-up", String(c.open(sealed)))
         assertFalse(sealed.copyOfRange(12, sealed.size).contentEquals("made-up".toByteArray()))
@@ -115,5 +115,45 @@ class CareLinkVaultTest {
             fail("a changed file must not open")
         } catch (_: Exception) {
         }
+    }
+
+    @Test
+    fun everySealHasItsOwnIv() {
+        val c = AesGcmSessionCipher(keyProvider = { key })
+        val a = c.seal("same".toByteArray())
+        val b = c.seal("same".toByteArray())
+        assertFalse(a.copyOfRange(0, 12).contentEquals(b.copyOfRange(0, 12)))
+    }
+
+    @Test
+    fun aWriteStartedBeforeASignOutIsRefused() {
+        val generation = CareLinkVault.generation
+        CareLinkVault.clear(app) // sign-out in between
+        assertFalse(CareLinkVault.save(app, session, generation))
+        assertFalse(file.exists())
+        assertTrue(CareLinkVault.save(app, session, CareLinkVault.generation))
+        assertTrue(file.exists())
+    }
+
+    @Test
+    fun aKeyTheKeystoreCannotUseIsMadeAgainOnANewSignIn() {
+        var broken = true
+        var resets = 0
+        CareLinkVault.cipher = AesGcmSessionCipher(
+            keyProvider = { if (broken) throw java.security.UnrecoverableKeyException("made-up") else key },
+            keyReset = { resets++; broken = false },
+        )
+        // a renewal does not touch the key: it fails and leaves the decision to the caller
+        try {
+            CareLinkVault.save(app, session)
+            fail("expected the broken key to fail")
+        } catch (_: java.security.UnrecoverableKeyException) {
+        }
+        assertEquals(0, resets)
+        // a new sign-in drops the key, makes a new one and stores the session
+        broken = true
+        assertTrue(CareLinkVault.saveNew(app, session, CareLinkVault.generation))
+        assertEquals(1, resets)
+        assertEquals(session, CareLinkVault.load(app))
     }
 }

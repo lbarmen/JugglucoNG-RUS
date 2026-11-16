@@ -31,6 +31,7 @@ import tk.glucodata.rus.carelink.CareLinkVault
 import tk.glucodata.rus.carelink.FreshResult
 import tk.glucodata.rus.carelink.LoginFail
 import tk.glucodata.rus.carelink.LoginStart
+import tk.glucodata.rus.carelink.SessionCipher
 import java.io.File
 import javax.crypto.KeyGenerator
 
@@ -66,7 +67,7 @@ class CareLinkAuthTest {
         CareLinkAuth.resetForTest()
         CareLinkAuth.http = net
         CareLinkAuth.clock = { now }
-        CareLinkVault.cipher = AesGcmSessionCipher { key }
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
         pendingFile.delete()
     }
@@ -187,7 +188,7 @@ class CareLinkAuthTest {
     @Test
     fun unreadableSessionFileIsAStorageFailureNotASignOut() = runBlocking {
         CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L))
-        CareLinkVault.cipher = AesGcmSessionCipher { KeyGenerator.getInstance("AES").apply { init(256) }.generateKey() }
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { KeyGenerator.getInstance("AES").apply { init(256) }.generateKey() })
         val r = CareLinkAuth.ensureFresh(app)
         assertTrue(r is FreshResult.Failed)
         assertTrue(CareLinkAuth.hasSession(app))
@@ -324,5 +325,71 @@ class CareLinkAuthTest {
         assertFalse(CareLinkAuth.hasSession(app))
         assertFalse(pendingFile.exists())
         assertEquals(FreshResult.NeedLogin, CareLinkAuth.ensureFresh(app))
+    }
+
+    // ---------- races and leftovers (critic of 4b) ----------
+
+    @Test
+    fun signOutDuringARenewalWins() = runBlocking {
+        CareLinkVault.save(app, session(expiresInMs = 5 * 60_000L))
+        net.on(TOKEN_URL, ok(renewed("made-up-refresh-2")))
+        net.onForm = { CareLinkAuth.signOut(app) } // the user signs out while the renewal waits for the server
+        assertEquals(FreshResult.NeedLogin, CareLinkAuth.ensureFresh(app))
+        net.onForm = null
+        assertFalse(CareLinkAuth.hasSession(app))
+        assertEquals(FreshResult.NeedLogin, CareLinkAuth.ensureFresh(app))
+    }
+
+    @Test
+    fun signOutDuringASignInWins() = runBlocking {
+        cloudForSignIn()
+        val (state, redirect) = begin()
+        net.onForm = { CareLinkAuth.signOut(app) }
+        assertEquals(LoginFail.NO_PENDING, CareLinkAuth.finishLogin(app, "$redirect?code=c&state=$state"))
+        assertFalse(CareLinkAuth.hasSession(app))
+    }
+
+    @Test
+    fun aRotatedKeyThatFailedToStoreIsWrittenNextTime() = runBlocking {
+        CareLinkVault.save(app, session(expiresInMs = 5 * 60_000L))
+        val real = AesGcmSessionCipher(keyProvider = { key })
+        var failSeals = 1
+        CareLinkVault.cipher = object : SessionCipher {
+            override fun seal(plain: ByteArray): ByteArray {
+                if (failSeals-- > 0) throw java.io.IOException("made-up: disk full")
+                return real.seal(plain)
+            }
+
+            override fun open(sealed: ByteArray): ByteArray = real.open(sealed)
+        }
+        net.on(TOKEN_URL, ok(renewed("made-up-refresh-2")))
+        val r = CareLinkAuth.ensureFresh(app) as FreshResult.Ok
+        assertEquals("made-up-refresh-2", r.session.refreshToken)
+        assertEquals("made-up-refresh-1", CareLinkVault.load(app)!!.refreshToken) // the write failed
+        // the next call writes the kept key without asking the server again
+        assertTrue(CareLinkAuth.ensureFresh(app) is FreshResult.Ok)
+        assertEquals("made-up-refresh-2", CareLinkVault.load(app)!!.refreshToken)
+        assertEquals(1, net.calls.size)
+    }
+
+    @Test
+    fun anOldWaitingSignInIsNotFinished() = runBlocking {
+        cloudForSignIn()
+        val (state, redirect) = begin()
+        now += CareLinkAuth.PENDING_TTL_MS + 1
+        assertEquals(LoginFail.NO_PENDING, CareLinkAuth.finishLogin(app, "$redirect?code=c&state=$state"))
+        assertFalse(pendingFile.exists())
+        assertFalse(CareLinkAuth.hasSession(app))
+    }
+
+    @Test
+    fun theSignInListenerMayAskForAFreshKey() = runBlocking {
+        cloudForSignIn()
+        var answer: FreshResult? = null
+        // runs outside the lock: asking for a key from the listener must not hang
+        CareLinkAuth.onLoginSuccess = { ctx -> answer = runBlocking { CareLinkAuth.ensureFresh(ctx) } }
+        val (state, redirect) = begin()
+        assertNull(CareLinkAuth.finishLogin(app, "$redirect?code=c&state=$state"))
+        assertTrue(answer is FreshResult.Ok)
     }
 }

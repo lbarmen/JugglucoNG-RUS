@@ -4,9 +4,8 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import org.json.JSONObject
-import tk.glucodata.rus.carelink.CareLinkConfig.long
-import tk.glucodata.rus.carelink.CareLinkConfig.str
 import java.io.File
+import java.io.FileOutputStream
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -62,20 +61,20 @@ data class CareLinkSession(
 
     companion object {
         fun fromJson(o: JSONObject): CareLinkSession? = CareLinkSession(
-            accessToken = o.str("accessToken") ?: return null,
-            refreshToken = o.str("refreshToken") ?: return null,
-            expiresAtMs = o.long("expiresAtMs") ?: return null,
-            username = o.str("username") ?: return null,
-            role = o.str("role"),
-            patientId = o.str("patientId"),
-            country = o.str("country"),
-            region = o.str("region") ?: return null,
-            baseUrlCareLink = o.str("baseUrlCareLink") ?: return null,
-            baseUrlCumulus = o.str("baseUrlCumulus") ?: return null,
-            tokenUrl = o.str("tokenUrl") ?: return null,
-            clientId = o.str("clientId") ?: return null,
-            loggedInAtMs = o.long("loggedInAtMs") ?: return null,
-            refreshedAtMs = o.long("refreshedAtMs"),
+            accessToken = o.clStr("accessToken") ?: return null,
+            refreshToken = o.clStr("refreshToken") ?: return null,
+            expiresAtMs = o.clLong("expiresAtMs") ?: return null,
+            username = o.clStr("username") ?: return null,
+            role = o.clStr("role"),
+            patientId = o.clStr("patientId"),
+            country = o.clStr("country"),
+            region = o.clStr("region") ?: return null,
+            baseUrlCareLink = o.clStr("baseUrlCareLink") ?: return null,
+            baseUrlCumulus = o.clStr("baseUrlCumulus") ?: return null,
+            tokenUrl = o.clStr("tokenUrl") ?: return null,
+            clientId = o.clStr("clientId") ?: return null,
+            loggedInAtMs = o.clLong("loggedInAtMs") ?: return null,
+            refreshedAtMs = o.clLong("refreshedAtMs"),
         )
 
         fun decode(text: String): CareLinkSession? = CareLinkConfig.parse(text)?.let(::fromJson)
@@ -86,10 +85,19 @@ data class CareLinkSession(
 interface SessionCipher {
     fun seal(plain: ByteArray): ByteArray
     fun open(sealed: ByteArray): ByteArray
+
+    /** Drop the key so the next [seal] makes a new one (a key the Keystore can no longer use). */
+    fun resetKey() {}
 }
 
-/** AES-256-GCM, file = 12-byte IV + cipher text with the tag. The key comes from [keyProvider]. */
-class AesGcmSessionCipher(private val keyProvider: () -> SecretKey) : SessionCipher {
+/**
+ * AES-256-GCM, file = 12-byte IV + cipher text with the tag (a new IV from the provider on every seal). The key comes
+ * from [keyProvider]; [keyReset] drops it.
+ */
+class AesGcmSessionCipher(
+    private val keyProvider: () -> SecretKey,
+    private val keyReset: () -> Unit = {},
+) : SessionCipher {
     override fun seal(plain: ByteArray): ByteArray {
         val cipher = Cipher.getInstance(TRANSFORM)
         cipher.init(Cipher.ENCRYPT_MODE, keyProvider())
@@ -103,6 +111,10 @@ class AesGcmSessionCipher(private val keyProvider: () -> SecretKey) : SessionCip
         return cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES)
     }
 
+    override fun resetKey() {
+        keyReset()
+    }
+
     companion object {
         private const val TRANSFORM = "AES/GCM/NoPadding"
         private const val IV_BYTES = 12
@@ -111,7 +123,7 @@ class AesGcmSessionCipher(private val keyProvider: () -> SecretKey) : SessionCip
         private const val ALIAS = "rus_carelink_session"
 
         /** The phone's key in Android Keystore: never leaves the phone, no backup carries it. */
-        val keystore: SessionCipher by lazy { AesGcmSessionCipher(::keystoreKey) }
+        val keystore: SessionCipher by lazy { AesGcmSessionCipher(::keystoreKey, ::deleteKeystoreKey) }
 
         @Synchronized
         private fun keystoreKey(): SecretKey {
@@ -127,6 +139,12 @@ class AesGcmSessionCipher(private val keyProvider: () -> SecretKey) : SessionCip
             )
             return gen.generateKey()
         }
+
+        @Synchronized
+        private fun deleteKeystoreKey() {
+            val ks = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+            if (ks.containsAlias(ALIAS)) ks.deleteEntry(ALIAS)
+        }
     }
 }
 
@@ -134,7 +152,11 @@ class AesGcmSessionCipher(private val keyProvider: () -> SecretKey) : SessionCip
  * Protected session store: the file `noBackupFilesDir/rus-carelink/session.bin`, sealed by [cipher] (on the phone -
  * AES-256-GCM with the Android Keystore key `rus_carelink_session`). noBackupFilesDir is in no backup: not in Android's
  * (allowBackup=false anyway) and not in upstream's settings export, which takes every shared_prefs file. Written through
- * a temporary file and rename. Blocking file and Keystore work: never on the main thread.
+ * a temporary file, fsync and rename.
+ *
+ * Keystore work (seal, open) runs outside the file lock: the lock covers file reads, writes and deletes only, so
+ * [clear] (sign-out from the main thread) never waits for a slow Keystore. [generation] grows on every [clear]: a write
+ * started before a sign-out ([save] with the generation it began with) is refused instead of bringing the session back.
  */
 object CareLinkVault {
 
@@ -144,6 +166,12 @@ object CareLinkVault {
     @Volatile
     internal var cipher: SessionCipher = AesGcmSessionCipher.keystore
 
+    private val lock = Any()
+
+    @Volatile
+    var generation: Long = 0L
+        private set
+
     internal fun dir(context: Context): File = File(context.applicationContext.noBackupFilesDir, "rus-carelink")
 
     private fun file(context: Context): File = File(dir(context), "session.bin")
@@ -152,36 +180,72 @@ object CareLinkVault {
     fun exists(context: Context): Boolean = file(context).exists()
 
     /** null - no session file; [StorageException] - a file that does not open (it is kept). */
-    @Synchronized
     fun load(context: Context): CareLinkSession? {
         val f = file(context)
-        if (!f.exists()) return null
+        val bytes: ByteArray = synchronized(lock) {
+            if (!f.exists()) return null
+            try {
+                f.readBytes()
+            } catch (t: Throwable) {
+                throw StorageException(t)
+            }
+        }
         val session = try {
-            CareLinkSession.decode(String(cipher.open(f.readBytes()), Charsets.UTF_8))
+            CareLinkSession.decode(String(cipher.open(bytes), Charsets.UTF_8))
         } catch (t: Throwable) {
             throw StorageException(t)
         }
         return session ?: throw StorageException(null)
     }
 
-    @Synchronized
-    fun save(context: Context, session: CareLinkSession) {
+    /**
+     * Writes [session] if no [clear] happened since [expectedGeneration] was read; false - refused (signed out
+     * meanwhile). Throws when sealing or writing fails.
+     */
+    fun save(context: Context, session: CareLinkSession, expectedGeneration: Long = generation): Boolean {
         val sealed = cipher.seal(session.toJson().toString().toByteArray(Charsets.UTF_8))
-        writeAtomically(file(context), sealed)
+        synchronized(lock) {
+            if (generation != expectedGeneration) return false
+            writeAtomically(file(context), sealed)
+        }
+        return true
     }
 
-    @Synchronized
+    /**
+     * A new sign-in: [save], and if it fails, a new Keystore key and one more try. A key the Keystore cannot use any
+     * more (lock screen changed on some phones, Keystore reset) would otherwise refuse every sign-in; the old file does
+     * not open with it either, so nothing readable is lost.
+     */
+    fun saveNew(context: Context, session: CareLinkSession, expectedGeneration: Long): Boolean = try {
+        save(context, session, expectedGeneration)
+    } catch (first: Throwable) {
+        try {
+            cipher.resetKey()
+        } catch (t: Throwable) {
+            first.addSuppressed(t)
+            throw first
+        }
+        save(context, session, expectedGeneration)
+    }
+
+    /** Deletes the session (and a left temporary file); later writes of an older [generation] are refused. Fast. */
     fun clear(context: Context) {
         val f = file(context)
-        f.delete()
-        File(f.parentFile, f.name + ".tmp").delete()
+        synchronized(lock) {
+            generation++
+            f.delete()
+            File(f.parentFile, f.name + ".tmp").delete()
+        }
     }
 
     internal fun writeAtomically(target: File, bytes: ByteArray) {
         val parent = target.parentFile ?: throw IllegalStateException("no folder for ${target.name}")
         if (!parent.isDirectory && !parent.mkdirs()) throw IllegalStateException("folder not created")
         val tmp = File(parent, target.name + ".tmp")
-        tmp.writeBytes(bytes)
+        FileOutputStream(tmp).use { out ->
+            out.write(bytes)
+            out.fd.sync()
+        }
         if (!tmp.renameTo(target)) {
             target.delete()
             if (!tmp.renameTo(target)) {
