@@ -48,11 +48,12 @@ gradle.beforeProject { Project p ->
             final String RUS_TRIAL_PROGUARD = 'proguard-rus-trial.pro'
             rus.proguardFile(p.rootProject.file("rus/${RUS_TRIAL_PROGUARD}"))
             // CareLink trial sources (part 4p): test builds of the phone only (source set mobileRus = phone + rus); a
-            // candidate and the watch never get them. A source set dir, as upstream adds its own (`mobile { java.srcDirs
-            // += ... }`): AGP's built-in Kotlin compiles .kt from it. The variant API's sources.java static dir reached
-            // javac only (run 43936569206: no trial class in the APK).
+            // candidate and the watch never get them. The source set's `kotlin` dirs: AGP's built-in Kotlin compiles .kt
+            // only from them (plus the default src/<set>/java); an extra java dir reaches javac alone, which skips .kt -
+            // upstream's extra java.srcDirs hold .java only (runs 43936569206 variant API java dir, 43940679304
+            // sourceSets java.srcDir: no trial class in the APK).
             if (rusRelease == 0) {
-                android.sourceSets.maybeCreate('mobileRus').java.srcDir('src/rusTrial/java')
+                android.sourceSets.maybeCreate('mobileRus').kotlin.srcDir('src/rusTrial/java')
                 p.logger.lifecycle("RUS: mobileRus gets the CareLink trial (src/rusTrial/java, test build)")
             }
             def appSuffixFlag = "-DAPPSUFFIX=\"quotes(${RUS_SUFFIX})\""
