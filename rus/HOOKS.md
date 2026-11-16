@@ -5,7 +5,7 @@
 
 | id | файл | зачем | как вернуть при конфликте |
 |----|------|-------|---------------------------|
-| carelink-tempbasal | `Common/src/mobile/java/tk/glucodata/data/journal/JournalTreatmentUploader.kt`, `isSendableType` | базал помпы из CareLink (записи `TEMP_BASAL` с нашим источником `HEALTH_CONNECT`) уходит в Nightscout как `Temp Basal`; записи AAPS и Nightscout зеркальные и по-прежнему не уходят | взять их версию функции и снова дописать в список типов `\|\| type == JournalEntryType.TEMP_BASAL // RUS-HOOK:carelink-tempbasal`; если функцию переименовали или убрали — найти, где отправка отбирает типы записей, и дописать туда; проверка — контрактный тест `CareLinkJournalContractTest` |
+| carelink-tempbasal | `Common/src/mobile/java/tk/glucodata/data/journal/JournalTreatmentUploader.kt` | функция `isSendableType`: базал помпы из CareLink (записи `TEMP_BASAL` с нашим источником `HEALTH_CONNECT`) уходит в Nightscout как `Temp Basal`; записи AAPS и Nightscout зеркальные и по-прежнему не уходят | взять их версию функции и снова дописать в список типов `\|\| type == JournalEntryType.TEMP_BASAL // RUS-HOOK:carelink-tempbasal`; если функцию переименовали или убрали — найти, где отправка отбирает типы записей, и дописать туда; проверка — контрактный тест `CareLinkJournalContractTest` |
 
 Тип сборки `rus` подключается init-скриптом (`rus/rus-init.gradle`), ресурсы — своими папками `Common/src/rus/` и
 `Common/src/wearRus/`: это не врезки.
