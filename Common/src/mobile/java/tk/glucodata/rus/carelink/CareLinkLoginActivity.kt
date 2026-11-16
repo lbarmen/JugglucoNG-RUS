@@ -46,7 +46,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import tk.glucodata.R
 import tk.glucodata.ui.JugglucoTheme
-import tk.glucodata.ui.ThemeMode
 
 /**
  * JugglucoNG-RUS, CareLink (stage 4b): the CareLink sign-in window - the Medtronic sign-in page in a WebView. User
@@ -82,12 +81,7 @@ class CareLinkLoginActivity : ComponentActivity() {
             enableEdgeToEdge()
         } catch (_: Throwable) {
         }
-        val themeMode = try {
-            val prefs = getSharedPreferences(packageName + "_preferences", Context.MODE_PRIVATE)
-            ThemeMode.valueOf(prefs.getString("theme_mode", "SYSTEM") ?: "SYSTEM")
-        } catch (_: Throwable) {
-            ThemeMode.SYSTEM
-        }
+        val themeMode = CareLinkTheme.mode(this)
         val web = try {
             newWebView()
         } catch (t: Throwable) {
