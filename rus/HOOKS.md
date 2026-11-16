@@ -10,8 +10,9 @@
 `Common/src/rus/` и `Common/src/wearRus/`.
 
 Проверка — `python3 rus/check-hooks.py`: пометки и таблица в обе стороны, бюджет — не больше 15 их файлов и 60 строк
-(ТЗ 3.3 п. 5); наши пути — `rus/our-paths.txt`. С первой врезкой станет красной строгая проверка `check-apk.py`
-(«0 changes in upstream files», функция `check_upstream_untouched`): в том же PR её убрать — её место занимает бюджет.
+(ТЗ 3.3 п. 5), и каждая изменённая строка их файла — не дальше 3 строк от пометки `RUS-HOOK`; их файл удалён, новый
+файл вне наших путей, двоичный файл, права файла — красная. Наши пути — `rus/our-paths.txt`. Её же запускает
+`check-apk.py` в каждой сборке (пробной и кандидата), так что ветка блока проверяется до телефона.
 
 ---
 Hooks into upstream files: none so far. Each hook is 1–3 lines marked `RUS-HOOK:<id>` and listed in this table.
