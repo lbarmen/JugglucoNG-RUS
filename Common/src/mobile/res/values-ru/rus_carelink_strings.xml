@@ -16,4 +16,11 @@
     <string name="rus_carelink_need_login_text">CareLink завершил сеанс, данные помпы больше не приходят. Откройте приложение и войдите в CareLink снова.</string>
     <string name="rus_carelink_no_data_title">Данных помпы нет %1$d мин</string>
     <string name="rus_carelink_no_data_text">В CareLink нет новых данных помпы. Проверьте, что MiniMed Mobile работает и видит помпу.</string>
+    <string name="rus_carelink_journal_bolus">Помпа</string>
+    <string name="rus_carelink_journal_carbs">Калькулятор помпы</string>
+    <string name="rus_carelink_journal_basal">Базал помпы</string>
+    <string name="rus_carelink_journal_stop">Помпа остановлена</string>
+    <string name="rus_carelink_note_running">в процессе, запрограммировано %1$s ед.</string>
+    <string name="rus_carelink_note_interrupted">прерван: введено %1$s из %2$s ед.</string>
+    <string name="rus_carelink_note_extended">квадратный или двойной болюс (%1$s)</string>
 </resources>

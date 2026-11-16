@@ -17,4 +17,13 @@
     <string name="rus_carelink_need_login_text">CareLink ended the session, so pump data no longer comes in. Open the app and sign in to CareLink again.</string>
     <string name="rus_carelink_no_data_title">No pump data for %1$d min</string>
     <string name="rus_carelink_no_data_text">CareLink has no new data from the pump. Check that MiniMed Mobile is running and sees the pump.</string>
+    <string name="rus_carelink_journal_bolus">Pump</string>
+    <string name="rus_carelink_journal_carbs">Pump calculator</string>
+    <string name="rus_carelink_journal_basal">Pump basal</string>
+    <string name="rus_carelink_journal_stop">Pump stopped</string>
+    <string name="rus_carelink_note_running">in progress, %1$s U programmed</string>
+    <string name="rus_carelink_note_interrupted">stopped early: %1$s of %2$s U delivered</string>
+    <string name="rus_carelink_note_extended">square or dual wave bolus (%1$s)</string>
+    <string name="rus_carelink_note_stop_open" translatable="false">%1$s–…</string>
+    <string name="rus_carelink_note_stop" translatable="false">%1$s–%2$s</string>
 </resources>
