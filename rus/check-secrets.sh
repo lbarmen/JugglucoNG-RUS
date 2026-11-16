@@ -36,14 +36,17 @@ patterns=(
   # an e-mail address; example.com, example.org and GitHub no-reply addresses are allowed (email_ok below)
   '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
   # a path in a Windows home folder (a user name), as written in any file or string
-  '[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]'
+  '[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss]([^A-Za-z0-9]|$)'
   # the owner's folder of raw cloud answers (CareLink): its name means a copied answer
   'carelink[-]probe'
 )
 email_re='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
 # allowed addresses, removed from a hit line before it is checked again (a domain that only starts the same,
-# example.com.other.net, is not allowed)
-email_ok='[A-Za-z0-9._%+-]+@(example\.com|example\.org|users\.noreply\.github\.com)(\.?([^A-Za-z0-9.-]|$))'
+# example.com.other.net, is not allowed); any letter case, as domains are; \3 = what follows the address
+email_ok='[A-Za-z0-9._%+-]+@([Ee][Xx][Aa][Mm][Pp][Ll][Ee]\.([Cc][Oo][Mm]|[Oo][Rr][Gg])|[Uu][Ss][Ee][Rr][Ss]\.[Nn][Oo][Rr][Ee][Pp][Ll][Yy]\.[Gg][Ii][Tt][Hh][Uu][Bb]\.[Cc][Oo][Mm])(\.?([^A-Za-z0-9.-]|$))'
+# Kotlin labels and a qualified this are not addresses (this@MainActivity.run, return@forEach, break@outer):
+# removed from a hit line before it is checked again; \1 = the character before
+kotlin_label='(^|[^A-Za-z0-9_.])(this|super|return|break|continue)@[A-Za-z0-9_]+'
 
 # ---------- personal deny list ----------
 deny_file="${RUS_SECRETS_DENY:-../secrets-deny.txt}"
@@ -144,7 +147,8 @@ scan() {
     # Upstream's public test key is known and allowed in their own files only; ours never use it.
     hits=$(printf '%s\n' "$hits" | grep -v 'IDontKnow' || true)
     if [ "$p" = "$email_re" ] && [ -n "$hits" ]; then
-      hits=$(printf '%s\n' "$hits" | sed -E "s#$email_ok#\\2#g" | grep -E -- "$p" || true)
+      hits=$(printf '%s\n' "$hits" | sed -E -e "s#$kotlin_label#\\1#g" -e "s#$email_ok#\\3#g" |
+        grep -E -- "$p" || true)
     fi
     if [ -n "$hits" ]; then
       echo "FAIL  pattern ($label): $p"
