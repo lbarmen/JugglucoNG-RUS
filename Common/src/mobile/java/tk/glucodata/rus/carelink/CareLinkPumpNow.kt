@@ -14,9 +14,11 @@ data class TempBasal(val rate: Double?, val percent: Int?, val minutesLeft: Int?
 /**
  * What the pump shows now (stage 4c, contract of the plan). [dataAtMs] - when its data reached the cloud (not later
  * than now). [iobUnits] - active insulin of the pump, [iobAtMs] - its own time (not later than now; addition to the
- * contract for CareLinkIob, plan decision 9). [basalRate] - current rate; null - the answer had no `basal` object
- * (the phone was reconnecting to the pump): nothing is known about the basal - a gap, not a stop and not the end of a
- * temporary basal. [suspended] - delivery stopped (`pumpSuspended` or banner `DELIVERY_SUSPEND`); null - unknown.
+ * contract for CareLinkIob, plan decision 9). [basalRate] - current rate (`basal.basalRate`; may be missing while a
+ * temporary basal runs or the pump is stopped). [basalKnown] - the answer had the `basal` object; false - the phone was
+ * reconnecting to the pump: nothing is known about the basal - a gap, not a stop and not the end of a temporary basal
+ * (critic 4c, C4: the basal writer goes by this flag, not by `basalRate == null`). [suspended] - delivery stopped
+ * (`pumpSuspended` or banner `DELIVERY_SUSPEND`); null - unknown.
  */
 data class PumpNow(
     val dataAtMs: Long,
@@ -28,6 +30,7 @@ data class PumpNow(
     val basalRate: Double? = null,
     val tempBasal: TempBasal? = null,
     val suspended: Boolean? = null,
+    val basalKnown: Boolean = basalRate != null || tempBasal != null,
 ) {
     /** For [CareLinkStateStore]: numbers only, no personal data. */
     fun toJson(): JSONObject = JSONObject().apply {
@@ -46,6 +49,7 @@ data class PumpNow(
             })
         }
         putOpt("suspended", suspended)
+        put("basalKnown", basalKnown)
     }
 
     companion object {
@@ -53,6 +57,8 @@ data class PumpNow(
             if (o == null) return null
             val at = o.clLong("dataAtMs") ?: return null
             val t = o.clObj("tempBasal")
+            val rate = o.clDouble("basalRate")
+            val temp = t?.let { TempBasal(it.clDouble("rate"), it.clInt("percent"), it.clInt("minutesLeft")) }
             return PumpNow(
                 dataAtMs = at,
                 iobUnits = o.clDouble("iobUnits"),
@@ -60,9 +66,10 @@ data class PumpNow(
                 reservoirUnits = o.clDouble("reservoirUnits"),
                 reservoirPercent = o.clInt("reservoirPercent"),
                 batteryPercent = o.clInt("batteryPercent"),
-                basalRate = o.clDouble("basalRate"),
-                tempBasal = t?.let { TempBasal(it.clDouble("rate"), it.clInt("percent"), it.clInt("minutesLeft")) },
+                basalRate = rate,
+                tempBasal = temp,
                 suspended = o.clBool("suspended"),
+                basalKnown = o.clBool("basalKnown") ?: (rate != null || temp != null),
             )
         }
     }
@@ -73,8 +80,9 @@ data class PumpNow(
  * CareLinkPumpNow on org.json.
  *
  * The empty answer: when the phone with MiniMed Mobile has not uploaded the pump yet, the cloud gives reservoir and
- * battery <= 0 (and active insulin -1). That is "no data", not "empty reservoir": [parse] gives null, the last
- * snapshot stays ([merge]), the stop flag of such an answer is not believed and the data time does not move back.
+ * battery <= 0 (and active insulin -1); active insulin -1 with one of the two at 0 and the other missing is empty too.
+ * That is "no data", not "empty reservoir": [parse] gives null, the last snapshot stays ([merge]), the stop flag of
+ * such an answer is not believed and the data time does not move back.
  */
 object CareLinkPumpNow {
 
@@ -84,12 +92,18 @@ object CareLinkPumpNow {
     /** Active insulin stamped later than now + this is dropped (plan, decision 9): it would stay "fresh" for hours. */
     const val IOB_FUTURE_MS = 5 * 60_000L
 
-    /** The empty answer: reservoir and battery both present and both <= 0. A real empty reservoir has a live battery. */
+    /**
+     * The empty answer: reservoir and battery both present and both <= 0 - or active insulin below 0 (the cloud's -1)
+     * with neither of them alive (<= 0 or missing; critic 4c, N6). A real empty reservoir has a live battery.
+     */
     fun noPumpData(root: JSONObject): Boolean {
         val p = CareLinkData.patient(root)
-        val reservoir = p.clDouble("reservoirRemainingUnits") ?: return false
-        val battery = p.clDouble("pumpBatteryLevelPercent") ?: return false
-        return reservoir <= 0.0 && battery <= 0.0
+        val reservoir = p.clDouble("reservoirRemainingUnits")
+        val battery = p.clDouble("pumpBatteryLevelPercent")
+        if (reservoir != null && battery != null && reservoir <= 0.0 && battery <= 0.0) return true
+        val iob = p.clObj("activeInsulin")?.clDouble("amount") ?: return false
+        if (iob >= 0.0 || (reservoir == null && battery == null)) return false
+        return (reservoir == null || reservoir <= 0.0) && (battery == null || battery <= 0.0)
     }
 
     /**
@@ -121,10 +135,10 @@ object CareLinkPumpNow {
         val suspended = p.clBool("pumpSuspended").let { flag ->
             if (banners.any { it.clStr("type") == BANNER_SUSPEND }) true else flag
         }
-        if (iobUnits == null && reservoir == null && reservoirPct == null && battery == null && rate == null && temp == null &&
+        if (iobUnits == null && reservoir == null && reservoirPct == null && battery == null && basal == null &&
             suspended == null
         ) return null
-        return PumpNow(dataAt, iobUnits, iobAt, reservoir, reservoirPct, battery, rate, temp, suspended)
+        return PumpNow(dataAt, iobUnits, iobAt, reservoir, reservoirPct, battery, rate, temp, suspended, basalKnown = basal != null)
     }
 
     /**
@@ -153,7 +167,7 @@ object CareLinkPumpNow {
         if (new == null || prev == null) return new ?: prev
         if (older(prev, new)) return prev
         val iobNew = new.iobUnits != null
-        val basalKnown = new.basalRate != null || new.tempBasal != null
+        val basalKnown = new.basalKnown
         return new.copy(
             iobUnits = if (iobNew) new.iobUnits else prev.iobUnits,
             iobAtMs = if (iobNew) new.iobAtMs else prev.iobAtMs,
@@ -164,6 +178,7 @@ object CareLinkPumpNow {
             // without the basal object - the last temporary basal; with it - what came (null - none)
             tempBasal = if (basalKnown) new.tempBasal else prev.tempBasal,
             suspended = new.suspended ?: prev.suspended,
+            basalKnown = basalKnown || prev.basalKnown,
         )
     }
 

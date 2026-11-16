@@ -2,6 +2,9 @@ package tk.glucodata.rus.carelink
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
+import java.io.File
+import java.io.FileOutputStream
 
 /** CareLink link: off (not signed in or turned off), working, sign-in needed, the last poll failed. */
 enum class CareLinkStatus { OFF, OK, NEED_LOGIN, ERROR }
@@ -33,12 +36,17 @@ data class CareLinkState(
 
 /**
  * Where [CareLinkState] lives: SharedPreferences `rus_carelink_state` (upstream's settings backup takes every
- * shared_prefs file - nothing secret here). Also the two "shown once" marks of [CareLinkNotifier].
+ * shared_prefs file - nothing secret here), the two "shown once" marks of [CareLinkNotifier] and the "first poll
+ * pending" mark. The pump snapshot (active insulin, reservoir - medical numbers) is a file in `noBackupFilesDir`
+ * (`rus-carelink/pump.json`), out of the settings backup (critic 4c, N9).
  */
 class CareLinkStateStore(context: Context) {
 
-    private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val app = context.applicationContext
+
+    private val prefs: SharedPreferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private val pumpFile: File get() = File(File(app.noBackupFilesDir, DIR), PUMP_FILE)
 
     fun read(): CareLinkState = CareLinkState(
         status = prefs.getString(K_STATUS, null)?.let { s -> CareLinkStatus.values().firstOrNull { it.name == s } }
@@ -48,7 +56,7 @@ class CareLinkStateStore(context: Context) {
         lastError = prefs.getString(K_ERROR_KIND, null)
             ?.let { s -> CareLinkErrorKind.values().firstOrNull { it.name == s } }
             ?.let { CareLinkError(it, prefs.getInt(K_ERROR_CODE, 0), prefs.getString(K_ERROR_CLASS, null)) },
-        pumpNow = prefs.getString(K_PUMP, null)?.let { PumpNow.fromJson(CareLinkConfig.parse(it)) },
+        pumpNow = readPump(),
     )
 
     fun write(s: CareLinkState) {
@@ -63,13 +71,32 @@ class CareLinkStateStore(context: Context) {
                 putInt(K_ERROR_CODE, s.lastError.code)
                 putString(K_ERROR_CLASS, s.lastError.errorClass)
             }
-            if (s.pumpNow == null) remove(K_PUMP) else putString(K_PUMP, s.pumpNow.toJson().toString())
+            remove(K_PUMP_OLD)
         }.commit()
+        writePump(s.pumpNow)
     }
 
     fun update(change: (CareLinkState) -> CareLinkState): CareLinkState = synchronized(LOCK) {
         change(read()).also(::write)
     }
+
+    /**
+     * [update] only while [allowed] holds, checked under the same lock as [clear] (critic 4c, N2: a sign-out during a
+     * poll must not be overwritten by its result). null - not allowed, nothing written.
+     */
+    fun updateIf(allowed: () -> Boolean, change: (CareLinkState) -> CareLinkState): CareLinkState? = synchronized(LOCK) {
+        if (!allowed()) null else change(read()).also(::write)
+    }
+
+    /**
+     * The next poll is the first after a sign-in: set by the sign-in, cleared only by a poll whose result was written
+     * (critic 4c, C1: a failed first poll or one replaced by the button keeps it).
+     */
+    var firstPollPending: Boolean
+        get() = prefs.getBoolean(K_FIRST_PENDING, false)
+        set(v) {
+            prefs.edit().putBoolean(K_FIRST_PENDING, v).commit()
+        }
 
     /** "Sign in again" was shown and not answered by a sign-in yet. */
     var needLoginShown: Boolean
@@ -85,9 +112,48 @@ class CareLinkStateStore(context: Context) {
             prefs.edit().putBoolean(K_NO_DATA_SHOWN, v).apply()
         }
 
-    /** Back to nothing (sign-out; may run on the main thread - written in the background). */
+    /** Back to nothing (sign-out; may run on the main thread - preferences written in the background). */
     fun clear() {
-        synchronized(LOCK) { prefs.edit().clear().apply() }
+        synchronized(LOCK) {
+            prefs.edit().clear().apply()
+            pumpFile.delete()
+        }
+    }
+
+    private fun readPump(): PumpNow? {
+        val f = pumpFile
+        if (f.isFile) {
+            return try {
+                PumpNow.fromJson(CareLinkConfig.parse(f.readText(Charsets.UTF_8)))
+            } catch (t: Throwable) {
+                Log.w(TAG, "pump snapshot not read (${t.javaClass.simpleName})")
+                null
+            }
+        }
+        // 4c kept it in the preferences: taken once, moved to the file by the next write
+        return prefs.getString(K_PUMP_OLD, null)?.let { PumpNow.fromJson(CareLinkConfig.parse(it)) }
+    }
+
+    private fun writePump(p: PumpNow?) {
+        val f = pumpFile
+        if (p == null) {
+            f.delete()
+            return
+        }
+        try {
+            f.parentFile?.mkdirs()
+            val tmp = File(f.parentFile, "$PUMP_FILE.tmp")
+            FileOutputStream(tmp).use { out ->
+                out.write(p.toJson().toString().toByteArray(Charsets.UTF_8))
+                out.fd.sync()
+            }
+            if (!tmp.renameTo(f)) {
+                f.delete()
+                if (!tmp.renameTo(f)) Log.w(TAG, "pump snapshot not moved into place")
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "pump snapshot not written (${t.javaClass.simpleName})")
+        }
     }
 
     private fun long(k: String): Long? = if (prefs.contains(k)) prefs.getLong(k, 0L) else null
@@ -98,6 +164,9 @@ class CareLinkStateStore(context: Context) {
 
     companion object {
         const val PREFS = "rus_carelink_state"
+        const val DIR = "rus-carelink"
+        const val PUMP_FILE = "pump.json"
+        private const val TAG = "RusCareLink"
         private val LOCK = Any()
         private const val K_STATUS = "status"
         private const val K_POLL = "lastPollAtMs"
@@ -105,7 +174,8 @@ class CareLinkStateStore(context: Context) {
         private const val K_ERROR_KIND = "lastErrorKind"
         private const val K_ERROR_CODE = "lastErrorCode"
         private const val K_ERROR_CLASS = "lastErrorClass"
-        private const val K_PUMP = "pumpNow"
+        private const val K_PUMP_OLD = "pumpNow"
+        private const val K_FIRST_PENDING = "firstPollPending"
         private const val K_NEED_LOGIN_SHOWN = "needLoginShown"
         private const val K_NO_DATA_SHOWN = "noDataShown"
     }

@@ -109,11 +109,15 @@ object CareLinkMarkers {
         return if (any) round3(total) else null
     }
 
-    /** The pump zone offset from `metadata.clientDateTime` ("2026-01-10T12:00:00.123+03:00"); none or unreadable - null. */
+    /**
+     * The pump zone offset from `metadata.clientDateTime` ("2026-01-10T12:00:00.123+03:00"); none or unreadable - null.
+     * `Z` / `+00:00` counts as none (critic 4c, N7): a server-made UTC stamp is not the pump's zone, the phone zone is
+     * the safer guess (the same for a person who does live at +00:00).
+     */
     fun offsetOf(root: JSONObject): ZoneOffset? {
         val s = root.clObj("metadata")?.clStr("clientDateTime") ?: return null
         return try {
-            OffsetDateTime.parse(s.trim()).offset
+            OffsetDateTime.parse(s.trim()).offset.takeIf { it != ZoneOffset.UTC }
         } catch (_: Exception) {
             null
         }

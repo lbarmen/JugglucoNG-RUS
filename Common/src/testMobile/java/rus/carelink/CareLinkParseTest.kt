@@ -411,11 +411,61 @@ class CareLinkParseTest {
     }
 
     @Test
+    fun basalObjectWithoutRateIsKnown() {
+        // critic 4c, C4: the basal object came without basalRate (stop, temporary basal) - known, not a gap
+        val noRate = live.replace("\"basalRate\": 0.7000000179}", "\"tempBasalType\": \"ABSOLUTE\", \"tempBasalRate\": 0.4}")
+        val t = pump(noRate)!!
+        assertNull(t.basalRate)
+        assertTrue(t.basalKnown)
+        assertEquals(TempBasal(0.4, null, null), t.tempBasal)
+        val stop = live.replace("\"basalRate\": 0.7000000179}", "\"basalRate\": null}")
+            .replace("\"pumpSuspended\": false", "\"pumpSuspended\": true")
+        val st = pump(stop)!!
+        assertTrue(st.basalKnown)
+        assertEquals(true, st.suspended)
+        assertNull(st.basalRate)
+        val gone = live.replace(""",
+"basal": {"activeBasalPattern": "BASAL1", "basalRate": 0.7000000179}""", "")
+        assertFalse("no basal object - a gap", pump(gone)!!.basalKnown)
+        // merge: with the basal object the temporary basal is what came, also with no rate
+        val prev = PumpNow(1L, basalRate = 1.05, tempBasal = TempBasal(0.0, 80, 193))
+        val m = CareLinkPumpNow.merge(prev, st.copy(dataAtMs = 2L))!!
+        assertNull(m.tempBasal)
+        assertEquals("the last rate stays for the window", 1.05, m.basalRate!!, 1e-9)
+        assertTrue(m.basalKnown)
+    }
+
+    @Test
+    fun emptyAnswerByIobMinusOneAndOneZeroField() {
+        // critic 4c, N6: one of reservoir/battery missing, the other 0, active insulin -1 - still "no data"
+        assertTrue(CareLinkPumpNow.noPumpData(root(""""reservoirRemainingUnits": 0, "activeInsulin": {"amount": -1}""")))
+        assertTrue(CareLinkPumpNow.noPumpData(root(""""pumpBatteryLevelPercent": "0", "reservoirRemainingUnits": null, "activeInsulin": {"amount": "-1"}""")))
+        assertNull(CareLinkPumpNow.parse(root(""""pumpBatteryLevelPercent": 0, "pumpSuspended": true, "activeInsulin": {"amount": -1}"""), now, phone))
+        assertFalse("a live battery - a real empty reservoir",
+            CareLinkPumpNow.noPumpData(root(""""reservoirRemainingUnits": 0, "pumpBatteryLevelPercent": 40, "activeInsulin": {"amount": -1}""")))
+        assertFalse("no reservoir and no battery at all - not this rule",
+            CareLinkPumpNow.noPumpData(root(""""activeInsulin": {"amount": -1}""")))
+    }
+
+    @Test
+    fun utcClientDateTimeIsNoPumpZone() {
+        // critic 4c, N7: "Z" or "+00:00" is not taken as the pump's zone - the phone zone is
+        assertNull(CareLinkMarkers.offsetOf(json("""{"metadata": {"clientDateTime": "2026-01-10T12:00:00.000Z"}}""")))
+        assertNull(CareLinkMarkers.offsetOf(json("""{"metadata": {"clientDateTime": "2026-01-10T12:00:00+00:00"}}""")))
+        assertEquals(ZoneOffset.ofHours(3), CareLinkMarkers.offsetOf(json("""{"metadata": {"clientDateTime": "2026-01-10T12:00:00+03:00"}}""")))
+    }
+
+    @Test
     fun snapshotSurvivesTheStateStoreFormat() {
         val p = PumpNow(dataAt, 1.2, dataAt - 60_000L, 100.5, 40, 80, 0.75, TempBasal(0.0, 120, 30), true)
         assertEquals(p, PumpNow.fromJson(json(p.toJson().toString())))
         val bare = PumpNow(dataAt)
         assertEquals(bare, PumpNow.fromJson(json(bare.toJson().toString())))
+        val stop = PumpNow(dataAt, suspended = true, basalKnown = true)
+        assertEquals(stop, PumpNow.fromJson(json(stop.toJson().toString())))
+        // written by 4c (no basalKnown): known when a rate or a temporary basal is there
+        assertTrue(PumpNow.fromJson(json("""{"dataAtMs": 5, "basalRate": 0.5}"""))!!.basalKnown)
+        assertFalse(PumpNow.fromJson(json("""{"dataAtMs": 5}"""))!!.basalKnown)
         assertNull(PumpNow.fromJson(json("{}")))
         assertNull(PumpNow.fromJson(null))
     }

@@ -39,6 +39,7 @@ import tk.glucodata.rus.carelink.CareLinkVault
 import tk.glucodata.rus.carelink.ClEvent
 import tk.glucodata.rus.carelink.PollReason
 import tk.glucodata.rus.carelink.PumpNow
+import tk.glucodata.rus.carelink.RusCareLinkStarter
 import java.time.ZoneOffset
 import javax.crypto.KeyGenerator
 
@@ -98,8 +99,8 @@ class CareLinkPollerTest {
         CareLinkAuth.clock = { now }
         CareLinkScheduler.work = work
         CareLinkPoller.zone = { ZoneOffset.ofHours(5) }
-        CareLinkPoller.writeJournal = { e, first -> journal += e to first }
-        CareLinkPoller.writeBasal = { p, at -> basal += p to at }
+        CareLinkPoller.writeJournal = { _, e, first -> journal += e to first }
+        CareLinkPoller.writeBasal = { _, p, at -> basal += p to at }
         CareLinkPoller.publishIob = { p -> iob += p }
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
@@ -136,6 +137,9 @@ class CareLinkPollerTest {
         assertEquals(1.5, basal.single().first!!.iobUnits!!, 1e-9)
         assertEquals(1.5, iob.single()!!.iobUnits!!, 1e-9)
         assertEquals("state is stored", s, store.read())
+        // critic 4c, N9: the pump numbers are out of the settings backup (shared_prefs), in noBackupFilesDir
+        assertFalse(app.getSharedPreferences(CareLinkStateStore.PREFS, 0).all.keys.any { it.contains("pump", ignoreCase = true) })
+        assertTrue(java.io.File(app.noBackupFilesDir, "rus-carelink/pump.json").isFile)
         // the next poll is no longer the first
         poll()
         assertFalse(journal.last().second)
@@ -219,7 +223,7 @@ class CareLinkPollerTest {
     fun failedJournalWriteDoesNotMoveTheDataTime() {
         val before = now - 10 * 60_000L
         seed(before)
-        CareLinkPoller.writeJournal = { _, _ -> throw IllegalStateException("made-up") }
+        CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
         net.on(dm, ok(answer()))
         val s = poll()
         assertEquals(CareLinkStatus.ERROR, s.status)
@@ -235,7 +239,7 @@ class CareLinkPollerTest {
     fun failedBasalWriteDoesNotMoveTheDataTime() {
         val before = now - 10 * 60_000L
         seed(before)
-        CareLinkPoller.writeBasal = { _, _ -> throw java.io.IOException("made-up") }
+        CareLinkPoller.writeBasal = { _, _, _ -> throw java.io.IOException("made-up") }
         net.on(dm, ok(answer()))
         val s = poll()
         assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
@@ -274,6 +278,10 @@ class CareLinkPollerTest {
         val s = poll()
         assertEquals(before, s.lastDataAtMs)
         assertEquals("an older snapshot is not taken", 90.0, s.pumpNow!!.reservoirUnits!!, 1e-9)
+        // critic 4c, C3: nor does the basal or the IoB plate get it; the journal still does (24 h history)
+        assertTrue(basal.isEmpty())
+        assertTrue(iob.isEmpty())
+        assertEquals(1, journal.size)
     }
 
     @Test
@@ -285,11 +293,109 @@ class CareLinkPollerTest {
         assertTrue("5-min interval, 2 min ago - not due", net.calls.isEmpty())
         store.write(CareLinkState(CareLinkStatus.OK, now - 270_000L, now - 4 * 60_000L, null, null))
         poll(PollReason.ALARM)
-        assertEquals("4.5 min ago - due (a minute of slack)", 1, net.calls.size)
+        assertEquals("4.5 min ago - due", 1, net.calls.size)
         CareLinkSettings(app).intervalMin = 15
-        store.write(CareLinkState(CareLinkStatus.OK, now - 10 * 60_000L, now - 4 * 60_000L, null, null))
+        store.write(CareLinkState(CareLinkStatus.OK, now - 7 * 60_000L, now - 4 * 60_000L, null, null))
         poll(PollReason.WORKER)
-        assertEquals("15-min interval, 10 min ago - not due", 1, net.calls.size)
+        assertEquals("15-min interval, 7 min ago - not due", 1, net.calls.size)
+        // critic 4c, N1: the last poll ran late (waited for the network) - the next alarm still polls
+        CareLinkSettings(app).intervalMin = 5
+        store.write(CareLinkState(CareLinkStatus.OK, now - 3 * 60_000L, now - 4 * 60_000L, null, null))
+        poll(PollReason.ALARM)
+        assertEquals("3 min ago with a 5-min interval - due", 2, net.calls.size)
+    }
+
+    @Test
+    fun firstPollStaysPendingUntilAPollIsWritten() {
+        // critic 4c, C1: the sign-in's poll failed (or the button replaced it) - the next one still takes 24 h
+        seed(now - 10 * 60_000L)
+        store.firstPollPending = true
+        net.on(dm, NO_NETWORK)
+        poll(PollReason.ALARM)
+        assertTrue(store.firstPollPending)
+        net.on(dm, ok(answer()))
+        poll(PollReason.MANUAL)
+        assertTrue("written with the whole window", journal.single().second)
+        assertFalse(store.firstPollPending)
+        now += 6 * 60_000L
+        poll(PollReason.ALARM)
+        assertFalse(journal.last().second)
+    }
+
+    @Test
+    fun failedWriteKeepsTheFirstPollPending() {
+        seed(now - 10 * 60_000L)
+        store.firstPollPending = true
+        CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
+        net.on(dm, ok(answer()))
+        poll()
+        assertTrue(store.firstPollPending)
+    }
+
+    @Test
+    fun aNewSignInDuringARenewalKeepsTheNewSessionAndItsAlarms() {
+        // critic 4c, C2: the renewal of an old poll finds a new sign-in (the vault moved on) - no "sign in again"
+        net.on(dm, status(401), ok(answer()))
+        net.on(TOKEN_URL, ok("""{"access_token": "${access(now / 1000 + 10_800)}", "expires_in": 10800}"""))
+        net.onForm = {
+            CareLinkVault.clear(app)
+            CareLinkVault.save(app, session())
+        }
+        val s = poll()
+        assertFalse(CareLinkStatus.NEED_LOGIN == s.status)
+        assertFalse("alarms not removed", work.log.contains("cancel"))
+        assertNull(shown(CareLinkNotifier.ID_NEED_LOGIN))
+        assertTrue(CareLinkVault.exists(app))
+    }
+
+    @Test
+    fun aGoodPollArmsTheChainAgain() {
+        // critic 4c, C2: a good poll repairs a chain removed by an older poll's "sign in again"
+        net.on(dm, ok(answer()))
+        work.log.clear()
+        poll()
+        assertTrue(work.log.contains("periodic"))
+    }
+
+    @Test
+    fun signOutDuringThePollWritesNothing() {
+        // critic 4c, N2: the sign-out came after the answer - no journal, no state brought back
+        seed(now - 10 * 60_000L)
+        net.on(dm, ok(answer()))
+        CareLinkPoller.zone = {
+            CareLinkSettings(app).enabled = false
+            store.clear()
+            ZoneOffset.ofHours(5)
+        }
+        val s = poll()
+        assertTrue(journal.isEmpty())
+        assertTrue(basal.isEmpty())
+        assertEquals(CareLinkState(), s)
+        assertEquals(CareLinkState(), store.read())
+    }
+
+    @Test
+    fun answerWithoutDataTimeKeepsTheLastDataTimeOfTheSnapshot() {
+        // critic 4c, N5: no lastMedicalDeviceDataUpdateServerTime - the snapshot is not stamped "now"
+        val before = now - 10 * 60_000L
+        seed(before)
+        net.on(dm, ok(answer().replace("\"lastMedicalDeviceDataUpdateServerTime\": ${now - 3 * 60_000L},", "")))
+        val s = poll()
+        assertEquals(before, s.pumpNow!!.dataAtMs)
+        assertEquals("the new numbers are taken", 150.0, s.pumpNow!!.reservoirUnits!!, 1e-9)
+        assertEquals(before, s.lastDataAtMs)
+        assertEquals(before, basal.single().first!!.dataAtMs)
+    }
+
+    @Test
+    fun signInDropsTheOldSnapshotAndDataTime() {
+        // critic 4c, N4: another account or a long pause - no old numbers, no "no data for 2000 min"
+        seed(now - 2_000 * 60_000L)
+        RusCareLinkStarter.afterLogin(app)
+        val s = store.read()
+        assertNull(s.pumpNow)
+        assertNull(s.lastDataAtMs)
+        assertTrue(store.firstPollPending)
     }
 
     @Test

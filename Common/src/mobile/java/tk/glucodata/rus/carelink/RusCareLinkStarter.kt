@@ -62,12 +62,16 @@ class RusCareLinkStarter : ContentProvider() {
 
         /**
          * After a sign-in (a background thread of [CareLinkAuth]): polling on, "sign in again" away, the chain armed
-         * and the first poll - it takes the whole 24 h of the cloud window.
+         * and the first poll - it takes the whole 24 h of the cloud window. The first poll stays pending until one is
+         * written (critic 4c, C1). The last snapshot and data time go: they may be of another account, and an old data
+         * time would show "no data for 2000 min" at once (critic 4c, N4).
          */
         internal fun afterLogin(context: Context) {
             val app = context.applicationContext
             CareLinkSettings(app).enabled = true
-            CareLinkStateStore(app).update { it.copy(status = CareLinkStatus.OK, lastError = null) }
+            val store = CareLinkStateStore(app)
+            store.firstPollPending = true
+            store.update { it.copy(status = CareLinkStatus.OK, lastError = null, lastDataAtMs = null, pumpNow = null) }
             CareLinkNotifier.loggedIn(app)
             CareLinkScheduler.arm(app, force = true)
             CareLinkScheduler.enqueuePoll(app, PollReason.LOGIN, firstPoll = true)

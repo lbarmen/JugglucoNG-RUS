@@ -17,8 +17,9 @@ enum class PollReason { ALARM, WORKER, LOGIN, FOREGROUND, MANUAL }
  * JugglucoNG-RUS, CareLink (stage 4c): one poll of the cloud. Moved from Glucove's CareLinkRepository.poll, without
  * its journal, basal watch and modes.
  *
- * One poll at a time ([Mutex]). Alarm and safety work poll only when due (interval of the settings, a minute of
- * slack); the app opening - not more often than every 2 min; sign-in and the button - always. Then: a live key
+ * One poll at a time ([Mutex]). Alarm and safety work poll unless the last poll was less than half an interval ago
+ * (critic 4c, N1: a late poll must not make the next alarm skip); the app opening - not more often than every 2 min;
+ * sign-in and the button - always. Then: a live key
  * ([CareLinkAuth.ensureFresh]) -> POST `baseUrlCumulus/display/message` (`{"username", "role": "patient"}`, a care
  * partner `carepartner` + `patientId`) -> on 401/403 [CareLinkAuth.forceRefresh] and one more try -> parsing ->
  * [CareLinkJournalWriter], [CareLinkBasalWriter], [CareLinkIob] -> state.
@@ -36,20 +37,18 @@ object CareLinkPoller {
     /** The app opening polls not more often than this. */
     internal const val FOREGROUND_GAP_MS = 2 * 60_000L
 
-    /** An alarm a little early still polls (the previous poll ran a few seconds after its own alarm). */
-    internal const val DUE_SLACK_MS = 60_000L
-
     private val mutex = Mutex()
 
     @Volatile
     internal var zone: () -> ZoneId = { ZoneId.systemDefault() }
 
-    // Stage 4d fills the writers; tests put failing ones here.
+    // The writers of stage 4d; tests put recording or failing ones here.
     @Volatile
-    internal var writeJournal: suspend (List<ClEvent>, Boolean) -> Unit = { e, first -> CareLinkJournalWriter.apply(e, first) }
+    internal var writeJournal: suspend (Context, List<ClEvent>, Boolean) -> Unit =
+        { c, e, first -> CareLinkJournalWriter.apply(c, e, first) }
 
     @Volatile
-    internal var writeBasal: suspend (PumpNow?, Long) -> Unit = { p, at -> CareLinkBasalWriter.apply(p, at) }
+    internal var writeBasal: suspend (Context, PumpNow?, Long) -> Unit = { c, p, at -> CareLinkBasalWriter.apply(c, p, at) }
 
     @Volatile
     internal var publishIob: (PumpNow?) -> Unit = { p -> CareLinkIob.publish(p) }
@@ -74,12 +73,12 @@ object CareLinkPoller {
         when (reason) {
             PollReason.ALARM, PollReason.WORKER -> {
                 val interval = settings.intervalMin * 60_000L
-                if (last != null && now - last in 0 until interval - DUE_SLACK_MS) return before
+                if (last != null && now - last in 0 until interval / 2) return before
             }
             PollReason.FOREGROUND -> if (last != null && now - last in 0 until FOREGROUND_GAP_MS) return before
             PollReason.LOGIN, PollReason.MANUAL -> {}
         }
-        val firstPoll = firstPollAsked || reason == PollReason.LOGIN || before.lastDataAtMs == null
+        val firstPoll = firstPollAsked || reason == PollReason.LOGIN || before.lastDataAtMs == null || store.firstPollPending
 
         var session = when (val f = CareLinkAuth.ensureFresh(app)) {
             is FreshResult.Ok -> f.session
@@ -108,33 +107,44 @@ object CareLinkPoller {
         val dataAt: Long?
         try {
             events = CareLinkMarkers.parse(root, zone())
-            pump = CareLinkPumpNow.parse(root, now, zone())
+            val serverDataAt = CareLinkData.pumpDataAt(root)
+            // no data time in the answer: the snapshot keeps the last one's, not "now" - otherwise the next normal
+            // answers, stamped a little before now, would be refused as older for minutes (critic 4c, N5)
+            pump = CareLinkPumpNow.parse(root, now, zone())?.let { p ->
+                if (serverDataAt == null) p.copy(dataAtMs = before.pumpNow?.dataAtMs ?: p.dataAtMs) else p
+            }
             // the empty answer brings no data time: it would move it back (Glucove 03.11, 38 min)
-            dataAt = if (pump == null) null else CareLinkData.pumpDataAt(root)?.let { minOf(it, now) }
+            dataAt = if (pump == null) null else serverDataAt?.let { minOf(it, now) }
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             return failed(app, store, now, reason, CareLinkError(CareLinkErrorKind.PARSE, 0, t.javaClass.simpleName))
         }
+        // an answer older than the snapshot already taken (the cloud sometimes serves an older one): the state keeps
+        // the last snapshot (merge), so the basal and the IoB plate must not get it either (critic 4c, C3)
+        val stale = pump != null && CareLinkPumpNow.older(before.pumpNow, pump)
 
+        // signed out while this poll ran: nothing more is written (critic 4c, N2)
+        if (!CareLinkSettings(app).enabled) return store.read()
         try {
-            writeJournal(events, firstPoll)
-            writeBasal(pump, now)
+            writeJournal(app, events, firstPoll)
+            if (!stale) writeBasal(app, pump, now)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             return failed(app, store, now, reason, CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName))
         }
-        try {
-            publishIob(pump)
-        } catch (t: Throwable) {
-            // the IoB plate is a display: a failure here does not undo the written poll
-            Log.w(TAG, "poll: active insulin not published (${t.javaClass.simpleName})")
+        if (!stale) {
+            try {
+                publishIob(pump)
+            } catch (t: Throwable) {
+                // the IoB plate is a display: a failure here does not undo the written poll
+                Log.w(TAG, "poll: active insulin not published (${t.javaClass.simpleName})")
+            }
         }
 
-        // signed out while this poll ran: its result must not bring the state back
-        if (!CareLinkSettings(app).enabled) return store.read()
-        val after = store.update { cur ->
+        // checked under the lock of the sign-out's clear(): its result must not bring the state back
+        val after = store.updateIf({ CareLinkSettings(app).enabled }) { cur ->
             cur.copy(
                 status = CareLinkStatus.OK,
                 lastPollAtMs = now,
@@ -142,9 +152,16 @@ object CareLinkPoller {
                 lastError = null,
                 pumpNow = CareLinkPumpNow.merge(cur.pumpNow, pump),
             )
-        }
-        Log.i(TAG, "poll ok: reason=$reason first=$firstPoll events=${events.size} empty=${pump == null} code=${http.code}")
+        } ?: return store.read()
+        store.firstPollPending = false
+        Log.i(TAG, "poll ok: reason=$reason first=$firstPoll events=${events.size} empty=${pump == null} stale=$stale code=${http.code}")
         CareLinkNotifier.afterPoll(app, after, now)
+        // self-repair of the chain: a "sign in again" of an older poll may have removed the alarms (critic 4c, C2)
+        try {
+            CareLinkScheduler.arm(app)
+        } catch (t: Throwable) {
+            Log.w(TAG, "arm after poll failed (${t.javaClass.simpleName})")
+        }
         return after
     }
 
@@ -164,6 +181,9 @@ object CareLinkPoller {
     private fun needLogin(app: Context, store: CareLinkStateStore, now: Long, reason: PollReason): CareLinkState {
         // a sign-out during this poll also ends the session: no "sign in again" for a deliberate sign-out
         if (!CareLinkSettings(app).enabled) return store.read()
+        // a new sign-in during this poll (the renewal found the vault changed): the new session stands, its alarms
+        // and its first poll stay (critic 4c, C2)
+        if (CareLinkAuth.hasSession(app)) return store.read()
         val after = store.update { it.copy(status = CareLinkStatus.NEED_LOGIN, lastPollAtMs = now, lastError = null) }
         Log.w(TAG, "poll: sign-in needed (reason=$reason)")
         try {
@@ -211,8 +231,8 @@ object CareLinkPoller {
     /** Back to defaults (tests). */
     internal fun resetForTest() {
         zone = { ZoneId.systemDefault() }
-        writeJournal = { e, first -> CareLinkJournalWriter.apply(e, first) }
-        writeBasal = { p, at -> CareLinkBasalWriter.apply(p, at) }
+        writeJournal = { c, e, first -> CareLinkJournalWriter.apply(c, e, first) }
+        writeBasal = { c, p, at -> CareLinkBasalWriter.apply(c, p, at) }
         publishIob = { p -> CareLinkIob.publish(p) }
     }
 }
