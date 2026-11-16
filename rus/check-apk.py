@@ -272,6 +272,41 @@ def check_xml_drawable_constructors(apk):
         check(c in ctors, f'wear dex: {c} has its no-arg constructor (inflated from {len(files)} drawable XML)')
 
 
+RUS_STARTER = 'tk.glucodata.rus.carelink.RusCareLinkStarter'
+
+
+def manifest_tree(apk):
+    return run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+
+
+def check_rus_components(phone, wear):
+    """Our phone-only code (CareLink, stage 4): components declared in Common/src/mobileRus/AndroidManifest.xml are
+    in the phone APK; the watch gets none of our classes. Searched with the dot / slash after `rus`: the package
+    itself is tk.glucodata.ng.rus, our classes are tk.glucodata.rus.*"""
+    tree = manifest_tree(phone)
+    check(RUS_STARTER in tree and f'{PACKAGE}.rus-carelink' in tree,
+          f'phone manifest: {RUS_STARTER} (authority {PACKAGE}.rus-carelink) - source set mobileRus is in the build')
+    wtree = manifest_tree(wear)
+    bad = sorted(set(re.findall(r'tk\.glucodata\.rus\.[\w.$]+', wtree)))
+    check(not bad and 'rus-carelink' not in wtree,
+          'wear manifest: none of our components (tk.glucodata.rus.*)' + (f' (found: {bad[:10]})' if bad else ''))
+    hits = set()
+    with zipfile.ZipFile(wear) as z:
+        tmp = os.path.join(os.environ.get('RUNNER_TEMP', '/tmp'), 'rus-wear-dex-ours')
+        os.makedirs(tmp, exist_ok=True)
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        for n in dexes:
+            path = z.extract(n, tmp)
+            hits.update(re.findall(r'Ltk/glucodata/rus/[\w/$]+', run([build_tool('dexdump'), path])))
+            with open(path, 'rb') as f:
+                raw = f.read()
+            if b'tk/glucodata/rus/' in raw or b'tk.glucodata.rus.' in raw:
+                hits.add(f'(string in {n})')
+            os.remove(path)
+    check(dexes and not hits, f'wear dex: none of our classes tk/glucodata/rus/ in {len(dexes)} dex file(s)'
+          + (f' (found: {sorted(hits)[:10]})' if hits else ''))
+
+
 def check_upstream_hooks():
     """Upstream files of HEAD: only RUS-HOOK changes within the budget - rus/check-hooks.py (marks <-> rus/HOOKS.md,
     every changed hunk next to a mark, at most 15 files and 60 lines). Replaced "0 changes in upstream files" so that
@@ -338,6 +373,7 @@ def main():
     check_watchface_name(a.wear)
     check_watchface_resources(a.wear)
     check_xml_drawable_constructors(a.wear)
+    check_rus_components(a.phone, a.wear)
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_hooks()

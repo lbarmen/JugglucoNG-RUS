@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNG-RUS: components of the phone `rus` build only (source set mobile + build type rus). The classes live in
+     Common/src/mobile/java/tk/glucodata/rus/ (compiled by every phone build, never by the watch); declared here they
+     start only in RUS. No package attribute: the namespace comes from Common/build.gradle. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- CareLink starter: runs on every process start, schedules nothing until a CareLink sign-in exists -->
+        <provider
+            android:name="tk.glucodata.rus.carelink.RusCareLinkStarter"
+            android:authorities="${applicationId}.rus-carelink"
+            android:exported="false" />
+    </application>
+</manifest>

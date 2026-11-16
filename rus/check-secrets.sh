@@ -8,6 +8,7 @@
 #                                                  `git merge-base HEAD upstream/main`) does not have. Upstream
 #                                                  commits are not ours and are never scanned: in a sync branch
 #                                                  main..HEAD would hold all their new commits (plan of stage 2, A3).
+#                                                  RUS_SECRETS_HEAD=<commit> checks that commit instead of HEAD.
 # Personal deny list: the owner's own Nightscout address, serial numbers and the like, which no pattern can know.
 # It lives OUTSIDE this repository - ../secrets-deny.txt next to it (the owner's private folder) or the file named
 # by RUS_SECRETS_DENY - and only this check on the owner's computer reads it; GitHub Actions has no such file.
@@ -30,7 +31,19 @@ patterns=(
   '(thepassword|thekeypassword|storePassword|keyPassword|api[_-]?secret|apiSecret|API_SECRET)["'"'"']?[[:space:]]*[=:]?[[:space:]]*["'"'"'][^"'"'"'[:space:]$]{6,}["'"'"']'
   'https?://[A-Za-z0-9.-]+\.(herokuapp\.com|fly\.dev|ns\.10be\.de|nightscoutpro\.com|t1pal\.com)'
   '[?&]token=[A-Za-z0-9-]{8,}'
+  # a signed token (JWT: header.payload.signature); tests build their JWTs from parts, never as one literal
+  'eyJ[A-Za-z0-9_-]{15,}\.[A-Za-z0-9_-]{15,}\.'
+  # an e-mail address; example.com, example.org and GitHub no-reply addresses are allowed (email_ok below)
+  '[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
+  # a path in a Windows home folder (a user name), as written in any file or string
+  '[A-Za-z]:[\\/]+[Uu][Ss][Ee][Rr][Ss][\\/]'
+  # the owner's folder of raw cloud answers (CareLink): its name means a copied answer
+  'carelink[-]probe'
 )
+email_re='[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}'
+# allowed addresses, removed from a hit line before it is checked again (a domain that only starts the same,
+# example.com.other.net, is not allowed)
+email_ok='[A-Za-z0-9._%+-]+@(example\.com|example\.org|users\.noreply\.github\.com)(\.?([^A-Za-z0-9.-]|$))'
 
 # ---------- personal deny list ----------
 deny_file="${RUS_SECRETS_DENY:-../secrets-deny.txt}"
@@ -130,6 +143,9 @@ scan() {
     hits=$(printf '%s\n' "$added" | grep -nE -- "$p" || true)
     # Upstream's public test key is known and allowed in their own files only; ours never use it.
     hits=$(printf '%s\n' "$hits" | grep -v 'IDontKnow' || true)
+    if [ "$p" = "$email_re" ] && [ -n "$hits" ]; then
+      hits=$(printf '%s\n' "$hits" | sed -E "s#$email_ok#\\2#g" | grep -E -- "$p" || true)
+    fi
     if [ -n "$hits" ]; then
       echo "FAIL  pattern ($label): $p"
       # the line for finding it, every match and personal entry masked: this output may be read by others
@@ -142,13 +158,16 @@ scan() {
 
 if [ "${1:-}" = "--ours" ]; then
   point="${2:-}"
+  # the commit to check: HEAD, or RUS_SECRETS_HEAD (the local pre-push lock passes the commit being pushed)
+  head="${RUS_SECRETS_HEAD:-HEAD}"
+  git rev-parse -q --verify "$head^{commit}" > /dev/null || { echo "FAIL  unknown commit: $head"; exit 1; }
   if [ -z "$point" ]; then
     git rev-parse -q --verify upstream/main > /dev/null || {
       echo "FAIL  upstream/main is not fetched: git fetch upstream main (or pass their point)"; exit 1; }
-    point=$(git merge-base HEAD upstream/main)
+    point=$(git merge-base "$head" upstream/main)
   fi
   git rev-parse -q --verify "$point^{commit}" > /dev/null || { echo "FAIL  unknown point: $point"; exit 1; }
-  commits=$(git rev-list --no-merges HEAD --not "$point")
+  commits=$(git rev-list --no-merges "$head" --not "$point")
   n=0
   for c in $commits; do
     n=$((n + 1))
@@ -157,16 +176,16 @@ if [ "${1:-}" = "--ours" ]; then
     deny_scan "commit ${c:0:9}" < <(deny_diff show --format= "$c")
   done
   if [ "$deny_n" -gt 0 ]; then
-    for c in $(git rev-list HEAD --not "$point"); do
+    for c in $(git rev-list "$head" --not "$point"); do
       deny_scan "commit ${c:0:9}" < <(printf 'diff --git a/(commit message) b/(commit message)\n@@\n'
                                       git log -1 --format=%B "$c" | sed 's/^/+/')
     done
   fi
   # merge commits are skipped above: a conflict resolved by hand lives only there, so the whole tree against
   # their code is scanned too
-  scan "tree vs their ${point:0:9}" "$(git diff -U0 --no-color "$point" HEAD | grep -E '^\+[^+]' || true)" \
-    < <(git diff --name-only --diff-filter=AM "$point" HEAD)
-  deny_scan "tree vs their ${point:0:9}" < <(deny_diff diff "$point" HEAD)
+  scan "tree vs their ${point:0:9}" "$(git diff -U0 --no-color "$point" "$head" | grep -E '^\+[^+]' || true)" \
+    < <(git diff --name-only --diff-filter=AM "$point" "$head")
+  deny_scan "tree vs their ${point:0:9}" < <(deny_diff diff "$point" "$head")
   [ $status -eq 0 ] && echo "OK    no secrets in our $n commit(s) and in the tree on top of their ${point:0:9}" \
     "($deny_note)"
   exit $status
