@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNG-RUS, CareLink: strings of our own windows (English; Russian in values-ru). Not an overlay of upstream's
+     strings: every name starts with rus_carelink_. -->
+<resources>
+    <string name="rus_carelink_login_title">CareLink sign-in</string>
+    <string name="rus_carelink_login_close">Close</string>
+    <string name="rus_carelink_login_busy">Signing in to CareLink…</string>
+    <string name="rus_carelink_login_fail_network">No connection to CareLink. Check the internet and try again.</string>
+    <string name="rus_carelink_login_fail_server">CareLink did not answer as expected. Try again later.</string>
+    <string name="rus_carelink_login_fail_unsupported">This CareLink region uses a sign-in that RUS does not support yet.</string>
+    <string name="rus_carelink_login_fail_storage">The sign-in could not be saved on this phone. Try again after unlocking it.</string>
+    <string name="rus_carelink_login_fail_generic">Sign-in did not finish. Close this window and try again.</string>
+    <string name="rus_carelink_login_fail_webview">The built-in browser (Android System WebView) is not available on this phone.</string>
+</resources>

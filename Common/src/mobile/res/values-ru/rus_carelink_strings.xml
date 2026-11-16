@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNG-RUS, CareLink: русские строки наших окон (английские — в values). -->
+<resources>
+    <string name="rus_carelink_login_title">Вход в CareLink</string>
+    <string name="rus_carelink_login_close">Закрыть</string>
+    <string name="rus_carelink_login_busy">Входим в CareLink…</string>
+    <string name="rus_carelink_login_fail_network">Нет связи с CareLink. Проверьте интернет и попробуйте снова.</string>
+    <string name="rus_carelink_login_fail_server">CareLink ответил не так, как ожидалось. Попробуйте позже.</string>
+    <string name="rus_carelink_login_fail_unsupported">В этом регионе CareLink другой способ входа, RUS его пока не поддерживает.</string>
+    <string name="rus_carelink_login_fail_storage">Не удалось сохранить вход на телефоне. Разблокируйте телефон и попробуйте снова.</string>
+    <string name="rus_carelink_login_fail_generic">Вход не завершился. Закройте окно и попробуйте снова.</string>
+    <string name="rus_carelink_login_fail_webview">На телефоне недоступен встроенный браузер (Android System WebView).</string>
+</resources>

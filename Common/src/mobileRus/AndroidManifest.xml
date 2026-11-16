@@ -9,5 +9,14 @@
             android:name="tk.glucodata.rus.carelink.RusCareLinkStarter"
             android:authorities="${applicationId}.rus-carelink"
             android:exported="false" />
+        <!-- CareLink sign-in: the Medtronic page in a WebView. Not exported: only our own CareLink window opens it.
+             configChanges - rotation, keyboard and theme do not recreate the window, or the page would reload and a
+             code typed from mail or SMS would be lost. -->
+        <activity
+            android:name="tk.glucodata.rus.carelink.CareLinkLoginActivity"
+            android:exported="false"
+            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density" />
     </application>
 </manifest>
