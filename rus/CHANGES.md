@@ -12,6 +12,9 @@
 Для пользователя: изменений нет.
 
 Сборка и проверки:
+- 2026-11-16 — `rus/check-hooks.py`: каждая правка файла автора — не дальше 3 строк от пометки `RUS-HOOK`; удалённый
+  файл автора, новый файл вне наших путей, двоичный файл, права файла — красная. `check-apk.py` вместо «0 правок в
+  файлах автора» запускает эту проверку: первая врезка не сделает каждую сборку красной.
 - 2026-11-15 — личный список запретов для `rus/check-secrets.sh` (свой адрес Nightscout, серийные номера): файл
   вне репозитория, читает только проверка на компьютере владельца, значения не показываются; записи —
   `rus/secrets-deny.py`. С ним проверяются и тексты наших коммитов и двоичные файлы; найденное по общим шаблонам
@@ -74,7 +77,8 @@
 English: per-version list of our changes against JugglucoNG; a version is a tag `rus-<JugglucoNG version>-<our number>`.
 After rus-1.3.2-2 (in main, not tagged): nothing user-visible; tooling only — keeping the last 5 candidate APKs,
 upstream sync tools and daily sync check workflow, release merge through a sync PR, candidate only on an upstream
-release 7+ days old, candidate number above every earlier candidate too, personal deny list for the secrets check
+release 7+ days old, candidate number above every earlier candidate too, every change in upstream files next to a
+RUS-HOOK mark (checked on every build), personal deny list for the secrets check
 (kept outside the repository), reminder for blocks on test, main protected by a ruleset, golden runs of upstream alarm/forecast code, repository front page
 `.github/README.md` with the table of differences. rus-1.3.2-2 (2026-11-15, first tagged version): build type `rus`
 (package, name, icon background, version code, update source), wear watch face fixes (resource ids and names kept,

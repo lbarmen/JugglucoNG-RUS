@@ -83,7 +83,7 @@ jobs:
             git submodule update --init --recursive
           }
 
-      - name: Fetch upstream main (for the "upstream files untouched" check)
+      - name: Fetch upstream main (for the hooks check in check-apk)
         run: |
           git remote add upstream https://github.com/ctqvva/JugglucoNG.git
           git fetch --no-tags upstream main
@@ -275,7 +275,7 @@ jobs:
             git submodule update --init --recursive
           }
 
-      - name: Fetch upstream main (for the "upstream files untouched" check)
+      - name: Fetch upstream main (for the hooks check in check-apk)
         run: |
           git remote add upstream https://github.com/ctqvva/JugglucoNG.git
           git fetch --no-tags upstream main

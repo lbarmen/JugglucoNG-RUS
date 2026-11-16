@@ -8,10 +8,16 @@
 2. Budget: upstream files changed in REF against their code in it (default `git merge-base REF upstream/main`, i.e.
    their release that REF holds - not their fresh main), our paths (rus/our-paths.txt) left out: at most 15 files
    and 60 lines (added + removed).
-Every check prints OK or FAIL with a plain reason; any FAIL -> exit 1.
+3. Every change in an upstream file is a hook (ТЗ 3.3: a hook is 1-3 lines with a RUS-HOOK mark): each changed piece
+   (hunk) adds and removes at most 3 lines, and carries the mark in its own new lines - or, when it only removes
+   lines, has the mark on the line right above or below. Their file deleted, a new file outside our paths, a binary
+   file, a mode or submodule change -> FAIL: none of them can carry a mark.
+Every check prints OK or FAIL with a plain reason; any FAIL -> exit 1. rus/check-apk.py runs this script on every
+build (test and candidate), so a block branch is checked before it reaches the phone.
 """
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +26,8 @@ import rus_common as rc  # noqa: E402
 
 MAX_FILES = 15
 MAX_LINES = 60
+HOOK_LINES = 3  # ТЗ 3.3: a hook is 1-3 lines
+HUNK_RE = re.compile(r'^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', re.M)
 failures = []
 
 
@@ -27,6 +35,14 @@ def check(cond, msg):
     print(('OK    ' if cond else 'FAIL  ') + msg)
     if not cond:
         failures.append(msg)
+
+
+def git_text(*args):
+    """(exit code, output) of git, split on \\n only: a lone \\r in their files must not break a line."""
+    p = subprocess.run(['git', '-c', 'core.quotepath=off', *args], cwd=rc.ROOT, capture_output=True)
+    if p.returncode not in (0, 1):
+        raise RuntimeError(f'git {" ".join(args)}: exit {p.returncode}: {p.stderr.decode("utf-8", "replace")[:500]}')
+    return p.returncode, p.stdout.decode('utf-8', 'replace')
 
 
 def table_rows(text):
@@ -40,6 +56,25 @@ def table_rows(text):
             continue
         rows.append((cells[0], cells[1]))
     return rows
+
+
+def hunk_problems(path, diff, new_lines):
+    """Reasons why the changed pieces of one upstream file are not hooks (empty list = all are hooks)."""
+    out = []
+    marked = {n for n, ln in enumerate(new_lines, 1) if rc.HOOK_RE.search(ln)}
+    for b, c, d in HUNK_RE.findall(diff):
+        removed, start, added = (1 if b == '' else int(b)), int(c), (1 if d == '' else int(d))
+        where = f'line {start}' if added <= 1 else f'lines {start}-{start + added - 1}'
+        if added > HOOK_LINES or removed > HOOK_LINES:
+            out.append(f'{path}: {where}: {added} line(s) added, {removed} removed in one piece - a hook is 1-'
+                       f'{HOOK_LINES} lines (ТЗ 3.3); move the code to our files')
+        elif added == 0:  # lines removed after line `start`: the mark right above or below
+            if not marked & {start, start + 1}:
+                out.append(f'{path}: lines removed after line {start} with no RUS-HOOK mark right above or below')
+        elif not marked & set(range(start, start + added)):
+            out.append(f'{path}: {where} changed without a RUS-HOOK mark in them - make it a hook (mark + row in '
+                       f'rus/HOOKS.md) or move the code to our files')
+    return out
 
 
 def main():
@@ -60,9 +95,11 @@ def main():
         sys.exit(f'unknown base {a.base}')
 
     # 1. marks in code <-> rows in HOOKS.md
-    code, out = rc.git('grep', '-n', '-I', '-E', r'RUS-HOOK:[A-Za-z0-9_.-]+', ref, ok_codes=(0, 1))
+    _, out = git_text('grep', '-n', '-I', '-E', r'RUS-HOOK:[A-Za-z0-9_.-]+', ref)
     marks = {}  # id -> set(files)
-    for line in out.splitlines():
+    for line in out.split('\n'):
+        if not line:
+            continue
         _, path, _, text = line.split(':', 3)
         if rc.is_ours(path):
             continue
@@ -86,8 +123,11 @@ def main():
 
     # 2. budget
     files, lines = [], 0
-    for line in rc.git('diff', '--no-renames', '--numstat', base, ref).splitlines():
-        add, rem, path = line.split('\t', 2)
+    _, out = git_text('diff', '--no-renames', '--numstat', '-z', base, ref)
+    for item in out.split('\0'):
+        if not item:
+            continue
+        add, rem, path = item.split('\t', 2)
         if rc.is_ours(path):
             continue
         files.append(path)
@@ -97,6 +137,36 @@ def main():
     if len(files) > MAX_FILES or lines > MAX_LINES:
         msg += ' - too much in their files: move code to our files (ТЗ 3.3), files: ' + ', '.join(files[:20])
     check(len(files) <= MAX_FILES and lines <= MAX_LINES, msg)
+
+    # 3. every change in an upstream file is a hook
+    bad, seen = [], 0
+    _, out = git_text('diff', '--no-renames', '--name-status', '-z', base, ref)
+    parts = out.split('\0')
+    for st, path in zip(parts[0::2], parts[1::2]):
+        if not path or rc.is_ours(path):
+            continue
+        seen += 1
+        if st.startswith('D'):
+            bad.append(f'{path}: their file deleted - restore it (a hook changes 1-3 lines, never removes a file)')
+            continue
+        if st.startswith('A'):
+            bad.append(f'{path}: a new file outside our paths - move it to our folders or add its path to '
+                       f'rus/our-paths.txt')
+            continue
+        _, diff = git_text('--literal-pathspecs', 'diff', '--no-renames', '-U0', '--no-color', '--no-ext-diff',
+                           '--no-textconv', base, ref, '--', path)
+        header = diff.split('\n@@', 1)[0]
+        kind = ('submodule' if re.search(r'^index \S+ 160000$', header, re.M) else
+                'binary file' if '\nBinary files ' in header else
+                'file mode' if '\nold mode ' in header else
+                'file type' if not HUNK_RE.search(diff) else '')
+        if kind:
+            bad.append(f'{path}: {kind} changed - no hook can mark it; use our own files or resource folders')
+            continue
+        _, text = git_text('--literal-pathspecs', 'show', f'{ref}:{path}')
+        bad += hunk_problems(path, diff, text.split('\n'))
+    check(not bad, f'every change in upstream files is a RUS-HOOK ({seen} file(s) changed)' +
+          ''.join(f'\n      {b}' for b in bad[:30]) + (f'\n      ... and {len(bad) - 30} more' if len(bad) > 30 else ''))
     return 1 if failures else 0
 
 

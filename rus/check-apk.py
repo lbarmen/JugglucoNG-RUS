@@ -272,16 +272,15 @@ def check_xml_drawable_constructors(apk):
         check(c in ctors, f'wear dex: {c} has its no-arg constructor (inflated from {len(files)} drawable XML)')
 
 
-def check_upstream_untouched():
-    """Only added files compared with the common ancestor with upstream main."""
-    try:
-        base = run(['git', 'merge-base', 'HEAD', 'upstream/main']).strip()
-    except subprocess.CalledProcessError:
-        fail('git merge-base HEAD upstream/main failed (fetch upstream first)')
-        return
-    changed = run(['git', 'diff', '--name-status', '--no-renames', '--diff-filter=a', base, 'HEAD']).split('\n')
-    changed = [c for c in changed if c.strip()]
-    check(not changed, f'0 changes in upstream files since {base[:7]}' + (f': {changed}' if changed else ''))
+def check_upstream_hooks():
+    """Upstream files of HEAD: only RUS-HOOK changes within the budget - rus/check-hooks.py (marks <-> rus/HOOKS.md,
+    every changed hunk next to a mark, at most 15 files and 60 lines). Replaced "0 changes in upstream files" so that
+    the first hook does not turn every build red; needs upstream/main fetched."""
+    p = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'check-hooks.py'),
+                        '--ref', 'HEAD'], capture_output=True, text=True, encoding='utf-8', errors='replace')
+    for line in (p.stdout + p.stderr).strip().splitlines():
+        print('      ' + line)
+    check(p.returncode == 0, 'upstream files: only hooks, within the budget (rus/check-hooks.py, lines above)')
 
 
 def check_manifest(path, phone, phone_code):
@@ -341,7 +340,7 @@ def main():
     check_xml_drawable_constructors(a.wear)
     if not a.no_vendor:
         check_vendor(a.phone)
-    check_upstream_untouched()
+    check_upstream_hooks()
     if a.manifest:
         check_manifest(a.manifest, a.phone, codes['phone'])
     elif a.mode == 'release':
