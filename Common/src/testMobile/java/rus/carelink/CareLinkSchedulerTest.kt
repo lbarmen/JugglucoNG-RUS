@@ -1,0 +1,244 @@
+package rus.carelink
+
+import android.app.AlarmManager
+import android.app.Application
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import androidx.work.Operation
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.ConscryptMode
+import rus.carelink.CareLinkTestData.CARELINK_BASE
+import rus.carelink.CareLinkTestData.TOKEN_URL
+import rus.carelink.CareLinkTestData.access
+import tk.glucodata.rus.carelink.AesGcmSessionCipher
+import tk.glucodata.rus.carelink.CareLinkAlarmReceiver
+import tk.glucodata.rus.carelink.CareLinkAuth
+import tk.glucodata.rus.carelink.CareLinkBootReceiver
+import tk.glucodata.rus.carelink.CareLinkNotifier
+import tk.glucodata.rus.carelink.CareLinkScheduler
+import tk.glucodata.rus.carelink.CareLinkSession
+import tk.glucodata.rus.carelink.CareLinkSettings
+import tk.glucodata.rus.carelink.CareLinkState
+import tk.glucodata.rus.carelink.CareLinkStateStore
+import tk.glucodata.rus.carelink.CareLinkStatus
+import tk.glucodata.rus.carelink.CareLinkVault
+import tk.glucodata.rus.carelink.CareLinkWork
+import tk.glucodata.rus.carelink.PollReason
+import tk.glucodata.rus.carelink.PumpNow
+import tk.glucodata.rus.carelink.RusCareLinkStarter
+import javax.crypto.KeyGenerator
+
+/** Records what the scheduler asks of WorkManager (tests need no WorkManager). */
+internal class FakeCareLinkWork : CareLinkWork {
+    val log = mutableListOf<String>()
+    override fun ensurePeriodic(app: Context) {
+        log += "periodic"
+    }
+
+    override fun cancelPeriodic(app: Context) {
+        log += "cancel"
+    }
+
+    override fun enqueue(app: Context, reason: PollReason, firstPoll: Boolean): Operation? {
+        log += "poll $reason $firstPoll"
+        return null
+    }
+}
+
+/**
+ * JugglucoNG-RUS, CareLink 4c: the poll schedule - nothing without a session or with polling off; the alarm chain and
+ * the safety work with one; sign-in and sign-out listeners of the starter; the boot receiver. Robolectric's alarm
+ * manager; WorkManager replaced by a recording fake.
+ */
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
+@ConscryptMode(ConscryptMode.Mode.OFF)
+class CareLinkSchedulerTest {
+
+    private val app: Application get() = RuntimeEnvironment.getApplication()
+    private val work = FakeCareLinkWork()
+    private var elapsed = 10_000_000L
+    private val now = 1_800_000_000_000L
+    private val key = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+
+    private val alarms get() = shadowOf(app.getSystemService(AlarmManager::class.java)).scheduledAlarms
+
+    private fun pollIntentExists(): Boolean = PendingIntent.getBroadcast(
+        app, 1_947_000, Intent(app, CareLinkAlarmReceiver::class.java).setAction(CareLinkScheduler.ACTION_POLL),
+        PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE,
+    ) != null
+
+    private fun saveSession() = CareLinkVault.save(
+        app,
+        CareLinkSession(
+            accessToken = access((now + 7_200_000L) / 1000), refreshToken = "made-up-refresh-1",
+            expiresAtMs = now + 7_200_000L, username = "tester", role = "PATIENT", patientId = null, country = "DE",
+            region = "EU", baseUrlCareLink = CARELINK_BASE, baseUrlCumulus = "https://cumulus.example.eu/c",
+            tokenUrl = TOKEN_URL, clientId = "abc123", loggedInAtMs = now,
+        ),
+    )
+
+    @Before
+    fun setUp() {
+        CareLinkAuth.resetForTest()
+        CareLinkScheduler.resetForTest()
+        CareLinkScheduler.work = work
+        CareLinkScheduler.elapsed = { elapsed }
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
+        CareLinkVault.clear(app)
+    }
+
+    @After
+    fun tearDown() {
+        CareLinkVault.clear(app)
+        CareLinkAuth.resetForTest()
+        CareLinkScheduler.resetForTest()
+        CareLinkVault.cipher = AesGcmSessionCipher.keystore
+    }
+
+    @Test
+    fun withoutASessionNothingIsScheduled() {
+        CareLinkSettings(app).enabled = true
+        assertFalse(CareLinkScheduler.arm(app))
+        assertFalse(CareLinkScheduler.arm(app, force = true))
+        assertTrue(alarms.isEmpty())
+        assertFalse(pollIntentExists())
+        assertTrue("WorkManager not even touched", work.log.isEmpty())
+        assertNull(CareLinkScheduler.enqueuePoll(app, PollReason.ALARM))
+        assertTrue(work.log.isEmpty())
+    }
+
+    @Test
+    fun withPollingOffNothingIsScheduled() {
+        saveSession()
+        CareLinkSettings(app).enabled = false
+        assertFalse(CareLinkScheduler.arm(app))
+        assertTrue(alarms.isEmpty())
+        assertTrue(work.log.isEmpty())
+        assertNull(CareLinkScheduler.enqueuePoll(app, PollReason.MANUAL))
+    }
+
+    @Test
+    fun signedInAndOnArmsOneAlarmAndTheSafetyWork() {
+        saveSession()
+        CareLinkSettings(app).enabled = true
+        assertTrue(CareLinkScheduler.arm(app))
+        assertEquals(1, alarms.size)
+        assertTrue(pollIntentExists())
+        assertEquals(listOf("periodic"), work.log)
+        // a process start a minute later keeps the alarm; the alarm itself (force) sets the next one
+        elapsed += 60_000L
+        assertTrue(CareLinkScheduler.arm(app))
+        assertEquals(1, alarms.size)
+        assertTrue(CareLinkScheduler.arm(app, force = true))
+        assertEquals(1, alarms.size)
+        CareLinkScheduler.enqueuePoll(app, PollReason.ALARM)
+        assertEquals("poll ALARM false", work.log.last())
+    }
+
+    @Test
+    fun disarmRemovesTheAlarmAndTheSafetyWork() {
+        saveSession()
+        CareLinkSettings(app).enabled = true
+        CareLinkScheduler.arm(app)
+        CareLinkScheduler.disarm(app)
+        assertTrue(alarms.isEmpty())
+        assertFalse(pollIntentExists())
+        assertEquals("cancel", work.log.last())
+        // turned off later: the next arm removes what was armed
+        CareLinkScheduler.arm(app)
+        CareLinkSettings(app).enabled = false
+        work.log.clear()
+        assertFalse(CareLinkScheduler.arm(app))
+        assertTrue(alarms.isEmpty())
+        assertEquals(listOf("cancel"), work.log)
+    }
+
+    @Test
+    fun signInTurnsPollingOnArmsAndAsksTheFirstPoll() {
+        val store = CareLinkStateStore(app)
+        store.write(CareLinkState(CareLinkStatus.NEED_LOGIN))
+        store.needLoginShown = true
+        saveSession()
+        RusCareLinkStarter.afterLogin(app)
+        assertTrue(CareLinkSettings(app).enabled)
+        assertEquals(CareLinkStatus.OK, store.read().status)
+        assertFalse(store.needLoginShown)
+        assertEquals(1, alarms.size)
+        assertEquals(listOf("periodic", "poll LOGIN true"), work.log)
+    }
+
+    @Test
+    fun signOutTurnsPollingOffAndClearsTheState() {
+        saveSession()
+        CareLinkSettings(app).enabled = true
+        CareLinkScheduler.arm(app)
+        val store = CareLinkStateStore(app)
+        store.write(CareLinkState(CareLinkStatus.OK, now, now, null, PumpNow(now, reservoirUnits = 100.0)))
+        CareLinkNotifier.checkNoData(app, store.read(), now + 3_600_000L)
+        CareLinkVault.clear(app)
+        RusCareLinkStarter.afterSignOut(app)
+        assertFalse(CareLinkSettings(app).enabled)
+        assertTrue(alarms.isEmpty())
+        assertEquals("cancel", work.log.last())
+        assertEquals(CareLinkState(), store.read())
+        assertFalse(store.noDataShown)
+    }
+
+    @Test
+    fun starterSetsTheListenersAndArmsAfterAPost() {
+        saveSession()
+        CareLinkSettings(app).enabled = true
+        val starter = org.robolectric.Robolectric.setupContentProvider(RusCareLinkStarter::class.java, "rus.carelink.test")
+        assertTrue(starter.onCreate())
+        assertNotNull(CareLinkAuth.onLoginSuccess)
+        assertNotNull(CareLinkAuth.onSignOut)
+        shadowOf(android.os.Looper.getMainLooper()).idle()
+        assertEquals(1, alarms.size)
+    }
+
+    @Test
+    fun bootAndUpdateArmAgain() {
+        saveSession()
+        CareLinkSettings(app).enabled = true
+        CareLinkBootReceiver().onReceive(app, Intent(Intent.ACTION_BOOT_COMPLETED))
+        assertEquals(1, alarms.size)
+        CareLinkScheduler.disarm(app)
+        CareLinkBootReceiver().onReceive(app, Intent(Intent.ACTION_MY_PACKAGE_REPLACED))
+        assertEquals(1, alarms.size)
+        CareLinkScheduler.disarm(app)
+        CareLinkBootReceiver().onReceive(app, Intent("made.up.ACTION"))
+        assertTrue(alarms.isEmpty())
+    }
+
+    @Test
+    fun intervalOnlyFiveTenOrFifteen() {
+        val s = CareLinkSettings(app)
+        assertEquals(5, s.intervalMin)
+        s.intervalMin = 10
+        assertEquals(10, s.intervalMin)
+        s.intervalMin = 7
+        assertEquals(5, s.intervalMin)
+        assertNull(s.presetId)
+        s.presetId = 3L
+        assertEquals(3L, s.presetId)
+        s.presetId = null
+        assertNull(s.presetId)
+        assertTrue(s.writeCarbs)
+        assertFalse(s.sendToNightscout)
+        assertFalse(s.enabled)
+    }
+}

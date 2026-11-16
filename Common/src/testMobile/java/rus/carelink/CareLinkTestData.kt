@@ -86,8 +86,12 @@ internal class FakeCareLinkHttp : CareLinkHttp {
         return answer(url)
     }
 
+    /** Bodies of JSON requests, in order (4c: the `display/message` request). */
+    val jsons = mutableListOf<String>()
+
     override fun postJson(url: String, json: String, headers: Map<String, String>): HttpResult {
         calls += "JSON $url"
+        jsons += json
         return answer(url)
     }
 }

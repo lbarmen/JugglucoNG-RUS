@@ -10,4 +10,10 @@
     <string name="rus_carelink_login_fail_storage">Не удалось сохранить вход на телефоне. Разблокируйте телефон и попробуйте снова.</string>
     <string name="rus_carelink_login_fail_generic">Вход не завершился. Закройте окно и попробуйте снова.</string>
     <string name="rus_carelink_login_fail_webview">На телефоне недоступен встроенный браузер (Android System WebView).</string>
+    <string name="rus_carelink_channel_name">CareLink</string>
+    <string name="rus_carelink_channel_description">Данные помпы из CareLink: вход и пропуск данных</string>
+    <string name="rus_carelink_need_login_title">Нужно войти в CareLink заново</string>
+    <string name="rus_carelink_need_login_text">CareLink завершил сеанс, данные помпы больше не приходят. Откройте приложение и войдите в CareLink снова.</string>
+    <string name="rus_carelink_no_data_title">Данных помпы нет %1$d мин</string>
+    <string name="rus_carelink_no_data_text">В CareLink нет новых данных помпы. Проверьте, что MiniMed Mobile работает и видит помпу.</string>
 </resources>

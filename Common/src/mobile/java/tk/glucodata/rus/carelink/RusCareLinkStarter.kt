@@ -2,6 +2,7 @@ package tk.glucodata.rus.carelink
 
 import android.content.ContentProvider
 import android.content.ContentValues
+import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.Handler
@@ -15,17 +16,23 @@ import android.util.Log
  * own builds compile this class but never start it, and the watch never sees it. Android creates content providers
  * on every process start, before Application.onCreate: onCreate here stays cheap, touches none of upstream's
  * singletons and never throws (a crash here would take the whole app down before any screen).
- * Part 4a only proves the frame: one line in the system log, nothing is scheduled yet.
+ *
+ * Stage 4c: sets the sign-in and sign-out listeners of [CareLinkAuth] and posts [CareLinkScheduler.arm] to the main
+ * thread (it runs after Application.onCreate, when WorkManager has upstream's configuration). No Keystore, no network
+ * here; without a CareLink sign-in nothing is scheduled.
  */
 class RusCareLinkStarter : ContentProvider() {
 
     override fun onCreate(): Boolean {
         try {
+            CareLinkAuth.onLoginSuccess = { ctx -> afterLogin(ctx) }
+            CareLinkAuth.onSignOut = { ctx -> afterSignOut(ctx) }
+            val app = context?.applicationContext ?: return true
             Handler(Looper.getMainLooper()).post {
                 try {
-                    Log.i(TAG, "process start")
+                    CareLinkScheduler.arm(app)
                 } catch (t: Throwable) {
-                    // logging must never matter
+                    Log.w(TAG, "arm on start failed (${t.javaClass.simpleName})")
                 }
             }
         } catch (t: Throwable) {
@@ -52,5 +59,27 @@ class RusCareLinkStarter : ContentProvider() {
 
     companion object {
         const val TAG = "RusCareLink"
+
+        /**
+         * After a sign-in (a background thread of [CareLinkAuth]): polling on, "sign in again" away, the chain armed
+         * and the first poll - it takes the whole 24 h of the cloud window.
+         */
+        internal fun afterLogin(context: Context) {
+            val app = context.applicationContext
+            CareLinkSettings(app).enabled = true
+            CareLinkStateStore(app).update { it.copy(status = CareLinkStatus.OK, lastError = null) }
+            CareLinkNotifier.loggedIn(app)
+            CareLinkScheduler.arm(app, force = true)
+            CareLinkScheduler.enqueuePoll(app, PollReason.LOGIN, firstPoll = true)
+        }
+
+        /** After a sign-out (may be the main thread; file and preference work only): polling off, state cleared. */
+        internal fun afterSignOut(context: Context) {
+            val app = context.applicationContext
+            CareLinkSettings(app).enabled = false
+            CareLinkScheduler.disarm(app)
+            CareLinkStateStore(app).clear()
+            CareLinkNotifier.cancelAll(app)
+        }
     }
 }

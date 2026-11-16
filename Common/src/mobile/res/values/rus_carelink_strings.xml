@@ -11,4 +11,10 @@
     <string name="rus_carelink_login_fail_storage">The sign-in could not be saved on this phone. Try again after unlocking it.</string>
     <string name="rus_carelink_login_fail_generic">Sign-in did not finish. Close this window and try again.</string>
     <string name="rus_carelink_login_fail_webview">The built-in browser (Android System WebView) is not available on this phone.</string>
+    <string name="rus_carelink_channel_name">CareLink</string>
+    <string name="rus_carelink_channel_description">Pump data from CareLink: sign-in and missing data</string>
+    <string name="rus_carelink_need_login_title">Sign in to CareLink again</string>
+    <string name="rus_carelink_need_login_text">CareLink ended the session, so pump data no longer comes in. Open the app and sign in to CareLink again.</string>
+    <string name="rus_carelink_no_data_title">No pump data for %1$d min</string>
+    <string name="rus_carelink_no_data_text">CareLink has no new data from the pump. Check that MiniMed Mobile is running and sees the pump.</string>
 </resources>

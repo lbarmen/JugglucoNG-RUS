@@ -18,5 +18,19 @@
             android:theme="@style/Theme.AppCompat.NoActionBar"
             android:windowSoftInputMode="adjustResize"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|uiMode|density" />
+        <!-- CareLink poll alarm: only our own PendingIntent sends it -->
+        <receiver
+            android:name="tk.glucodata.rus.carelink.CareLinkAlarmReceiver"
+            android:exported="false" />
+        <!-- CareLink: arm the poll alarm again after a reboot and an app update. With an intent filter Android 12+
+             wants exported stated; only the system sends these actions (RECEIVE_BOOT_COMPLETED is in their manifest). -->
+        <receiver
+            android:name="tk.glucodata.rus.carelink.CareLinkBootReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
