@@ -388,6 +388,10 @@ jobs:
           fail=0; i=0
           t() {
             i=$((i + 1)); local name="$1"; shift; local s=$(date +%s)
+            # a test script their code at this point does not have yet (came with a later release): not ours to fail
+            if [ "$1" = python3 ] && [[ "${2:-}" == *.py ]] && [ ! -f "$2" ]; then
+              echo "| $name | нет в их коде этой версии ($2), пропущено | 0 с |" | tee -a out/tests.md; return
+            fi
             if "$@" > "out/logs/$i.txt" 2>&1; then r="зелёное"; else r="**красное** (лог out/logs/$i.txt)"; fail=1; fi
             echo "| $name | $r | $(( $(date +%s) - s )) с |" | tee -a out/tests.md
           }
