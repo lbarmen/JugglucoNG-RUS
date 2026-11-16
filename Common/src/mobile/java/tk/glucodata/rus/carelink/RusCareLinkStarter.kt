@@ -28,6 +28,7 @@ class RusCareLinkStarter : ContentProvider() {
             CareLinkAuth.onLoginSuccess = { ctx -> afterLogin(ctx) }
             CareLinkAuth.onSignOut = { ctx -> afterSignOut(ctx) }
             val app = context?.applicationContext ?: return true
+            installTrial(app)
             Handler(Looper.getMainLooper()).post {
                 try {
                     CareLinkScheduler.arm(app)
@@ -59,6 +60,24 @@ class RusCareLinkStarter : ContentProvider() {
 
     companion object {
         const val TAG = "RusCareLink"
+
+        /** The trial entry point: only in test builds (Common/src/rusTrial, -PrusRelease=0); a candidate has none. */
+        internal const val TRIAL_ENTRY = "tk.glucodata.rus.carelink.trial.CareLinkTrialEntry"
+
+        /**
+         * Test builds only (part 4p): the CareLink trial - a made-up pump through the real poll, no network. A
+         * candidate has no such class: silently on. Any other failure is logged (Log.println: upstream's R8 rules strip
+         * Log.w in release builds), or the trial would quietly not work.
+         */
+        internal fun installTrial(app: Context) {
+            try {
+                Class.forName(TRIAL_ENTRY).getMethod("install", Context::class.java).invoke(null, app)
+            } catch (_: ClassNotFoundException) {
+            } catch (t: Throwable) {
+                val cause = (t as? java.lang.reflect.InvocationTargetException)?.targetException ?: t
+                Log.println(Log.WARN, TAG, "trial not installed (${cause.javaClass.simpleName})")
+            }
+        }
 
         /**
          * After a sign-in (a background thread of [CareLinkAuth]): polling on, "sign in again" away, the chain armed

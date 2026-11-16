@@ -6,7 +6,8 @@
 // What this script does, all for the `rus` build type only:
 //  - creates `rus` from upstream `release` (initWith), then adds exactly our changes:
 //    package suffix .rus, version suffix -rusN, own versionCode, own update repo,
-//    no SourceForge fallback, -DAPPSUFFIX for the native side, our R8 rules rus/proguard-rus.pro;
+//    no SourceForge fallback, -DAPPSUFFIX for the native side, our R8 rules rus/proguard-rus.pro and
+//    rus/proguard-rus-trial.pro; test builds (N = 0) of the phone also get Common/src/rusTrial/java (CareLink trial);
 //  - fails the build loudly if `rus` no longer matches `release` apart from those changes
 //    (upstream added a flag to `release` that initWith did not copy, etc.);
 //  - fails the build if any of the four signing properties is missing or empty,
@@ -43,6 +44,9 @@ gradle.beforeProject { Project p ->
             // Our R8 rules after upstream's (rus/proguard-rus.pro: constructors of classes inflated from XML).
             final String RUS_PROGUARD = 'proguard-rus.pro'
             rus.proguardFile(p.rootProject.file("rus/${RUS_PROGUARD}"))
+            // CareLink trial entry point (part 4p): always added - in a candidate it matches nothing.
+            final String RUS_TRIAL_PROGUARD = 'proguard-rus-trial.pro'
+            rus.proguardFile(p.rootProject.file("rus/${RUS_TRIAL_PROGUARD}"))
             def appSuffixFlag = "-DAPPSUFFIX=\"quotes(${RUS_SUFFIX})\""
             rus.externalNativeBuild.cmake.cppFlags.add(appSuffixFlag)
             rus.externalNativeBuild.cmake.cFlags.add(appSuffixFlag)
@@ -57,7 +61,7 @@ gradle.beforeProject { Project p ->
             same('shrinkResources', release.shrinkResources, rus.shrinkResources)
             same('debuggable', release.debuggable, rus.debuggable)
             same('jniDebuggable', release.jniDebuggable, rus.jniDebuggable)
-            same('proguardFiles', release.proguardFiles*.name + [RUS_PROGUARD], rus.proguardFiles*.name)
+            same('proguardFiles', release.proguardFiles*.name + [RUS_PROGUARD, RUS_TRIAL_PROGUARD], rus.proguardFiles*.name)
             same('consumerProguardFiles', release.consumerProguardFiles*.name, rus.consumerProguardFiles*.name)
             same('manifestPlaceholders', release.manifestPlaceholders, rus.manifestPlaceholders)
             same('matchingFallbacks', release.matchingFallbacks, rus.matchingFallbacks)
@@ -109,6 +113,11 @@ gradle.beforeProject { Project p ->
             boolean isWear = variant.productFlavors.any { it.second == 'wear' }
             int code = upstreamCode * 100 + rusRelease + (isWear ? 1000000 : 0)
             variant.outputs.each { out -> out.versionCode.set(code) }
+            // CareLink trial (part 4p): test builds of the phone only; a candidate and the watch never get it.
+            if (rusRelease == 0 && !isWear) {
+                variant.sources.java.addStaticSourceDirectory('src/rusTrial/java')
+                p.logger.lifecycle("RUS: ${variant.name} gets the CareLink trial (src/rusTrial/java, test build)")
+            }
         }
     }
 

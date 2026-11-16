@@ -8,6 +8,9 @@ Run from the repository root after `bash rus/gradlew-rus.sh ... assembleMobileRu
 --mode release  additionally the signature must equal rus/rus-cert.sha256
 --no-vendor     skip the vendor library check (emulator x86_64 build has no vendor libraries)
 --manifest P    update-manifest.json must describe the phone APK (required with --mode release)
+
+  python3 rus/check-apk.py --trial-absent PHONE_APK
+                only: a phone APK built with -PrusRelease=N (N >= 1) has no CareLink trial (marker strings)
 """
 import argparse
 import fnmatch
@@ -273,16 +276,50 @@ def check_xml_drawable_constructors(apk):
 
 
 RUS_STARTER = 'tk.glucodata.rus.carelink.RusCareLinkStarter'
+# Strings that only the CareLink trial code has (part 4p; Common/src/rusTrial and .../rus/carelink/trial): the command
+# action, the log tag, the address of the trial session. Release builds rename classes (R8, no -dontobfuscate), so the
+# trial is found by these, not by class names.
+TRIAL_MARKERS = [b'tk.glucodata.ng.rus.CARELINK_TRIAL', b'RusCareLinkTrial', b'trial.invalid']
+
+
+def dex_marker_hits(apk):
+    """Which trial markers occur in the raw dex files of [apk] (the string pool holds them whole)."""
+    found = set()
+    with zipfile.ZipFile(apk) as z:
+        dexes = [n for n in z.namelist() if re.fullmatch(r'classes\d*\.dex', n)]
+        for n in dexes:
+            raw = z.read(n)
+            found.update(m.decode() for m in TRIAL_MARKERS if m in raw)
+    return dexes, found
+
+
+def check_trial(phone, release):
+    """Test build (N = 0): every trial marker is in the phone dex - otherwise the trial vanished silently.
+    Candidate (N >= 1): none of them, in the dex or in the manifest."""
+    dexes, found = dex_marker_hits(phone)
+    names = [m.decode() for m in TRIAL_MARKERS]
+    if release == 0:
+        missing = sorted(set(names) - found)
+        check(dexes and not missing, f'phone dex (test build): CareLink trial markers present {sorted(found)}'
+              + (f' (missing: {missing})' if missing else ''))
+    else:
+        tree = manifest_tree(phone)
+        in_manifest = [m for m in names if m in tree]
+        check(dexes and not found and not in_manifest,
+              f'phone (candidate -rus{release}): no CareLink trial marker in {len(dexes)} dex file(s) or the manifest'
+              + (f' (found: {sorted(found) + in_manifest})' if found or in_manifest else ''))
 
 
 def manifest_tree(apk):
     return run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
 
 
-def check_rus_components(phone, wear):
+def check_rus_components(phone, wear, release):
     """Our phone-only code (CareLink, stage 4): components declared in Common/src/mobileRus/AndroidManifest.xml are
     in the phone APK; the watch gets none of our classes. Searched with the dot / slash after `rus`: the package
-    itself is tk.glucodata.ng.rus, our classes are tk.glucodata.rus.*"""
+    itself is tk.glucodata.ng.rus, our classes are tk.glucodata.rus.* The CareLink trial: in a test build, not in a
+    candidate (check_trial)."""
+    check_trial(phone, release)
     tree = manifest_tree(phone)
     check(RUS_STARTER in tree and f'{PACKAGE}.rus-carelink' in tree,
           f'phone manifest: {RUS_STARTER} (authority {PACKAGE}.rus-carelink) - source set mobileRus is in the build')
@@ -334,15 +371,35 @@ def check_manifest(path, phone, phone_code):
         check(art.get('sha256') == hashlib.sha256(data).hexdigest(), 'manifest: sha256 = phone APK')
 
 
+def trial_absent(phone):
+    """--trial-absent: a phone APK built like a candidate (-PrusRelease=1, one-time key) inside the test build job has
+    no CareLink trial. Only that - no wear, signature or update manifest checks."""
+    pkg, code, name, _ = badging(phone)
+    m = re.search(r'-rus(\d+)$', name)
+    release = int(m.group(1)) if m else 0
+    check(pkg == PACKAGE and release >= 1, f'phone: package {pkg}, versionName {name} is a candidate build (-rusN, N >= 1)')
+    if release >= 1:
+        check_trial(phone, release)
+    print(f'\n{len(failures)} check(s) failed' if failures else '\nAll checks passed')
+    sys.exit(1 if failures else 0)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('--phone', required=True)
-    ap.add_argument('--wear', required=True)
-    ap.add_argument('--release', type=int, required=True)
-    ap.add_argument('--mode', choices=['test', 'release'], required=True)
+    ap.add_argument('--trial-absent', metavar='PHONE_APK',
+                    help='only: the CareLink trial is not in this candidate-like phone APK (part 4p)')
+    ap.add_argument('--phone')
+    ap.add_argument('--wear')
+    ap.add_argument('--release', type=int)
+    ap.add_argument('--mode', choices=['test', 'release'])
     ap.add_argument('--no-vendor', action='store_true')
     ap.add_argument('--manifest', help='update-manifest.json to check against the phone APK')
     a = ap.parse_args()
+    if a.trial_absent:
+        trial_absent(a.trial_absent)
+    missing = [f'--{n}' for n in ('phone', 'wear', 'release', 'mode') if getattr(a, n) is None]
+    if missing:
+        ap.error(f'required: {" ".join(missing)} (or --trial-absent PHONE_APK alone)')
     codes = {}
 
     up_code = int(build_gradle_value('appVersionCode'))
@@ -373,7 +430,7 @@ def main():
     check_watchface_name(a.wear)
     check_watchface_resources(a.wear)
     check_xml_drawable_constructors(a.wear)
-    check_rus_components(a.phone, a.wear)
+    check_rus_components(a.phone, a.wear, a.release)
     if not a.no_vendor:
         check_vendor(a.phone)
     check_upstream_hooks()

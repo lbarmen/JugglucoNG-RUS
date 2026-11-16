@@ -11,5 +11,7 @@ Common/src/testMobile/java/rus/
 # components in the manifest of the phone `rus` build only; strings with the rus_ prefix next to theirs
 Common/src/mobile/java/tk/glucodata/rus/
 Common/src/mobileRus/
+# CareLink trial (part 4p): test builds of the phone only (rus/rus-init.gradle adds it with -PrusRelease=0)
+Common/src/rusTrial/
 Common/src/mobile/res/values/rus_*
 Common/src/mobile/res/values-ru/rus_*
