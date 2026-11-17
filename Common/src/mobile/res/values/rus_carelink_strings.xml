@@ -26,8 +26,9 @@
     <string name="rus_carelink_note_running">in progress, %1$s U programmed</string>
     <string name="rus_carelink_note_interrupted">stopped early: %1$s of %2$s U delivered</string>
     <string name="rus_carelink_note_extended">square or dual wave bolus (%1$s)</string>
-    <string name="rus_carelink_note_stop_open" translatable="false">%1$s–…</string>
-    <string name="rus_carelink_note_stop" translatable="false">%1$s–%2$s</string>
+    <!-- the chart chip of a note shows its first 10 characters (upstream's journalMarkerDetail): "Stop HH:MM" fits -->
+    <string name="rus_carelink_note_stop_open">Stop %1$s–…</string>
+    <string name="rus_carelink_note_stop">Stop %1$s–%2$s</string>
     <!-- the CareLink window (4e) -->
     <string name="rus_carelink_title">CareLink</string>
     <string name="rus_carelink_entry_subtitle">MiniMed pump: sign-in, data, settings</string>

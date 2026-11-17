@@ -128,7 +128,7 @@ class CareLinkBasalWriterTest {
         write(at(10, rate = null, suspended = true))
         val note = notes().single()
         assertEquals("Pump stopped", note.title)
-        assertEquals("${hhmm(10)}–…", note.note)
+        assertEquals("Stop ${hhmm(10)}–…", note.note)
         assertEquals(t0 + 10 * min, note.timestamp)
         write(at(25, rate = null, suspended = true))
         write(at(40, rate = 0.8, suspended = false))
@@ -138,7 +138,10 @@ class CareLinkBasalWriterTest {
         assertEquals(0.0f, b[1].amount!!, 1e-6f)
         assertEquals(30, b[1].durationMinutes)
         assertEquals(40L, b[2].startMin())
-        assertEquals("${hhmm(10)}–${hhmm(40)}", notes().single().note)
+        assertEquals("Stop ${hhmm(10)}–${hhmm(40)}", notes().single().note)
+        // upstream's chart chip of a note is its first 10 characters (journalMarkerDetail): the word and the start time
+        // fit, the end does not (dispatcher 17.11: "12:02–12:2" was cut in the middle)
+        assertEquals("Stop ${hhmm(10)}", notes().single().note!!.take(10))
     }
 
     @Test
@@ -227,11 +230,11 @@ class CareLinkBasalWriterTest {
         assertEquals(2, b.size)
         assertEquals(10, b[0].durationMinutes)
         assertEquals("the stop segment ends at its last data, not 30 min ahead", 5, b[1].durationMinutes)
-        assertEquals("${hhmm(10)}–${hhmm(15)}", notes().single().note)
+        assertEquals("Stop ${hhmm(10)}–${hhmm(15)}", notes().single().note)
         // the next sign-in: a new segment, the old note stays as it was
         write(at(160))
         assertEquals(3, basal().size)
-        assertEquals("${hhmm(10)}–${hhmm(15)}", notes().single().note)
+        assertEquals("Stop ${hhmm(10)}–${hhmm(15)}", notes().single().note)
     }
 
     @Test
@@ -240,7 +243,7 @@ class CareLinkBasalWriterTest {
         write(at(10, rate = null, suspended = true))
         write(at(15, rate = null, suspended = true))
         write(at(100, rate = 0.8, suspended = false))
-        assertEquals("not the time of the next data hours later", "${hhmm(10)}–${hhmm(15)}", notes().single().note)
+        assertEquals("not the time of the next data hours later", "Stop ${hhmm(10)}–${hhmm(15)}", notes().single().note)
     }
 
     @Test
@@ -250,7 +253,7 @@ class CareLinkBasalWriterTest {
         write(at(1140, rate = null, suspended = true))
         write(at(1145, rate = 0.8, suspended = false))
         val end = DateTimeFormatter.ofPattern("dd.MM HH:mm").withZone(ZoneOffset.UTC).format(Instant.ofEpochMilli(t0 + 1145 * min))
-        assertEquals("${hhmm(1135)}–$end", notes().single().note)
+        assertEquals("Stop ${hhmm(1135)}–$end", notes().single().note)
         assertTrue(end.endsWith("00:05"))
     }
 

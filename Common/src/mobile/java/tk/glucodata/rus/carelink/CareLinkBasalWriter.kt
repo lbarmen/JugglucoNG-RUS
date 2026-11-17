@@ -27,7 +27,7 @@ import kotlin.math.abs
  * snapshots, a rate not known) closes the segment at its last data time: a gap, not a continuation. Duration at least 1
  * min and a finite rate: one refused record stops all of upstream's upload.
  *
- * Stop: upstream's chart draws no bar for 0 U/h, so a note "Pump stopped" with "HH:MM–…" is written too; its end
+ * Stop: upstream's chart draws no bar for 0 U/h, so a note "Pump stopped" with "Stop HH:MM–…" is written too (the chart chip shows a note's first 10 characters - "Stop HH:MM" fits); its end
  * is filled in when the pump runs again - or, when the data broke off meanwhile (more than 30 min, sign-out, "sign in
  * again"), with the last time it was seen stopped (critic of the joints, C2); a date when the end is another day
  * (critic 4d, N5). Unless the person changed the note.
