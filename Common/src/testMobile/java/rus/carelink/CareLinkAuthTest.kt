@@ -186,12 +186,21 @@ class CareLinkAuthTest {
     }
 
     @Test
-    fun unreadableSessionFileIsAStorageFailureNotASignOut() = runBlocking {
+    fun sessionFileNotOpenedThisTimeIsAStorageFailureNotASignOut() = runBlocking {
+        CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L))
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { throw java.security.KeyStoreException("made-up") })
+        val r = CareLinkAuth.ensureFresh(app)
+        assertEquals(FreshResult.Failed(0, "KeyStoreException"), r)
+        assertTrue(CareLinkAuth.hasSession(app))
+    }
+
+    @Test
+    fun sessionFileThatNeverOpensIsWipedAndNeedsSignIn() = runBlocking {
+        // critic of the joints, C4: the key no longer fits the file (another key) - not "no data" forever
         CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L))
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { KeyGenerator.getInstance("AES").apply { init(256) }.generateKey() })
-        val r = CareLinkAuth.ensureFresh(app)
-        assertTrue(r is FreshResult.Failed)
-        assertTrue(CareLinkAuth.hasSession(app))
+        assertEquals(FreshResult.NeedLogin, CareLinkAuth.ensureFresh(app))
+        assertFalse(CareLinkAuth.hasSession(app))
     }
 
     @Test

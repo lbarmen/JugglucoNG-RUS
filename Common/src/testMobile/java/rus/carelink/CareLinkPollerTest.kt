@@ -240,8 +240,8 @@ class CareLinkPollerTest {
         assertEquals("the new snapshot", 150.0, s.pumpNow!!.reservoirUnits!!, 1e-9)
         assertEquals(1, basal.size)
         assertEquals(1.5, iob.single()!!.iobUnits!!, 1e-9)
-        // 31 min later with no new poll: still no "no data" - the data time moved
-        CareLinkNotifier.checkNoData(app, store.read(), now + 31 * 60_000L)
+        // 21 min later with no new poll: no "no data" - the data time moved (the old one would be 31 min old)
+        CareLinkNotifier.checkNoData(app, store.read(), now + 21 * 60_000L)
         assertNull(shown(CareLinkNotifier.ID_NO_DATA))
     }
 
