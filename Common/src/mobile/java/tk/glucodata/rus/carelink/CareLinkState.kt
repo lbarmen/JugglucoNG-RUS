@@ -270,6 +270,16 @@ class CareLinkSettings(context: Context) {
     /** [warnAfterMin] in milliseconds. */
     val warnAfterMs: Long get() = warnAfterMin * 60_000L
 
+    /**
+     * The CareLink window has asked Android for the notification permission once (critic 4d, N5): after two refusals
+     * Android 13+ refuses the request silently, so the button then opens the app's notification screen at once.
+     */
+    var notificationsAsked: Boolean
+        get() = prefs.getBoolean(K_NOTIFICATIONS_ASKED, false)
+        set(v) {
+            prefs.edit().putBoolean(K_NOTIFICATIONS_ASKED, v).apply()
+        }
+
     companion object {
         const val PREFS = "rus_carelink_settings"
         const val DEFAULT_INTERVAL_MIN = 5
@@ -283,5 +293,6 @@ class CareLinkSettings(context: Context) {
         private const val K_CARBS = "writeCarbs"
         private const val K_NIGHTSCOUT = "sendToNightscout"
         private const val K_WARN = "warnAfterMin"
+        private const val K_NOTIFICATIONS_ASKED = "notificationsAsked"
     }
 }

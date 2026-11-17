@@ -11,13 +11,16 @@ import tk.glucodata.R
 /**
  * JugglucoNG-RUS, CareLink (stage 4c, 4e): three notifications on channel `rus_carelink`.
  * - "Sign in to CareLink again": the refresh key was refused; once, until a sign-in.
- * - "No pump data for N min": the newest pump data is older than the warning threshold
- *   ([CareLinkSettings.warnAfterMin], 30 min by default) while the session lives; once, until the data comes back,
- *   then it goes away by itself.
+ * - "No pump data for over N min" (N - the threshold, not the age at the moment of showing: the notification is not
+ *   updated, a frozen age would understate it hours later; critic of the texts 4d, B2): the newest pump data is older
+ *   than the warning threshold ([CareLinkSettings.warnAfterMin], 30 min by default) while the session lives; once,
+ *   until the data comes back, then it goes away by itself.
  * - "Pump records are not saved": the journal or basal write has failed poll after poll for longer than the same
  *   threshold (critic 4d2, C3: since a failed write moves the data time, "no data" no longer covers it); goes away
  *   after a poll that wrote fine.
- * A tap opens the CareLink window (4e; in a build without it - the app). Nothing personal in the text.
+ * A tap opens the CareLink window (4e; in a build without it - the app). Nothing personal in the text. With the app's
+ * notifications or our channel turned off nothing is posted and nothing is marked shown (critic 4d, N6): the next
+ * check posts once they are on again.
  */
 object CareLinkNotifier {
 
@@ -71,10 +74,13 @@ object CareLinkNotifier {
     /**
      * "Pump records are not saved": a poll that wrote fine clears the mark and the notification; a write error starts
      * the clock (first failing poll) or, past the threshold, shows the notification once. Other errors (no network, the
-     * cloud) leave the clock as it is - nothing was tried to be written.
+     * cloud) leave the clock as it is - nothing was tried to be written; so does an older answer, which keeps the write
+     * error in the state (critic 4d, N1). Signed out meanwhile - nothing (critic 4d, N2: a clock started after the
+     * sign-out's clear would give the next sign-in's first failure the whole pause).
      */
     internal fun checkWrites(context: Context, state: CareLinkState, nowMs: Long) {
         val app = context.applicationContext
+        if (!CareLinkSettings(app).enabled) return
         val store = CareLinkStateStore(app)
         when {
             state.status == CareLinkStatus.OK -> {
@@ -98,14 +104,14 @@ object CareLinkNotifier {
     }
 
     /**
-     * "No pump data for N min": shown once when the newest pump data is older than the warning threshold while polling
-     * is on and the session lives; taken away when data is fresh again or the link is off. Also called by the alarm
-     * without a poll: with no network no poll runs, but the data still gets old. No data ever since the sign-in - no
-     * notification (the CareLink window shows that). The threshold is read each time: a change in the window counts at
-     * the next check.
+     * "No pump data for over N min": shown once when the newest pump data is older than the warning threshold while
+     * polling is on and the session lives; taken away when data is fresh again or the link is off. Called after every
+     * poll that reached the cloud or failed on the way, by the alarm when no poll runs ([checkNoDataOnAlarm]) and by
+     * the CareLink window when the threshold changes. No data ever since the sign-in - no notification (the CareLink
+     * window shows that). The threshold is read each time.
      */
     fun checkNoData(context: Context, state: CareLinkState = CareLinkStateStore(context).read(),
-                    nowMs: Long = System.currentTimeMillis()) {
+                    nowMs: Long = CareLinkAuth.clock()) {
         val app = context.applicationContext
         try {
             val store = CareLinkStateStore(app)
@@ -116,8 +122,7 @@ object CareLinkNotifier {
             val stale = live && last != null && nowMs - last >= settings.warnAfterMs
             if (stale) {
                 if (store.noDataShown) return
-                val minutes = ((nowMs - last!!) / 60_000L).toInt()
-                if (post(app, ID_NO_DATA, app.getString(R.string.rus_carelink_no_data_title, minutes),
+                if (post(app, ID_NO_DATA, app.getString(R.string.rus_carelink_no_data_title, settings.warnAfterMin),
                         app.getString(R.string.rus_carelink_no_data_text))
                 ) {
                     store.noDataShown = true
@@ -131,12 +136,41 @@ object CareLinkNotifier {
         }
     }
 
-    /** A sign-in: "sign in again" goes away. */
+    /**
+     * The alarm's "no data" check (critic 4d, C1). The alarm comes an interval after the last poll, so the data is then
+     * "interval + upload delay" old: checked here, a threshold of 5 min with polls every 5 min warned on almost every
+     * alarm and the poll a second later took it back. So the alarm checks only when no poll runs: none queued (off, no
+     * session) or none for over 1.5 intervals (WorkManager waits for a network that is not there). Otherwise the poll
+     * it has just queued checks after it ([afterPoll]).
+     */
+    internal fun checkNoDataOnAlarm(context: Context, pollQueued: Boolean,
+                                    state: CareLinkState = CareLinkStateStore(context).read(),
+                                    nowMs: Long = CareLinkAuth.clock()) {
+        val app = context.applicationContext
+        try {
+            val last = state.lastPollAtMs
+            val interval = CareLinkSettings(app).intervalMin * 60_000L
+            if (pollQueued && last != null && nowMs - last in 0..interval * 3 / 2) return
+            checkNoData(app, state, nowMs)
+        } catch (t: Throwable) {
+            CareLinkLog.w("alarm no-data check failed (${t.javaClass.simpleName})")
+        }
+    }
+
+    /**
+     * A sign-in: "sign in again" goes away, and so does a write failure of a former session - its clock would give the
+     * new session's first failure the whole pause (critic 4d, N2).
+     */
     fun loggedIn(context: Context) {
         val app = context.applicationContext
         try {
             cancel(app, ID_NEED_LOGIN)
-            CareLinkStateStore(app).needLoginShown = false
+            cancel(app, ID_WRITE_FAIL)
+            CareLinkStateStore(app).apply {
+                needLoginShown = false
+                writeFailShown = false
+                writeFailSinceMs = null
+            }
         } catch (t: Throwable) {
             CareLinkLog.w("notification not removed (${t.javaClass.simpleName})")
         }
@@ -160,7 +194,7 @@ object CareLinkNotifier {
         }
     }
 
-    /** false - not shown (notifications off for the app, or refused). */
+    /** false - not shown (notifications off for the app, our channel off, or refused). */
     private fun post(app: Context, id: Int, title: String, text: String): Boolean {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return false
         if (!nm.areNotificationsEnabled()) {
@@ -168,6 +202,10 @@ object CareLinkNotifier {
             return false
         }
         ensureChannel(app)
+        if (channelOff(app)) {
+            CareLinkLog.i("notification not shown: the CareLink channel is off")
+            return false
+        }
         val tap = tapIntent(app)?.let {
             PendingIntent.getActivity(app, id, it, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         }
@@ -194,6 +232,15 @@ object CareLinkNotifier {
     internal fun tapIntent(app: Context): Intent? =
         CareLinkActivity.intentIfDeclared(app)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
             ?: app.packageManager.getLaunchIntentForPackage(app.packageName)
+
+    /**
+     * The person turned channel [CHANNEL] off in the system (critic 4d, N6): Android then drops our notifications
+     * silently. false when the channel is not made yet (it is made on and so not off).
+     */
+    internal fun channelOff(context: Context): Boolean {
+        val nm = context.applicationContext.getSystemService(NotificationManager::class.java) ?: return false
+        return nm.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
+    }
 
     private fun cancel(app: Context, id: Int) {
         app.getSystemService(NotificationManager::class.java)?.cancel(id)

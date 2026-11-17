@@ -204,6 +204,19 @@ class CareLinkAuthTest {
     }
 
     @Test
+    fun cutSessionFileIsWipedAndNeedsSignIn() = runBlocking {
+        // critic 4d, N7: a file shorter than its IV - SealedDataTooShortException, wrapped in the vault's
+        // StorageException - will never open: wiped, "sign in again" (not a storage error forever)
+        CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L))
+        val f = File(app.noBackupFilesDir, "rus-carelink/session.bin")
+        assertTrue(f.isFile)
+        f.writeBytes(byteArrayOf(1, 2, 3, 4, 5))
+        assertEquals(FreshResult.NeedLogin, CareLinkAuth.ensureFresh(app))
+        assertFalse("wiped", f.exists())
+        assertFalse(CareLinkAuth.hasSession(app))
+    }
+
+    @Test
     fun sessionWithoutRoleAsksUsersMe() = runBlocking {
         CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L, role = null))
         net.on("$CARELINK_BASE/users/me", ok("""{"role": "PATIENT"}"""))

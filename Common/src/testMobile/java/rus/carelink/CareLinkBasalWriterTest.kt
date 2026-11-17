@@ -3,6 +3,7 @@ package rus.carelink
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -21,6 +22,7 @@ import tk.glucodata.data.journal.JournalRepository
 import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.rus.carelink.CareLinkBasalWriter
 import tk.glucodata.rus.carelink.CareLinkIob
+import tk.glucodata.rus.carelink.CareLinkPoller
 import tk.glucodata.rus.carelink.CareLinkSettings
 import tk.glucodata.rus.carelink.PumpNow
 import tk.glucodata.rus.carelink.TempBasal
@@ -295,5 +297,23 @@ class CareLinkBasalWriterTest {
         assertEquals(now, ApiIobSnapshot.fresh(now)!!.timestampMillis)
         CareLinkIob.publish(null)
         assertEquals(1.0f, ApiIobSnapshot.fresh(now)!!.iobUnits, 1e-6f)
+    }
+
+    @Test
+    fun signOutTakesThePumpIobOffThePlateEvenWhenClosingTheBasalFails() {
+        // critic 4d, N3 and N7: the clearing after a sign-out runs whether or not closing the basal worked
+        CareLinkIob.publish(PumpNow(now - 2 * min, iobUnits = 2.5))
+        assertNotNull(ApiIobSnapshot.fresh(now))
+        runBlocking { CareLinkPoller.closeAfterSignOut(app).join() }
+        assertNull("the basal closed fine", ApiIobSnapshot.fresh(now))
+        CareLinkIob.publish(PumpNow(now - min, iobUnits = 1.5))
+        assertNotNull(ApiIobSnapshot.fresh(now))
+        CareLinkPoller.closeBasal = { throw IllegalStateException("made-up") }
+        try {
+            runBlocking { CareLinkPoller.closeAfterSignOut(app).join() }
+        } finally {
+            CareLinkPoller.resetForTest()
+        }
+        assertNull("closing the basal failed", ApiIobSnapshot.fresh(now))
     }
 }

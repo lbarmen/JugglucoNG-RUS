@@ -2,6 +2,7 @@ package rus.carelink
 
 import android.app.Application
 import android.app.Notification
+import android.app.NotificationChannel
 import android.app.NotificationManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -27,6 +28,7 @@ import rus.carelink.CareLinkTestData.ok
 import rus.carelink.CareLinkTestData.status
 import tk.glucodata.rus.carelink.AesGcmSessionCipher
 import tk.glucodata.rus.carelink.CareLinkAuth
+import tk.glucodata.rus.carelink.CareLinkError
 import tk.glucodata.rus.carelink.CareLinkErrorKind
 import tk.glucodata.rus.carelink.CareLinkNotifier
 import tk.glucodata.rus.carelink.CareLinkPoller
@@ -518,7 +520,10 @@ class CareLinkPollerTest {
         poll()
         val n = shown(CareLinkNotifier.ID_NO_DATA)
         assertNotNull(n)
-        assertTrue(n!!.extras.getCharSequence(Notification.EXTRA_TITLE).toString().contains("31"))
+        // critic of the texts 4d, B2: the threshold, not the age at this moment - the notification is not updated
+        val title = n!!.extras.getCharSequence(Notification.EXTRA_TITLE).toString()
+        assertTrue(title, title.contains("over 30 min"))
+        assertFalse(title, title.contains("31"))
         // swiped away: not posted again while the data is still missing
         nm.cancel(CareLinkNotifier.ID_NO_DATA)
         now += 5 * 60_000L
@@ -617,5 +622,92 @@ class CareLinkPollerTest {
         poll()
         assertEquals(1, basal.size)
         assertTrue(iob.isEmpty())
+    }
+
+    // ---------------------------------------------------------------- critic 4d (code and texts)
+
+    @Test
+    fun theAlarmDoesNotWarnBeforeItsPollAndThePollAfterItDoes() {
+        // critic 4d, C1 and the person's test 17.11: "warn after" 5 min with updates every 5 min
+        CareLinkSettings(app).warnAfterMin = 5
+        net.on(dm, ok(answer(lagMin = 2)))
+        poll(PollReason.ALARM)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
+        // the next alarm: the data is 7 min old, but the alarm has queued a poll - no check before it
+        now += 5 * 60_000L
+        CareLinkNotifier.checkNoDataOnAlarm(app, pollQueued = true, state = store.read(), nowMs = now)
+        assertNull("not before the alarm's poll", shown(CareLinkNotifier.ID_NO_DATA))
+        // the poll brings fresh data: nothing
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll(PollReason.ALARM)
+        assertNull("fresh data after the poll", shown(CareLinkNotifier.ID_NO_DATA))
+        // the next one: the cloud has nothing newer (MiniMed Mobile did not upload) - the poll warns
+        now += 5 * 60_000L
+        net.on(dm, ok(answer(lagMin = 6)))
+        poll(PollReason.ALARM)
+        assertNotNull("no new data after the poll", shown(CareLinkNotifier.ID_NO_DATA))
+    }
+
+    @Test
+    fun theAlarmChecksByItselfWhenPollsDoNotRun() {
+        // no network: WorkManager does not start the poll, the data still gets old - the alarm checks after 1.5 intervals
+        CareLinkSettings(app).warnAfterMin = 5
+        seed(now - 3 * 60_000L) // the last poll 5 min ago
+        now += 2 * 60_000L
+        CareLinkNotifier.checkNoDataOnAlarm(app, pollQueued = true, state = store.read(), nowMs = now)
+        assertNull("7 min since the last poll: polls run", shown(CareLinkNotifier.ID_NO_DATA))
+        now += 60_000L
+        CareLinkNotifier.checkNoDataOnAlarm(app, pollQueued = true, state = store.read(), nowMs = now)
+        assertNotNull("8 min: no poll for over 1.5 intervals", shown(CareLinkNotifier.ID_NO_DATA))
+    }
+
+    @Test
+    fun anOlderAnswerKeepsTheWriteFailure() {
+        // critic 4d, N1: an older answer writes nothing - the write failure, its clock and its notification stand
+        CareLinkSettings(app).warnAfterMin = 5
+        CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        val since = store.writeFailSinceMs
+        assertEquals(now, since)
+        now += 6 * 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        // the cloud serves an older answer
+        now += 60_000L
+        net.on(dm, ok(answer(lagMin = 20)))
+        val s = poll()
+        assertEquals(CareLinkStatus.ERROR, s.status)
+        assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
+        assertEquals("the clock goes on", since, store.writeFailSinceMs)
+        assertNotNull("not taken away", shown(CareLinkNotifier.ID_WRITE_FAIL))
+    }
+
+    @Test
+    fun aWriteFailureClockDoesNotOutliveTheSignOut() {
+        // critic 4d, N2: a check after the sign-out's clear writes nothing; a sign-in drops a former session's clock
+        CareLinkSettings(app).enabled = false
+        val failed = CareLinkState(CareLinkStatus.ERROR, now, now, CareLinkError(CareLinkErrorKind.WRITE, 0, "IllegalStateException"))
+        CareLinkNotifier.checkWrites(app, failed, now)
+        assertNull(store.writeFailSinceMs)
+        CareLinkSettings(app).enabled = true
+        store.writeFailSinceMs = now - 7 * 24 * 3_600_000L
+        store.writeFailShown = true
+        RusCareLinkStarter.afterLogin(app)
+        assertNull(store.writeFailSinceMs)
+        assertFalse(store.writeFailShown)
+    }
+
+    @Test
+    fun aChannelTurnedOffPostsNothingAndMarksNothing() {
+        // critic 4d, N6: Android drops the notifications of a channel turned off - nothing marked shown, the next check
+        // posts once it is on again
+        nm.createNotificationChannel(NotificationChannel(CareLinkNotifier.CHANNEL, "CareLink", NotificationManager.IMPORTANCE_NONE))
+        assertTrue(CareLinkNotifier.channelOff(app))
+        seed(now - 31 * 60_000L)
+        CareLinkNotifier.checkNoData(app, store.read(), now)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
+        assertFalse(store.noDataShown)
     }
 }

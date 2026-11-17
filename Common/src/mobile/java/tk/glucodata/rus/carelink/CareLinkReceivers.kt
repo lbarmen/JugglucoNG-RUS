@@ -6,8 +6,9 @@ import android.content.Intent
 
 /**
  * JugglucoNG-RUS, CareLink (stage 4c): the poll alarm. It does not poll (a broadcast has ~10 s): the next alarm first,
- * so the chain never breaks, then the "no data" check (it works with no network too) and a one-time [CareLinkWorker]
- * in WorkManager; the broadcast stays alive until WorkManager has stored it - as upstream's
+ * so the chain never breaks, then a one-time [CareLinkWorker] in WorkManager and the "no data" check only when no poll
+ * runs ([CareLinkNotifier.checkNoDataOnAlarm]: with no network WorkManager does not start the poll, but the data still
+ * gets old; critic 4d, C1); the broadcast stays alive until WorkManager has stored it - as upstream's
  * LumiflexFollowerPollReceiver. No wake lock by hand: WorkManager holds its own. Not exported (manifest).
  */
 class CareLinkAlarmReceiver : BroadcastReceiver() {
@@ -19,8 +20,8 @@ class CareLinkAlarmReceiver : BroadcastReceiver() {
                 pending.finish()
                 return
             }
-            CareLinkNotifier.checkNoData(context)
             val op = CareLinkScheduler.enqueuePoll(context, PollReason.ALARM)
+            CareLinkNotifier.checkNoDataOnAlarm(context, pollQueued = op != null)
             if (op == null) pending.finish() else op.result.addListener({ pending.finish() }, { it.run() })
         } catch (t: Throwable) {
             CareLinkLog.w("poll alarm failed (${t.javaClass.simpleName})")

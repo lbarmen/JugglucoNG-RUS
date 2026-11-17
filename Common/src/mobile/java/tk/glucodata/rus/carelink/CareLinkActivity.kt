@@ -17,7 +17,7 @@ import androidx.activity.viewModels
 import tk.glucodata.ui.JugglucoTheme
 
 /**
- * JugglucoNG-RUS, CareLink (stage 4e): the CareLink window - sign-in and sign-out, whether the pump is on line (state,
+ * JugglucoNG-RUS, CareLink (stage 4e): the CareLink window - sign-in and sign-out, whether pump data comes in (state,
  * data age, the pump's active insulin, reservoir, battery), poll interval, warning threshold, insulin type, the two
  * switches, and the battery / notification / sound buttons. Upstream's theme ([JugglucoTheme] with their light / dark
  * choice). Opened from upstream's settings ([RusCareLinkEntry], hook `carelink-settings`), the launcher shortcut and
@@ -98,14 +98,19 @@ class CareLinkActivity : ComponentActivity() {
         if (!launch { startActivity(direct) }) launch { startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
     }
 
-    /** Android 13+: the system question once; refused before (or older Android) - the app's notification screen. */
+    /**
+     * Android 13+: the system question once ever (kept in the settings, not for the window's life: after two refusals
+     * Android refuses silently and the first tap of every new window did nothing; critic 4d, N5); refused before (or
+     * older Android) - the app's notification screen.
+     */
     private fun askNotifications() {
+        val settings = CareLinkSettings(this)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             !shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED &&
-            !askedNotificationsOnce
+            !settings.notificationsAsked
         ) {
-            askedNotificationsOnce = true
+            settings.notificationsAsked = true
             if (launch { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }) return
         }
         launch {
@@ -141,8 +146,6 @@ class CareLinkActivity : ComponentActivity() {
         CareLinkLog.w("screen not allowed (${e.javaClass.simpleName})")
         false
     }
-
-    private var askedNotificationsOnce = false
 
     companion object {
         /**

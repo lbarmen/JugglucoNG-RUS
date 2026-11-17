@@ -77,7 +77,7 @@ class CareLinkJournalWriterTest {
         assertEquals(2.0f, row.amount!!, 1e-6f)
         assertEquals(t0 + 10_000L, row.timestamp)
         assertEquals("carelink:INSULIN:2027-01-15T06:00:10:0:insulin", row.sourceRecordId)
-        assertEquals("Pump", row.title)
+        assertEquals("Pump bolus", row.title)
         assertNull(row.note)
         assertEquals("switch off - a mirror source, sent nowhere", JournalEntrySource.API.storageValue, row.source)
         val default = runBlocking { CareLinkInsulin.presetId(app) }

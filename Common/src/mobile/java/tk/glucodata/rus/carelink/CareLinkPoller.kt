@@ -83,9 +83,13 @@ object CareLinkPoller {
         return background.launch {
             try {
                 mutex.withLock {
-                    withContext(NonCancellable) { closeBasal(app) }
-                    // a poll running at the sign-out may have put the pump's IoB back on the plate (critic 4d2, N3)
-                    CareLinkIob.clear()
+                    try {
+                        withContext(NonCancellable) { closeBasal(app) }
+                    } finally {
+                        // a poll running at the sign-out may have put the pump's IoB back on the plate (critic 4d2, N3);
+                        // cleared even when closing the basal failed (critic 4d, N3)
+                        CareLinkIob.clear()
+                    }
                 }
             } catch (t: Throwable) {
                 CareLinkLog.w("basal not closed after sign-out (${t.javaClass.simpleName})")
@@ -161,15 +165,21 @@ object CareLinkPoller {
 
         // checked under the lock of the sign-out's clear(): its result must not bring the state back
         val after = store.updateIf({ CareLinkSettings(app).enabled }) { cur ->
+            // an older answer writes nothing, so it says nothing of the writes: a write failure stands, with its clock
+            // and its notification (critic 4d, N1)
+            val keptWriteError = cur.lastError?.takeIf {
+                stale && cur.status == CareLinkStatus.ERROR && it.kind == CareLinkErrorKind.WRITE
+            }
+            val error = writeError ?: keptWriteError
             cur.copy(
-                status = if (writeError == null) CareLinkStatus.OK else CareLinkStatus.ERROR,
+                status = if (error == null) CareLinkStatus.OK else CareLinkStatus.ERROR,
                 lastPollAtMs = now,
                 lastDataAtMs = listOfNotNull(cur.lastDataAtMs, dataAt).maxOrNull(),
-                lastError = writeError,
+                lastError = error,
                 pumpNow = CareLinkPumpNow.merge(cur.pumpNow, pump),
             )
         } ?: return store.read()
-        if (writeError == null) store.firstPollPending = false
+        if (writeError == null && !stale) store.firstPollPending = false
         if (writeError == null) {
             CareLinkLog.i("poll ok: reason=$reason first=$firstPoll events=${events.size} empty=${pump == null} stale=$stale code=${http.code}")
         } else {
