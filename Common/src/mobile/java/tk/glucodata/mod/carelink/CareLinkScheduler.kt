@@ -41,6 +41,7 @@ object CareLinkScheduler {
 
     private const val PREFS = "mod_carelink_schedule"
     private const val K_NEXT = "nextAlarmElapsedMs"
+    private const val K_LAST_ALARM = "lastAlarmAtMs"
     private const val K_ARMED = "armed"
     private const val REQUEST_CODE = 1_947_000
 
@@ -81,6 +82,17 @@ object CareLinkScheduler {
         setAlarm(app, at)
         prefs.edit().putLong(K_NEXT, at).putBoolean(K_ARMED, true).apply()
         return true
+    }
+
+    /**
+     * The alarm came at [nowMs] (wall clock, as the poll times): stored; the previous alarm's time returned (null - none
+     * since the chain was armed after a sign-in). For the alarm's "no data" check (critic 4d2, N3).
+     */
+    fun markAlarm(context: Context, nowMs: Long): Long? {
+        val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val prev = if (prefs.contains(K_LAST_ALARM)) prefs.getLong(K_LAST_ALARM, 0L) else null
+        prefs.edit().putLong(K_LAST_ALARM, nowMs).apply()
+        return prev
     }
 
     /** Removes the alarm and the periodic safety work. A one-time poll already queued runs and finds nothing to do. */

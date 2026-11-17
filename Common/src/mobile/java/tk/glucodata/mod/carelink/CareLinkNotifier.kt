@@ -53,7 +53,11 @@ object CareLinkNotifier {
         }
     }
 
-    /** After a poll that reached the cloud or failed on the way: the sign-in works, check the data age and the writes. */
+    /**
+     * After a poll that reached the cloud or failed on the way: the sign-in works, check the data age and the writes.
+     * Each step on its own (critic 4d2, N2): while polls run, this is the only "no data" check, so a failure in the
+     * write check must not skip it.
+     */
     fun afterPoll(context: Context, state: CareLinkState, nowMs: Long) {
         val app = context.applicationContext
         try {
@@ -64,19 +68,24 @@ object CareLinkNotifier {
                     store.needLoginShown = false
                 }
             }
-            checkWrites(app, state, nowMs)
-            checkNoData(app, state, nowMs)
         } catch (t: Throwable) {
-            CareLinkLog.w("notification check failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("need-login removal failed (${t.javaClass.simpleName})")
         }
+        try {
+            checkWrites(app, state, nowMs)
+        } catch (t: Throwable) {
+            CareLinkLog.w("write check failed (${t.javaClass.simpleName})")
+        }
+        checkNoData(app, state, nowMs) // has its own try
     }
 
     /**
      * "Pump records are not saved": a poll that wrote fine clears the mark and the notification; a write error starts
      * the clock (first failing poll) or, past the threshold, shows the notification once. Other errors (no network, the
      * cloud) leave the clock as it is - nothing was tried to be written; so does an older answer, which keeps the write
-     * error in the state (critic 4d, N1). Signed out meanwhile - nothing (critic 4d, N2: a clock started after the
-     * sign-out's clear would give the next sign-in's first failure the whole pause).
+     * error in the state while the clock runs (critic 4d, N1; 4d2, N1). Signed out meanwhile - nothing (critic 4d, N2:
+     * a clock started after the sign-out's clear would give the next sign-in's first failure the whole pause). Marked
+     * shown while the notifications are off - the mark goes (critic 4d2, N4, see [blocked]).
      */
     internal fun checkWrites(context: Context, state: CareLinkState, nowMs: Long) {
         val app = context.applicationContext
@@ -93,12 +102,11 @@ object CareLinkNotifier {
             state.status == CareLinkStatus.ERROR && state.lastError?.kind == CareLinkErrorKind.WRITE -> {
                 val since = store.writeFailSinceMs ?: nowMs.also { store.writeFailSinceMs = it }
                 val minutes = ((nowMs - since) / 60_000L).toInt()
-                if (nowMs - since < CareLinkSettings(app).warnAfterMs || store.writeFailShown) return
-                if (post(app, ID_WRITE_FAIL, app.getString(R.string.mod_carelink_write_fail_title),
-                        app.getString(R.string.mod_carelink_write_fail_text, minutes))
-                ) {
-                    store.writeFailShown = true
-                }
+                if (nowMs - since < CareLinkSettings(app).warnAfterMs) return
+                if (store.writeFailShown && !blocked(app)) return
+                val posted = post(app, ID_WRITE_FAIL, app.getString(R.string.mod_carelink_write_fail_title),
+                    app.getString(R.string.mod_carelink_write_fail_text, minutes))
+                if (posted != store.writeFailShown) store.writeFailShown = posted
             }
         }
     }
@@ -121,12 +129,10 @@ object CareLinkNotifier {
             val last = state.lastDataAtMs
             val stale = live && last != null && nowMs - last >= settings.warnAfterMs
             if (stale) {
-                if (store.noDataShown) return
-                if (post(app, ID_NO_DATA, app.getString(R.string.mod_carelink_no_data_title, settings.warnAfterMin),
-                        app.getString(R.string.mod_carelink_no_data_text))
-                ) {
-                    store.noDataShown = true
-                }
+                if (store.noDataShown && !blocked(app)) return
+                val posted = post(app, ID_NO_DATA, app.getString(R.string.mod_carelink_no_data_title, settings.warnAfterMin),
+                    app.getString(R.string.mod_carelink_no_data_text))
+                if (posted != store.noDataShown) store.noDataShown = posted
             } else if (store.noDataShown) {
                 cancel(app, ID_NO_DATA)
                 store.noDataShown = false
@@ -141,16 +147,21 @@ object CareLinkNotifier {
      * "interval + upload delay" old: checked here, a threshold of 5 min with polls every 5 min warned on almost every
      * alarm and the poll a second later took it back. So the alarm checks only when no poll runs: none queued (off, no
      * session) or none for over 1.5 intervals (WorkManager waits for a network that is not there). Otherwise the poll
-     * it has just queued checks after it ([afterPoll]).
+     * it has just queued checks after it ([afterPoll]). A poll finished since the previous alarm ([prevAlarmAtMs], wall
+     * clock; null - none known) also means polls run (critic 4d2, N3): the alarm may come late - after a reboot, a
+     * change of the interval, or Doze letting it through once in 9 min - and the age of the last poll alone would then
+     * check before the poll and take it back a second later.
      */
-    internal fun checkNoDataOnAlarm(context: Context, pollQueued: Boolean,
+    internal fun checkNoDataOnAlarm(context: Context, pollQueued: Boolean, prevAlarmAtMs: Long? = null,
                                     state: CareLinkState = CareLinkStateStore(context).read(),
                                     nowMs: Long = CareLinkAuth.clock()) {
         val app = context.applicationContext
         try {
             val last = state.lastPollAtMs
             val interval = CareLinkSettings(app).intervalMin * 60_000L
-            if (pollQueued && last != null && nowMs - last in 0..interval * 3 / 2) return
+            val recent = last != null && nowMs - last in 0..interval * 3 / 2
+            val sinceAlarm = last != null && prevAlarmAtMs != null && prevAlarmAtMs <= nowMs && last in prevAlarmAtMs..nowMs
+            if (pollQueued && (recent || sinceAlarm)) return
             checkNoData(app, state, nowMs)
         } catch (t: Throwable) {
             CareLinkLog.w("alarm no-data check failed (${t.javaClass.simpleName})")
@@ -240,6 +251,16 @@ object CareLinkNotifier {
     internal fun channelOff(context: Context): Boolean {
         val nm = context.applicationContext.getSystemService(NotificationManager::class.java) ?: return false
         return nm.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE
+    }
+
+    /**
+     * The app's notifications or our channel are off. A notification marked shown is then gone (Android removes it):
+     * the checks drop the mark, so the first check after they are on again posts it (critic 4d2, N4). A swipe or a tap
+     * keeps the mark - not posted again until the data comes back.
+     */
+    private fun blocked(app: Context): Boolean {
+        val nm = app.getSystemService(NotificationManager::class.java) ?: return false
+        return !nm.areNotificationsEnabled() || channelOff(app)
     }
 
     private fun cancel(app: Context, id: Int) {

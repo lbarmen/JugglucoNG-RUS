@@ -166,10 +166,11 @@ object CareLinkPoller {
         // checked under the lock of the sign-out's clear(): its result must not bring the state back
         val after = store.updateIf({ CareLinkSettings(app).enabled }) { cur ->
             // an older answer writes nothing, so it says nothing of the writes: a write failure stands, with its clock
-            // and its notification (critic 4d, N1)
-            val keptWriteError = cur.lastError?.takeIf {
-                stale && cur.status == CareLinkStatus.ERROR && it.kind == CareLinkErrorKind.WRITE
-            }
+            // and its notification (critic 4d, N1) - also when a network or cloud failure came in between and took its
+            // place in the state, while its clock still runs (critic 4d2, N1)
+            val keptWriteError = if (!stale) null else
+                cur.lastError?.takeIf { cur.status == CareLinkStatus.ERROR && it.kind == CareLinkErrorKind.WRITE }
+                    ?: CareLinkError(CareLinkErrorKind.WRITE).takeIf { store.writeFailSinceMs != null }
             val error = writeError ?: keptWriteError
             cur.copy(
                 status = if (error == null) CareLinkStatus.OK else CareLinkStatus.ERROR,

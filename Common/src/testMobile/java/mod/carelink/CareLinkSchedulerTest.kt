@@ -250,6 +250,15 @@ class CareLinkSchedulerTest {
     }
 
     @Test
+    fun theAlarmRemembersThePreviousOne() {
+        // critic 4d2, N3: the alarm's "no data" check asks whether a poll finished since the previous alarm
+        assertNull(CareLinkScheduler.markAlarm(app, now))
+        assertEquals(now, CareLinkScheduler.markAlarm(app, now + 300_000L))
+        CareLinkScheduler.disarm(app)
+        assertNull("a sign-out or \"sign in again\" starts over", CareLinkScheduler.markAlarm(app, now + 600_000L))
+    }
+
+    @Test
     fun intervalOnlyFiveTenOrFifteen() {
         val s = CareLinkSettings(app)
         assertEquals(5, s.intervalMin)

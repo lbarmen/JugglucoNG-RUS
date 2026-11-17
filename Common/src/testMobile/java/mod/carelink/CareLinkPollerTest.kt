@@ -18,6 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import mod.carelink.CareLinkTestData.CARELINK_BASE
@@ -709,5 +710,86 @@ class CareLinkPollerTest {
         CareLinkNotifier.checkNoData(app, store.read(), now)
         assertNull(shown(CareLinkNotifier.ID_NO_DATA))
         assertFalse(store.noDataShown)
+    }
+
+    // ---------------------------------------------------------------- critic 4d2 (second round, low)
+
+    @Test
+    fun aFailingWriteCheckDoesNotSkipTheNoDataCheck() {
+        // critic 4d2, N2: while polls run, the poll is the only "no data" check - a throw in the write check must not
+        // skip it. A broken stored write clock makes the write check throw.
+        seed(now - 31 * 60_000L)
+        app.getSharedPreferences(CareLinkStateStore.PREFS, 0).edit().putString("writeFailSinceMs", "broken").commit()
+        CareLinkNotifier.afterPoll(app, store.read(), now)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
+    }
+
+    @Test
+    fun anOlderAnswerAfterANetworkFailureKeepsTheWriteFailure() {
+        // critic 4d2, N1: write failure -> no network -> an older answer: the clock and the notification stand
+        CareLinkSettings(app).warnAfterMin = 5
+        CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        val since = store.writeFailSinceMs
+        assertEquals(now, since)
+        now += 6 * 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        now += 60_000L
+        net.on(dm, NO_NETWORK)
+        assertEquals(CareLinkErrorKind.NO_NETWORK, poll().lastError!!.kind)
+        now += 60_000L
+        net.on(dm, ok(answer(lagMin = 20)))
+        val s = poll()
+        assertEquals(CareLinkStatus.ERROR, s.status)
+        assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
+        assertEquals("the clock goes on", since, store.writeFailSinceMs)
+        assertNotNull("not taken away", shown(CareLinkNotifier.ID_WRITE_FAIL))
+    }
+
+    @Test
+    fun aLateAlarmChecksOnlyWhenNoPollFollowedThePreviousOne() {
+        // critic 4d2, N3: interval 5, the alarm comes 9 min after the previous one (Doze), a poll right after that one
+        CareLinkSettings(app).warnAfterMin = 5
+        store.write(CareLinkState(CareLinkStatus.OK, now - 9 * 60_000L, now - 11 * 60_000L, null,
+            PumpNow(now - 11 * 60_000L, reservoirUnits = 90.0)))
+        CareLinkNotifier.checkNoDataOnAlarm(app, pollQueued = true, prevAlarmAtMs = now - 9 * 60_000L - 2_000L,
+            state = store.read(), nowMs = now)
+        assertNull("a poll followed the previous alarm: polls run", shown(CareLinkNotifier.ID_NO_DATA))
+        // no poll since the previous alarm (no network): the alarm checks
+        store.write(CareLinkState(CareLinkStatus.OK, now - 12 * 60_000L, now - 14 * 60_000L, null,
+            PumpNow(now - 14 * 60_000L, reservoirUnits = 90.0)))
+        CareLinkNotifier.checkNoDataOnAlarm(app, pollQueued = true, prevAlarmAtMs = now - 9 * 60_000L,
+            state = store.read(), nowMs = now)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
+    }
+
+    @Test
+    fun notificationsTurnedOffAndOnBringTheWarningsBack() {
+        // critic 4d2, N4: Android removes our notifications when they are turned off; the mark must go with them
+        CareLinkSettings(app).warnAfterMin = 5
+        seed(now - 31 * 60_000L)
+        store.writeFailSinceMs = now - 6 * 60_000L
+        val failed = CareLinkState(CareLinkStatus.ERROR, now, now - 31 * 60_000L,
+            CareLinkError(CareLinkErrorKind.WRITE, 0, "IllegalStateException"))
+        CareLinkNotifier.checkNoData(app, store.read(), now)
+        CareLinkNotifier.checkWrites(app, failed, now)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
+        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        shadowOf(nm).setNotificationsEnabled(false)
+        nm.cancelAll()
+        now += 5 * 60_000L
+        CareLinkNotifier.checkNoData(app, store.read(), now)
+        CareLinkNotifier.checkWrites(app, failed, now)
+        assertFalse(store.noDataShown)
+        assertFalse(store.writeFailShown)
+        shadowOf(nm).setNotificationsEnabled(true)
+        now += 5 * 60_000L
+        CareLinkNotifier.checkNoData(app, store.read(), now)
+        CareLinkNotifier.checkWrites(app, failed, now)
+        assertNotNull("back once on again", shown(CareLinkNotifier.ID_NO_DATA))
+        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
     }
 }
