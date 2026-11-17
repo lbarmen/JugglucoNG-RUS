@@ -13,8 +13,7 @@ The same JugglucoNG plus a few changes of our own. The author's code is not rewr
 own files (the folder [`mod/`](/mod) and the resources of the `mod` build type), so that JugglucoNG updates can be
 merged easily. Not a single line of the author's files is modified at the moment ([registry of hooks](/mod/HOOKS.md)).
 
-Based on JugglucoNG 1.3.2-Alpha. Latest version: 1.3.2-2 of 2026-11-15 (built under the former
-name: formerly JugglucoNG-RUS, package tk.glucodata.ng.rus).
+Based on JugglucoNG 1.3.2-Alpha. Latest version: 1.3.2-2 of 2026-11-15 (built under the former name, see [mod/CHANGES.md](/mod/CHANGES.md)).
 What the app itself can do is in the [author's README](/README.md).
 
 ## How it differs from the official app
