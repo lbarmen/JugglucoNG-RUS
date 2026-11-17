@@ -27,10 +27,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MIN_LEN = 6
 KINDS = {'1': 'nightscout', '2': 'serial', '3': 'other'}
-KIND_RU = {'nightscout': 'адрес Nightscout', 'serial': 'серийный номер', 'other': 'другое'}
-HEADER = ('# Личный список запретов для mod/check-secrets.sh: этого не должно быть в открытом репозитории.\n'
-          '# Не в git, не в чат. Одна запись на строку, строка с # - пометка.\n'
-          '# Добавить запись: python -X utf8 code\\mod\\secrets-deny.py add (значение не показывается).\n')
+KIND_RU = {'nightscout': 'Nightscout address', 'serial': 'serial number', 'other': 'other'}  # labels shown to the owner
+HEADER = ('# Personal deny list for mod/check-secrets.sh: these must not appear in the public repository.\n'
+          '# Not in git, not in chat. One entry per line, a line with # is a note.\n'
+          '# Add an entry: python -X utf8 code\\mod\\secrets-deny.py add (the value is not shown).\n')
 
 
 def deny_path():
@@ -76,30 +76,30 @@ def normalize(kind, value):
         v = v.rsplit('@', 1)[-1]
         v = re.sub(r':\d+$', '', v).lower().rstrip('.')
         if '.' not in v:
-            return None, 'это не похоже на адрес сервера (нет точки)'
+            return None, 'this does not look like a server address (no dot)'
     elif kind == 'serial':
         v = re.sub(r'\s+', '', v)
     if len(v) < MIN_LEN:
-        return None, f'короче {MIN_LEN} символов: такая запись совпадала бы почти со всем'
+        return None, f'shorter than {MIN_LEN} characters: such an entry would match almost everything'
     if '\t' in v:
-        return None, 'в записи есть табуляция'
+        return None, 'the entry contains a tab'
     return v, ''
 
 
 def ask_kind():
-    print('\nЧто добавить?  1 - адрес Nightscout   2 - серийный номер   3 - другое   Enter - закончить')
+    print('\nWhat to add?  1 - Nightscout address   2 - serial number   3 - other   Enter - finish')
     while True:
-        k = input('Номер: ').strip()
+        k = input('Number: ').strip()
         if not k:
             return None
         if k in KINDS:
             return KINDS[k]
-        print('  введи 1, 2, 3 или просто Enter')
+        print('  type 1, 2, 3 or just Enter')
 
 
 def cmd_add(path):
-    print(f'Список: {path}')
-    print('Значение при вводе не видно (вставка работает: Ctrl+V или правая кнопка мыши) - его нужно ввести дважды.')
+    print(f'List: {path}')
+    print('The value is not visible while typing (pasting works: Ctrl+V or right mouse button) - enter it twice.')
     added = 0
     while True:
         kind = ask_kind()
@@ -107,22 +107,22 @@ def cmd_add(path):
             break
         first = getpass.getpass(f'{KIND_RU[kind]}: ')
         if not first.strip():
-            print('  пусто - пропускаю')
+            print('  empty - skipping')
             continue
-        second = getpass.getpass('ещё раз: ')
+        second = getpass.getpass('once more: ')
         v1, why = normalize(kind, first)
         v2, _ = normalize(kind, second)
         if v1 is None:
-            print(f'  не добавлено: {why}')
+            print(f'  not added: {why}')
             continue
         if v1 != v2:
-            print('  не добавлено: два ввода не совпали')
+            print('  not added: the two entries differ')
             continue
         lines = read_lines(path)
         have = entries(lines)
         dup = [n for n, (_, v, _, _) in enumerate(have, 1) if v.lower() == v1.lower()]
         if dup:
-            print(f'  уже есть: запись {dup[0]}')
+            print(f'  already there: entry {dup[0]}')
             continue
         if not lines:
             lines = HEADER.rstrip('\n').split('\n')
@@ -130,9 +130,9 @@ def cmd_add(path):
         path.parent.mkdir(parents=True, exist_ok=True)
         write_lines(path, lines)
         added += 1
-        print(f'  добавлено: запись {len(have) + 1}, {KIND_RU[kind]}, {len(v1)} символов')
+        print(f'  added: entry {len(have) + 1}, {KIND_RU[kind]}, {len(v1)} characters')
     total = len(entries(read_lines(path)))
-    print(f'\nДобавлено записей: {added}; всего в списке: {total}.')
+    print(f'\nEntries added: {added}; in the list in all: {total}.')
     if total == 0:
         return 0
     return cmd_check(path)
@@ -141,12 +141,12 @@ def cmd_add(path):
 def cmd_list(path):
     have = entries(read_lines(path))
     if not path.is_file():
-        print(f'Списка нет: {path}')
+        print(f'No list: {path}')
         return 1
-    print(f'{path}: записей {len(have)} (значения не показываются)')
+    print(f'{path}: entries {len(have)} (values are not shown)')
     for n, (_, v, kind, day) in enumerate(have, 1):
-        short = '  КОРОЧЕ 6 - check-secrets.sh остановится' if len(v.encode('utf-8')) < MIN_LEN else ''
-        print(f'  {n}. {KIND_RU.get(kind, "без пометки")}, {len(v)} символов' + (f', {day}' if day else '') + short)
+        short = '  SHORTER THAN 6 - check-secrets.sh will stop' if len(v.encode('utf-8')) < MIN_LEN else ''
+        print(f'  {n}. {KIND_RU.get(kind, "no note")}, {len(v)} characters' + (f', {day}' if day else '') + short)
     return 0
 
 
@@ -154,7 +154,7 @@ def cmd_remove(path, number):
     lines = read_lines(path)
     have = entries(lines)
     if not number.isdigit() or not 1 <= int(number) <= len(have):
-        print(f'Нет записи {number!r}: в списке {len(have)} (python -X utf8 mod/secrets-deny.py list)')
+        print(f'No entry {number!r}: the list has {len(have)} (python -X utf8 mod/secrets-deny.py list)')
         return 1
     i, _, kind, _ = have[int(number) - 1]
     drop = {i}
@@ -163,7 +163,7 @@ def cmd_remove(path, number):
         if i - 2 >= 0 and not lines[i - 2].strip():
             drop.add(i - 2)  # and the empty line add put above it
     write_lines(path, [ln for j, ln in enumerate(lines) if j not in drop])
-    print(f'Запись {number} удалена; осталось {len(have) - 1}. Номера после неё сдвинулись на один.')
+    print(f'Entry {number} removed; {len(have) - 1} left. The numbers after it moved down by one.')
     return 0
 
 
@@ -180,14 +180,14 @@ def git_bash():
 def cmd_check(path):
     bash = git_bash()
     if not bash:
-        print('Не найден bash из Git for Windows - проверку запусти сам: bash mod/check-secrets.sh --ours')
+        print('bash from Git for Windows not found - run the check yourself: bash mod/check-secrets.sh --ours')
         return 1
-    print('\nПроверяю наши коммиты и файлы в открытом репозитории (значения не выводятся)...')
+    print('\nChecking our commits and files in the public repository (values are not printed)...')
     subprocess.run(['git', '-C', str(ROOT), 'fetch', '--quiet', '--no-tags', 'upstream', 'main'], check=False)
     env = dict(os.environ, MOD_SECRETS_DENY=str(path))
     rc = subprocess.run([bash, str(ROOT / 'mod' / 'check-secrets.sh'), '--ours'], env=env).returncode
-    print('\nИтог: ' + ('совпадений нет.' if rc == 0 else
-                         'есть совпадения - строки FAIL выше: номер записи и файл. Значения не показаны.'))
+    print('\nResult: ' + ('no matches.' if rc == 0 else
+                         'there are matches - the FAIL lines above: entry number and file. Values are not shown.'))
     return rc
 
 
@@ -199,7 +199,7 @@ def main():
         return 2
     path = deny_path()
     if path.resolve().is_relative_to(ROOT.resolve()):
-        print(f'Список внутри открытого репозитория ({path}) - так нельзя: он ушёл бы на GitHub.')
+        print(f'The list is inside the public repository ({path}) - not allowed: it would go to GitHub.')
         return 1
     try:
         if args[0] == 'add':
@@ -210,7 +210,7 @@ def main():
             return cmd_remove(path, args[1])
         return cmd_check(path)
     except (KeyboardInterrupt, EOFError):
-        print('\nПрервано; уже добавленные записи сохранены.')
+        print('\nInterrupted; the entries already added are saved.')
         return 1
 
 

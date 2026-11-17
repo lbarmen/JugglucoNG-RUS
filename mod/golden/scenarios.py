@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """JugglucoNGmod: synthetic glucose series for the golden alarm and forecast runs (plan of stage 2, B1).
 
-Synthetic on purpose - no real readings may enter this public repository (ТЗ 3.1). Fixed seed: the same files every
+Synthetic on purpose - no real readings may enter this public repository (spec 3.1). Fixed seed: the same files every
 time. Writes mod/golden/scenarios/<name>.csv (minute,value); `--check` only compares and exits 1 on a difference.
 The JVM test Common/src/testMobile/java/mod/golden/GoldenAlarmRunTest.kt reads these files.
 
@@ -50,7 +50,7 @@ def scenarios():
     # 4. low, rebound above the rearm margin (65 + 10), low again: the alarm repeats
     s['rebound_relow'] = series([ramp(100, 60, 40, 1), flat(60, 15, 1), ramp(60, 82, 20, 1), flat(82, 10, 1),
                                  ramp(82, 58, 25, 1), flat(58, 15, 1), ramp(58, 100, 30, 1)], 1)
-    # 5. low, rebound inside the margin (to 72 < 75), low again: one episode - "Запас до повторного срабатывания"
+    # 5. low, rebound inside the margin (to 72 < 75), low again: one episode - "re-arm margin"
     s['rebound_inside_margin'] = series([ramp(100, 60, 40, 1), flat(60, 15, 1), ramp(60, 72, 12, 1), flat(72, 10, 1),
                                          ramp(72, 59, 15, 1), flat(59, 15, 1), ramp(59, 100, 30, 1)], 1)
     # 6. noise +-0.3 mmol/l around a slow drift down through the threshold
