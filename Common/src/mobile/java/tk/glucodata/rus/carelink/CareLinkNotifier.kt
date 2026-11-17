@@ -192,7 +192,8 @@ object CareLinkNotifier {
 
     /** The CareLink window when this build has it (the `rus` manifest), else the app's main window. */
     internal fun tapIntent(app: Context): Intent? =
-        app.packageManager.getLaunchIntentForPackage(app.packageName)
+        CareLinkActivity.intentIfDeclared(app)?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            ?: app.packageManager.getLaunchIntentForPackage(app.packageName)
 
     private fun cancel(app: Context, id: Int) {
         app.getSystemService(NotificationManager::class.java)?.cancel(id)

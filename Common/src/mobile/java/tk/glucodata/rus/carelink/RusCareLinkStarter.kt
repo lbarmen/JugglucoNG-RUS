@@ -1,13 +1,22 @@
 package tk.glucodata.rus.carelink
 
+import android.app.Activity
+import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
+import kotlinx.coroutines.launch
+import tk.glucodata.R
 
 /**
  * JugglucoNG-RUS, CareLink (stage 4): starts our CareLink code without a hook in upstream files.
@@ -20,6 +29,10 @@ import android.util.Log
  * Stage 4c: sets the sign-in and sign-out listeners of [CareLinkAuth] and posts [CareLinkScheduler.arm] to the main
  * thread (it runs after Application.onCreate, when WorkManager has upstream's configuration). No Keystore, no network
  * here; without a CareLink sign-in nothing is scheduled.
+ *
+ * Stage 4e: the "CareLink" launcher shortcut (long press on the icon; a background thread, cheap and repeatable) and a
+ * poll when the app comes to the front ([ForegroundPoll]: at most every 2 min by the poller's rule, only with a live
+ * session, through WorkManager - never a poll on the main thread).
  */
 class RusCareLinkStarter : ContentProvider() {
 
@@ -29,12 +42,14 @@ class RusCareLinkStarter : ContentProvider() {
             CareLinkAuth.onSignOut = { ctx -> afterSignOut(ctx) }
             val app = context?.applicationContext ?: return true
             installTrial(app)
+            (app as? Application)?.registerActivityLifecycleCallbacks(ForegroundPoll(app))
             Handler(Looper.getMainLooper()).post {
                 try {
                     CareLinkScheduler.arm(app)
                 } catch (t: Throwable) {
                     CareLinkLog.w("arm on start failed (${t.javaClass.simpleName})")
                 }
+                CareLinkAuth.scope.launch { installShortcut(app) }
             }
         } catch (t: Throwable) {
             // our code must not take upstream's app down
@@ -60,6 +75,27 @@ class RusCareLinkStarter : ContentProvider() {
 
     companion object {
         const val TAG = "RusCareLink"
+
+        internal const val SHORTCUT_ID = "rus-carelink"
+
+        /**
+         * The "CareLink" shortcut on a long press of the launcher icon, opening the CareLink window. Only where the
+         * window is declared (the `rus` build); pushed, not set - other dynamic shortcuts of the app stay. Never throws.
+         */
+        internal fun installShortcut(app: Context) {
+            try {
+                val intent = CareLinkActivity.intentIfDeclared(app) ?: return
+                val shortcut = ShortcutInfoCompat.Builder(app, SHORTCUT_ID)
+                    .setShortLabel(app.getString(R.string.rus_carelink_shortcut_short))
+                    .setLongLabel(app.getString(R.string.rus_carelink_shortcut_long))
+                    .setIcon(IconCompat.createWithResource(app, R.mipmap.ic_launcher))
+                    .setIntent(intent.setAction(Intent.ACTION_VIEW))
+                    .build()
+                ShortcutManagerCompat.pushDynamicShortcut(app, shortcut)
+            } catch (t: Throwable) {
+                CareLinkLog.w("shortcut not installed (${t.javaClass.simpleName})")
+            }
+        }
 
         /** The trial entry point: only in test builds (Common/src/rusTrial, -PrusRelease=0); a candidate has none. */
         internal const val TRIAL_ENTRY = "tk.glucodata.rus.carelink.trial.CareLinkTrialEntry"
@@ -113,4 +149,39 @@ class RusCareLinkStarter : ContentProvider() {
             CareLinkPoller.closeAfterSignOut(app)
         }
     }
+}
+
+/**
+ * JugglucoNG-RUS, CareLink (stage 4e): a poll when the app comes to the front - the first resumed window after all
+ * windows were stopped (and the first one after the process start). [CareLinkScheduler.enqueuePoll] queues nothing
+ * without a session or with polling off; the poller itself skips it when the last poll was under 2 min ago (plan,
+ * decision 7). WorkManager, not a poll on the main thread (critic of the joints, N5).
+ */
+internal class ForegroundPoll(private val app: Context) : Application.ActivityLifecycleCallbacks {
+    private var started = 0
+    private var inBackground = true
+
+    override fun onActivityStarted(activity: Activity) {
+        started++
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        started = (started - 1).coerceAtLeast(0)
+        if (started == 0) inBackground = true
+    }
+
+    override fun onActivityResumed(activity: Activity) {
+        if (!inBackground) return
+        inBackground = false
+        try {
+            CareLinkScheduler.enqueuePoll(app, PollReason.FOREGROUND)
+        } catch (t: Throwable) {
+            CareLinkLog.w("foreground poll not queued (${t.javaClass.simpleName})")
+        }
+    }
+
+    override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
+    override fun onActivityPaused(activity: Activity) {}
+    override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) {}
+    override fun onActivityDestroyed(activity: Activity) {}
 }

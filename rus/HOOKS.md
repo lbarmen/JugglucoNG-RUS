@@ -5,6 +5,7 @@
 
 | id | файл | зачем | как вернуть при конфликте |
 |----|------|-------|---------------------------|
+| carelink-settings | `Common/src/mobile/java/tk/glucodata/ui/ExpressiveSettingsScreen.kt` | раздел обмена данными (`sharing_group`): строка «CareLink» — наш `RusCareLinkEntry(sharingColor)` рисует их `SettingsItem` и открывает окно CareLink; в их сборках без окна в манифесте не рисуется ничего | взять их версию файла и снова вставить одну строку `tk.glucodata.rus.carelink.RusCareLinkEntry(sharingColor) // RUS-HOOK:carelink-settings` в раздел обмена между пунктами, видимыми всегда (после закрывающей `}` блока `if (showLumiflex)` или рядом с соседним пунктом), не внутри чужого `if`; если раздел переименовали — туда, где их пункт Nightscout; `sharingColor` — их локальная `val` раздела |
 | carelink-tempbasal | `Common/src/mobile/java/tk/glucodata/data/journal/JournalTreatmentUploader.kt` | функция `isSendableType`: базал помпы из CareLink (записи `TEMP_BASAL` с нашим источником `HEALTH_CONNECT`) уходит в Nightscout как `Temp Basal`; записи AAPS и Nightscout зеркальные и по-прежнему не уходят | взять их версию функции и снова дописать в список типов `\|\| type == JournalEntryType.TEMP_BASAL // RUS-HOOK:carelink-tempbasal`; если функцию переименовали или убрали — найти, где отправка отбирает типы записей, и дописать туда; проверка — контрактный тест `CareLinkJournalContractTest` |
 
 Тип сборки `rus` подключается init-скриптом (`rus/rus-init.gradle`), ресурсы — своими папками `Common/src/rus/` и
@@ -16,4 +17,4 @@
 `check-apk.py` в каждой сборке (пробной и кандидата), так что ветка блока проверяется до телефона.
 
 ---
-Hooks into upstream files: carelink-tempbasal (pump basal to Nightscout). Each hook is 1–3 lines marked `RUS-HOOK:<id>` and listed in this table.
+Hooks into upstream files: carelink-settings (CareLink row in settings), carelink-tempbasal (pump basal to Nightscout). Each hook is 1–3 lines marked `RUS-HOOK:<id>` and listed in this table.
