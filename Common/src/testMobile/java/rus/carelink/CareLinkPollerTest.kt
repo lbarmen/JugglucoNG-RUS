@@ -567,10 +567,13 @@ class CareLinkPollerTest {
         poll()
         assertNull("the first failed write only starts the clock", shown(CareLinkNotifier.ID_WRITE_FAIL))
         assertEquals(now, store.writeFailSinceMs)
+        // fresh data every poll (the threshold is for "no data" too)
         now += 4 * 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
         poll()
         assertNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
         now += 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
         poll()
         val n = shown(CareLinkNotifier.ID_WRITE_FAIL)
         assertNotNull("5 min of failed writes", n)
@@ -582,8 +585,8 @@ class CareLinkPollerTest {
         poll()
         assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
         CareLinkPoller.writeJournal = { _, e, first -> journal += e to first }
-        net.on(dm, ok(answer()))
         now += 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
         poll()
         assertNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
         assertNull(store.writeFailSinceMs)
