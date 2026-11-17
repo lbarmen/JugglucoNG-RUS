@@ -104,14 +104,16 @@ internal fun CareLinkScreen(model: CareLinkViewModel, actions: CareLinkScreenAct
 
             val pump = state.pump
             if (state.signedIn && pump != null) {
-                SectionLabel(stringResource(R.string.rus_carelink_section_pump))
-                PumpRows(state, pump)
+                // one data time for every pump number (critic of the texts 4d, C10): old numbers must not look fresh
+                SectionLabel(stringResource(R.string.rus_carelink_section_pump, age(state.nowMs, pump.dataAtMs)))
+                PumpRows(pump)
             }
 
             SectionLabel(stringResource(R.string.rus_carelink_section_settings))
             Choice(
                 title = stringResource(R.string.rus_carelink_interval),
                 hint = null,
+                warning = null,
                 options = CareLinkSettings.INTERVALS_MIN,
                 selected = state.intervalMin,
                 onPick = model::setInterval,
@@ -120,6 +122,13 @@ internal fun CareLinkScreen(model: CareLinkViewModel, actions: CareLinkScreenAct
             Choice(
                 title = stringResource(R.string.rus_carelink_warn_after),
                 hint = stringResource(R.string.rus_carelink_warn_after_hint),
+                // a threshold below "interval + 5 min" warns while all is well; said, not forbidden: the person wants
+                // 5 min to test it (word 17.11; critic 4d, C1, critic of the texts 4d, C4)
+                warning = if (state.warnTooSoon) {
+                    stringResource(R.string.rus_carelink_warn_after_too_soon, state.intervalMin, state.warnMinQuiet)
+                } else {
+                    null
+                },
                 options = CareLinkSettings.WARN_AFTER_MIN,
                 selected = state.warnAfterMin,
                 onPick = model::setWarnAfter,
@@ -171,7 +180,12 @@ private fun StatusCard(
         CareLinkView.POLLING_OFF -> stringResource(R.string.rus_carelink_status_polling_off) to colors.error
         CareLinkView.WAITING -> stringResource(R.string.rus_carelink_status_waiting) to colors.onSurface
         CareLinkView.OK -> stringResource(R.string.rus_carelink_status_ok) to colors.primary
-        CareLinkView.ERROR -> stringResource(R.string.rus_carelink_status_error) to colors.error
+        CareLinkView.STALE -> stringResource(R.string.rus_carelink_status_stale) to colors.error
+        // the answer came, the journal did not take it: not "the update failed" (critic of the texts 4d, C5)
+        CareLinkView.ERROR -> stringResource(
+            if (state.error?.kind == CareLinkErrorKind.WRITE) R.string.rus_carelink_status_error_write
+            else R.string.rus_carelink_status_error,
+        ) to colors.error
     }
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -208,7 +222,7 @@ private fun StatusCard(
                         style = MaterialTheme.typography.bodyMedium,
                         color = colors.onSurface,
                     )
-                    OutlinedButton(onClick = onSignOut) { Text(stringResource(R.string.rus_carelink_sign_out)) }
+                    OutlinedButton(onClick = onSignOut) { Text(stringResource(R.string.rus_carelink_sign_out_button)) }
                 }
                 if (state.view == CareLinkView.POLLING_OFF) {
                     Button(onClick = onPollingOn, modifier = Modifier.fillMaxWidth()) {
@@ -238,6 +252,7 @@ private fun statusText(state: CareLinkUiState): String? = when (state.view) {
     CareLinkView.POLLING_OFF -> stringResource(R.string.rus_carelink_status_polling_off_text)
     CareLinkView.WAITING -> stringResource(R.string.rus_carelink_status_waiting_text)
     CareLinkView.OK -> null
+    CareLinkView.STALE -> stringResource(R.string.rus_carelink_status_stale_text, age(state.nowMs, state.lastDataAtMs ?: state.nowMs))
     CareLinkView.ERROR -> errorText(state.error)
 }
 
@@ -252,19 +267,20 @@ private fun errorText(e: CareLinkError?): String {
         CareLinkErrorKind.WRITE -> stringResource(R.string.rus_carelink_error_write)
         null -> stringResource(R.string.rus_carelink_error_parse)
     }
-    // the exception class helps a fix (the person sends it); never a body or a key
-    val cls = e?.errorClass?.takeIf { it.isNotBlank() && e.kind != CareLinkErrorKind.SERVER }
-    return if (cls == null) text else "$text ($cls)"
+    // the exception class helps a fix (the person sends it), said to be a code; never a body or a key. A failed write
+    // gets plain words only (critic of the texts 4d, C5): the class (SQLiteException...) tells the person nothing.
+    val cls = e?.errorClass?.takeIf {
+        it.isNotBlank() && e.kind != CareLinkErrorKind.SERVER && e.kind != CareLinkErrorKind.WRITE
+    }
+    return if (cls == null) text else stringResource(R.string.rus_carelink_error_code, text, cls)
 }
 
 @Composable
-private fun PumpRows(state: CareLinkUiState, pump: PumpNow) {
+private fun PumpRows(pump: PumpNow) {
     val tint = MaterialTheme.colorScheme.tertiary
     val rows = ArrayList<Pair<String, String>>(3)
     pump.iobUnits?.let { iob ->
-        val at = pump.iobAtMs ?: pump.dataAtMs
-        rows += stringResource(R.string.rus_carelink_iob) to
-            stringResource(R.string.rus_carelink_units, units(iob)) + " · " + age(state.nowMs, at)
+        rows += stringResource(R.string.rus_carelink_iob) to stringResource(R.string.rus_carelink_units, units(iob))
     }
     val reservoir = listOfNotNull(
         pump.reservoirUnits?.let { stringResource(R.string.rus_carelink_units, units(it)) },
@@ -292,8 +308,13 @@ private fun PhoneRows(state: CareLinkUiState, actions: CareLinkScreenActions) {
             Icons.Default.BatteryChargingFull, actions.onBattery)
     }
     if (!state.notificationsAllowed) {
-        rows += PhoneRow(stringResource(R.string.rus_carelink_notifications), stringResource(R.string.rus_carelink_notifications_hint),
+        rows += PhoneRow(stringResource(R.string.rus_carelink_notifications),
+            stringResource(R.string.rus_carelink_notifications_hint, state.warnAfterMin),
             Icons.Default.Notifications, actions.onNotifications)
+    } else if (state.channelOff) {
+        // the app may notify, our channel is off: Android drops the warnings silently (critic 4d, N6)
+        rows += PhoneRow(stringResource(R.string.rus_carelink_channel_off), stringResource(R.string.rus_carelink_channel_off_hint),
+            Icons.Default.Notifications, actions.onSound)
     }
     rows += PhoneRow(stringResource(R.string.rus_carelink_sound), stringResource(R.string.rus_carelink_sound_hint),
         Icons.AutoMirrored.Filled.VolumeUp, actions.onSound)
@@ -308,7 +329,7 @@ private fun PhoneRows(state: CareLinkUiState, actions: CareLinkScreenActions) {
 private class PhoneRow(val title: String, val hint: String, val icon: ImageVector, val onClick: () -> Unit)
 
 @Composable
-private fun Choice(title: String, hint: String?, options: List<Int>, selected: Int, onPick: (Int) -> Unit) {
+private fun Choice(title: String, hint: String?, warning: String?, options: List<Int>, selected: Int, onPick: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(title, style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurface)
         ConnectedButtonGroup(
@@ -321,6 +342,9 @@ private fun Choice(title: String, hint: String?, options: List<Int>, selected: I
         hint?.let {
             Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        warning?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+        }
     }
 }
 
@@ -331,6 +355,12 @@ private fun InsulinDialog(state: CareLinkUiState, onPick: (Long) -> Unit, onDism
         title = { Text(stringResource(R.string.rus_carelink_insulin)) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    stringResource(R.string.rus_carelink_insulin_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.padding(top = 8.dp))
                 state.insulinChoices.forEach { c ->
                     Row(
                         Modifier.fillMaxWidth().heightIn(min = 48.dp)
@@ -345,7 +375,8 @@ private fun InsulinDialog(state: CareLinkUiState, onPick: (Long) -> Unit, onDism
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.rus_carelink_cancel)) }
+            // a tap on a type already chooses it: the only button closes (critic of the texts 4d, N4)
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.rus_carelink_close)) }
         },
     )
 }
@@ -367,6 +398,7 @@ private fun age(nowMs: Long, atMs: Long): String {
     return when {
         min < 1 -> stringResource(R.string.rus_carelink_age_now)
         min < 60 -> stringResource(R.string.rus_carelink_age_min, min)
-        else -> stringResource(R.string.rus_carelink_age_hours, min / 60, min % 60)
+        min < 24 * 60 -> stringResource(R.string.rus_carelink_age_hours, min / 60, min % 60)
+        else -> stringResource(R.string.rus_carelink_age_day)
     }
 }

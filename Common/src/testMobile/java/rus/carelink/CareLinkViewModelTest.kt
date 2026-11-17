@@ -1,6 +1,8 @@
 package rus.carelink
 
 import android.app.Activity
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.content.ComponentName
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -140,6 +142,56 @@ class CareLinkViewModelTest {
         model.turnPollingOn()
         assertTrue(CareLinkSettings(app).enabled)
         assertTrue(work.log.contains("poll MANUAL false"))
+    }
+
+    @Test
+    fun oldPumpDataIsOutOfDateNotComingIn() {
+        // critic of the texts 4d, B1: the cloud answers, the data is old - not the green "coming in"; from the same
+        // moment as the "no data" notification (the threshold)
+        signIn()
+        CareLinkSettings(app).warnAfterMin = 15
+        val store = CareLinkStateStore(app)
+        val fresh = now - 14 * 60_000L
+        store.write(CareLinkState(CareLinkStatus.OK, now - 60_000L, fresh, null, PumpNow(fresh, iobUnits = 0.5)))
+        assertEquals(CareLinkView.OK, load().view)
+        val old = now - 15 * 60_000L
+        store.write(CareLinkState(CareLinkStatus.OK, now - 60_000L, old, null, PumpNow(old, iobUnits = 0.5)))
+        val s = load()
+        assertEquals(CareLinkView.STALE, s.view)
+        assertTrue(s.signedIn)
+        assertEquals("the old numbers stay, with their one data time", old, s.pump!!.dataAtMs)
+        // a failed update says why instead
+        store.write(CareLinkState(CareLinkStatus.ERROR, now, old, CareLinkError(CareLinkErrorKind.NO_NETWORK, 0, "IOException")))
+        assertEquals(CareLinkView.ERROR, load().view)
+    }
+
+    @Test
+    fun aThresholdBelowTheIntervalPlusFiveIsSaidNotForbidden() {
+        // critic 4d, C1 and critic of the texts 4d, C4; the person wants 5 min to test it (17.11)
+        model.setWarnAfter(5)
+        var s = load()
+        assertEquals("allowed", 5, s.warnAfterMin)
+        assertEquals(10, s.warnMinQuiet)
+        assertTrue(s.warnTooSoon)
+        model.setWarnAfter(10)
+        assertFalse(load().warnTooSoon)
+        CareLinkSettings(app).intervalMin = 10
+        s = load()
+        assertEquals(15, s.warnMinQuiet)
+        assertTrue(s.warnTooSoon)
+    }
+
+    @Test
+    fun aCareLinkChannelTurnedOffIsShown() {
+        // critic 4d, N6: the app may notify, our channel is off - the window says so
+        shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
+        assertFalse(load().channelOff)
+        app.getSystemService(NotificationManager::class.java).createNotificationChannel(
+            NotificationChannel(CareLinkNotifier.CHANNEL, "CareLink", NotificationManager.IMPORTANCE_NONE),
+        )
+        val s = load()
+        assertTrue(s.notificationsAllowed)
+        assertTrue(s.channelOff)
     }
 
     @Test

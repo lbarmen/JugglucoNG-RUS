@@ -35,8 +35,14 @@ enum class CareLinkView {
     /** Signed in, no pump data yet since the sign-in. */
     WAITING,
 
-    /** Signed in, the last poll worked. */
+    /** Signed in, the last poll worked and the pump data is younger than the warning threshold. */
     OK,
+
+    /**
+     * Signed in, the last poll worked, but the newest pump data is as old as the warning threshold or older (critic
+     * of the texts 4d, B1: the cloud answers, MiniMed Mobile does not upload - old numbers must not look fresh).
+     */
+    STALE,
 
     /** Signed in, the last poll failed ([CareLinkUiState.error]). */
     ERROR,
@@ -64,9 +70,25 @@ data class CareLinkUiState(
     val insulinId: Long? = null,
     val batteryExempt: Boolean = true,
     val notificationsAllowed: Boolean = true,
+    /** The app may notify, but our channel is turned off in the system (critic 4d, N6). */
+    val channelOff: Boolean = false,
 ) {
     val signedIn: Boolean get() = view != CareLinkView.SIGNED_OUT && view != CareLinkView.NEED_LOGIN
     val insulinName: String? get() = insulinChoices.firstOrNull { it.id == insulinId }?.name
+
+    /**
+     * The shortest threshold without warnings while all is well: the data reaches CareLink a few minutes late (the
+     * MiniMed Mobile upload) and is fetched once an interval (critic 4d, C1; critic of the texts 4d, C4).
+     */
+    val warnMinQuiet: Int get() = intervalMin + WARN_MARGIN_MIN
+
+    /** The threshold is below [warnMinQuiet]: the window says so under the choice, the choice stays allowed. */
+    val warnTooSoon: Boolean get() = warnAfterMin < warnMinQuiet
+
+    companion object {
+        /** The upload delay of MiniMed Mobile, roughly (0-5 min, Glucove 03.11). */
+        const val WARN_MARGIN_MIN = 5
+    }
 }
 
 /**
@@ -122,7 +144,8 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
         val settings = CareLinkSettings(app)
         val s = CareLinkStateStore(app).read()
         val hasSession = CareLinkAuth.hasSession(app)
-        val view = viewOf(hasSession, settings.enabled, s)
+        val now = CareLinkAuth.clock()
+        val view = viewOf(hasSession, settings.enabled, s, now, settings.warnAfterMs)
         val choices = try {
             CareLinkInsulin.choices(app).map { CareLinkInsulinChoice(it.id, it.displayName) }
         } catch (e: CancellationException) {
@@ -141,7 +164,7 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
         CareLinkUiState(
             view = view,
             error = if (view == CareLinkView.ERROR) s.lastError else null,
-            nowMs = CareLinkAuth.clock(),
+            nowMs = now,
             lastPollAtMs = s.lastPollAtMs,
             lastDataAtMs = s.lastDataAtMs,
             pump = if (hasSession) s.pumpNow else null,
@@ -153,6 +176,7 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
             insulinId = insulin,
             batteryExempt = batteryExempt(),
             notificationsAllowed = notificationsAllowed(),
+            channelOff = channelOff(),
         ).also { _state.value = it }
     }
 
@@ -168,6 +192,8 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
     fun setWarnAfter(min: Int) {
         if (min !in CareLinkSettings.WARN_AFTER_MIN) return
         CareLinkSettings(app).warnAfterMin = min
+        // the new threshold counts now, not at the next alarm or poll (critic 4d, N4)
+        viewModelScope.launch(Dispatchers.IO) { guard("no-data check not run") { CareLinkNotifier.checkNoData(app) } }
         refresh()
     }
 
@@ -229,6 +255,12 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
         true
     }
 
+    private fun channelOff(): Boolean = try {
+        CareLinkNotifier.channelOff(app)
+    } catch (_: Throwable) {
+        false
+    }
+
     private inline fun guard(what: String, block: () -> Unit) {
         try {
             block()
@@ -259,13 +291,21 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
             }
         }
 
-        /** What the window shows for this session, polling flag and stored state. */
-        internal fun viewOf(hasSession: Boolean, enabled: Boolean, s: CareLinkState): CareLinkView = when {
-            !hasSession -> if (s.status == CareLinkStatus.NEED_LOGIN) CareLinkView.NEED_LOGIN else CareLinkView.SIGNED_OUT
-            !enabled -> CareLinkView.POLLING_OFF
-            s.status == CareLinkStatus.ERROR -> CareLinkView.ERROR
-            s.lastDataAtMs == null -> CareLinkView.WAITING
-            else -> CareLinkView.OK
+        /**
+         * What the window shows for this session, polling flag and stored state at [nowMs]; data as old as
+         * [warnAfterMs] (the "no data" threshold) or older is [CareLinkView.STALE] - the same moment the notification
+         * comes.
+         */
+        internal fun viewOf(hasSession: Boolean, enabled: Boolean, s: CareLinkState, nowMs: Long, warnAfterMs: Long): CareLinkView {
+            val data = s.lastDataAtMs
+            return when {
+                !hasSession -> if (s.status == CareLinkStatus.NEED_LOGIN) CareLinkView.NEED_LOGIN else CareLinkView.SIGNED_OUT
+                !enabled -> CareLinkView.POLLING_OFF
+                s.status == CareLinkStatus.ERROR -> CareLinkView.ERROR
+                data == null -> CareLinkView.WAITING
+                nowMs - data >= warnAfterMs -> CareLinkView.STALE
+                else -> CareLinkView.OK
+            }
         }
     }
 }
