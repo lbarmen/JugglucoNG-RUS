@@ -45,6 +45,10 @@ internal object CareLinkJournalTestEnv {
 
     fun setUp(now: () -> Long) {
         Applic.app = app
+        // A journal write schedules upstream's refresh 400 ms later (OutboundApiJournalSnapshot), which loads their
+        // Notify. Fired between two tests, the application has no base context: Notify's class init fails for the rest
+        // of the test JVM, and their later tests go red (MOD sync 44164852207: 88). Loaded here, while the context lives.
+        Class.forName("tk.glucodata.Notify", true, Applic::class.java.classLoader)
         CareLinkAuth.resetForTest()
         CareLinkAuth.clock = now
         CareLinkBasalWriter.zone = { java.time.ZoneOffset.UTC }
