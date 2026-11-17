@@ -1,6 +1,7 @@
 package tk.glucodata.mod.watch
 
 import android.app.Activity
+import android.content.Context
 import android.os.Bundle
 
 /**
@@ -13,11 +14,17 @@ class SnoozeButtonActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         try {
-            SnoozeButton.press(applicationContext)
+            SnoozeButton.press(applicationContext, send = send)
         } catch (t: Throwable) {
             ModWatchLog.w("button activity failed: ${t.javaClass.simpleName}")
         } finally {
             finish()
         }
+    }
+
+    companion object {
+        /** How the press reaches the phone; tests put a recorder here instead of the real Data Layer. */
+        @Volatile
+        internal var send: (Context, Long) -> Unit = WatchPhoneLink::sendSnooze
     }
 }

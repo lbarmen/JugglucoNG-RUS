@@ -1,6 +1,7 @@
 package mod.watch
 
 import android.content.Context
+import android.os.VibrationAttributes
 import android.os.Vibrator
 import androidx.test.core.app.ApplicationProvider
 import org.junit.After
@@ -17,6 +18,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
 import org.robolectric.shadows.ShadowVibrator
+import tk.glucodata.alerts.AlertStateTracker
 import tk.glucodata.alerts.AlertType
 import tk.glucodata.alerts.SnoozeManager
 import tk.glucodata.mod.watch.ModWatchMessages
@@ -29,7 +31,8 @@ import tk.glucodata.ui.AlarmActivityAccess
 /**
  * JugglucoNGmod, watch block: the "Snooze alarm" button on the watch - local snooze, buzz, the message to the phone
  * and the phone's answer. Upstream's alert code runs for real; the Notify/Natives sinks and the test application are
- * the shared ones of [OngoingAlertTest] (src/test, compiled into this task too). Made-up times only.
+ * the shared ones of [OngoingAlertTest] (src/test, compiled into this task too). Nothing goes to the real Data Layer.
+ * Made-up times only.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = OngoingAlertTest.TestApplication::class,
@@ -43,6 +46,7 @@ class SnoozeButtonTest {
     private val owner = Any()
     private val closed = mutableListOf<Int>()
     private lateinit var context: Context
+    private lateinit var realSend: (Context, Long) -> Unit
 
     @Before
     fun setUp() {
@@ -51,10 +55,13 @@ class SnoozeButtonTest {
         SnoozeButton.resetForTest()
         ShadowVibrator.reset()
         vibrator().setHasVibrator(true)
+        realSend = SnoozeButtonActivity.send
+        SnoozeButtonActivity.send = fakeSend
     }
 
     @After
     fun tearDown() {
+        SnoozeButtonActivity.send = realSend
         AlarmActivityAccess.removeObserver(owner)
         OngoingAlertTest.resetAlertState()
     }
@@ -62,6 +69,8 @@ class SnoozeButtonTest {
     private fun vibrator(): ShadowVibrator = shadowOf(context.getSystemService(Vibrator::class.java))
 
     private fun buzzed() = vibrator().milliseconds == SnoozeButton.BUZZ_MS
+
+    private fun lastUsage(): Int = (vibrator().vibrationAttributesFromLastVibration as VibrationAttributes).usage
 
     @Test
     fun noAlertNoBuzzButThePhoneIsAskedAnyway() {
@@ -72,8 +81,19 @@ class SnoozeButtonTest {
     }
 
     @Test
+    fun aStaleAlertOnTheWatchIsNotSnoozedNorBuzzed() {
+        // shown at night, the condition is over: the mark stayed, the episode did not
+        OngoingAlertTest.alertGoingOn(AlertType.LOW)
+        AlertStateTracker.resetState(AlertType.LOW)
+        assertNull(SnoozeButton.press(context, pressedAt, 10_000L, fakeSend))
+        assertFalse(buzzed())
+        assertFalse(SnoozeManager.isSnoozed(AlertType.LOW))
+        assertEquals(listOf(pressedAt), sent)
+    }
+
+    @Test
     fun anAlertGoingOnIsSnoozedClosedBuzzedOnceAndThePhoneIsAsked() {
-        OngoingAlertTest.AlarmSink.currentKind = AlertType.HIGH.id
+        OngoingAlertTest.alertGoingOn(AlertType.HIGH)
         AlarmActivityAccess.observeAcknowledgement(owner, AlertType.HIGH.id) { closed += AlertType.HIGH.id }
         assertEquals(AlertType.HIGH.id, SnoozeButton.press(context, pressedAt, 10_000L, fakeSend))
         assertTrue(SnoozeManager.isSnoozed(AlertType.HIGH))
@@ -83,8 +103,19 @@ class SnoozeButtonTest {
     }
 
     @Test
+    fun thePressBuzzIsHardwareFeedbackAndThePhoneAnswerBuzzIsANotification() {
+        OngoingAlertTest.alertGoingOn(AlertType.HIGH)
+        SnoozeButton.press(context, pressedAt, 10_000L, fakeSend)
+        assertEquals(VibrationAttributes.USAGE_HARDWARE_FEEDBACK, lastUsage())
+        ShadowVibrator.reset()
+        vibrator().setHasVibrator(true)
+        assertTrue(SnoozeButton.onPhoneAnswer(context, SnoozeDone(AlertType.HIGH.id, pressedAt), 60_000L))
+        assertEquals(VibrationAttributes.USAGE_NOTIFICATION, lastUsage())
+    }
+
+    @Test
     fun aFailingSendDoesNotBreakThePress() {
-        OngoingAlertTest.AlarmSink.currentKind = AlertType.LOW.id
+        OngoingAlertTest.alertGoingOn(AlertType.LOW)
         val kind = SnoozeButton.press(context, pressedAt, 10_000L) { _, _ -> throw IllegalStateException("made-up") }
         assertEquals(AlertType.LOW.id, kind)
         assertTrue(SnoozeManager.isSnoozed(AlertType.LOW))
@@ -92,7 +123,7 @@ class SnoozeButtonTest {
 
     @Test
     fun thePhonesSnoozedBuzzesOnlyWhenTheWatchDidNotJustBuzz() {
-        OngoingAlertTest.AlarmSink.currentKind = AlertType.HIGH.id
+        OngoingAlertTest.alertGoingOn(AlertType.HIGH)
         SnoozeButton.press(context, pressedAt, 10_000L, fakeSend)
         ShadowVibrator.reset()
         vibrator().setHasVibrator(true)
@@ -116,6 +147,15 @@ class SnoozeButtonTest {
     }
 
     @Test
+    fun thePhonesLateNeverBuzzes() {
+        assertFalse(SnoozeButton.onPhoneAnswer(context, SnoozeDone(null, pressedAt, late = true), 60_000L))
+        assertFalse(buzzed())
+        val bytes = ModWatchMessages.encodeSnoozeDone(SnoozeDone(null, pressedAt, late = true))
+        assertTrue(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, bytes))
+        assertFalse(buzzed())
+    }
+
+    @Test
     fun buzzDedupWindow() {
         assertTrue(SnoozeButton.shouldBuzzForPhone(10_000L, 0L))
         assertFalse(SnoozeButton.shouldBuzzForPhone(10_000L, 10_000L))
@@ -130,6 +170,8 @@ class SnoozeButtonTest {
         assertTrue(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, valid))
         assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, byteArrayOf(1, 2)))
         assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, null))
+        val legacyKind = ModWatchMessages.encodeSnoozeDone(SnoozeDone(AlertType.AVAILABLE.id, pressedAt))
+        assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, legacyKind))
         assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_TICK, valid))
         assertFalse(ModWearListener.handle(context, "/mod/unknown", valid))
         assertFalse(ModWearListener.handle(context, null, valid))
@@ -141,5 +183,16 @@ class SnoozeButtonTest {
         assertTrue(activity.isFinishing)
         assertFalse(buzzed())
         assertTrue(OngoingAlertTest.AlarmSink.calls.isEmpty())
+        assertEquals(1, sent.size)
+    }
+
+    @Test
+    fun theButtonActivitySnoozesAnAlertGoingOnAndAsksThePhone() {
+        OngoingAlertTest.alertGoingOn(AlertType.VERY_HIGH)
+        val activity = Robolectric.buildActivity(SnoozeButtonActivity::class.java).create().get()
+        assertTrue(activity.isFinishing)
+        assertTrue(SnoozeManager.isSnoozed(AlertType.VERY_HIGH))
+        assertTrue(buzzed())
+        assertEquals(1, sent.size)
     }
 }

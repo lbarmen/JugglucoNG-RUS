@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioAttributes
 import android.os.Build
 import android.os.SystemClock
+import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
@@ -15,8 +16,8 @@ import android.os.VibratorManager
  * On a press: the watch's own alert going on is snoozed ([OngoingAlert]; upstream's `/alertack` then silences the
  * phone too) with one short buzz, and `/mod/snooze` always goes to the phone, which snoozes its own alert going on and
  * answers `/mod/snooze/done`. A "snoozed" answer buzzes once, unless the watch buzzed itself within [BUZZ_DEDUP_MS] -
- * so one press is never two buzzes. A repeated press is harmless: upstream's action times drop a second
- * acknowledgement.
+ * so one press is never two buzzes; "no alert" and "late" (the phone did not get to it) are silent. A repeated press
+ * is harmless: upstream's action times drop a second acknowledgement. The log never names the alert kind.
  */
 object SnoozeButton {
 
@@ -44,8 +45,8 @@ object SnoozeButton {
         var kind: Int? = null
         try {
             kind = OngoingAlert.snoozeOngoing()
-            if (kind != null) buzz(app, elapsedMs)
-            ModWatchLog.i("button: " + if (kind != null) "snoozed kind $kind on the watch" else "no alert on the watch")
+            if (kind != null) buzz(app, elapsedMs, Buzz.PRESS)
+            ModWatchLog.i("button: " + if (kind != null) "snoozed on the watch" else "no alert on the watch")
         } catch (t: Throwable) {
             ModWatchLog.w("button: local snooze failed: ${t.javaClass.simpleName}")
         }
@@ -63,13 +64,17 @@ object SnoozeButton {
         done: ModWatchMessages.SnoozeDone,
         elapsedMs: Long = SystemClock.elapsedRealtime(),
     ): Boolean {
+        if (done.late) {
+            ModWatchLog.i("phone: late")
+            return false
+        }
         if (done.snoozedKind == null) {
             ModWatchLog.i("phone: no alert")
             return false
         }
-        ModWatchLog.i("phone: snoozed kind ${done.snoozedKind}")
+        ModWatchLog.i("phone: snoozed")
         if (!shouldBuzzForPhone(elapsedMs, lastBuzzElapsedMs)) return false
-        buzz(context, elapsedMs)
+        buzz(context, elapsedMs, Buzz.PHONE_ANSWER)
         return true
     }
 
@@ -81,7 +86,14 @@ object SnoozeButton {
         lastBuzzElapsedMs = 0L
     }
 
-    private fun buzz(context: Context, elapsedMs: Long) {
+    /**
+     * Why the watch buzzes. A press comes with our activity in front, and the button is a physical one: hardware
+     * feedback (not "touch", which the "touch vibration" setting and the background filter drop). The phone's answer
+     * comes later in the background listener: notification usage, which Android lets through for a background app.
+     */
+    internal enum class Buzz { PRESS, PHONE_ANSWER }
+
+    private fun buzz(context: Context, elapsedMs: Long, why: Buzz) {
         lastBuzzElapsedMs = elapsedMs
         try {
             val vibrator: Vibrator? = if (Build.VERSION.SDK_INT >= 31) {
@@ -91,12 +103,26 @@ object SnoozeButton {
                 context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
             }
             if (vibrator == null || !vibrator.hasVibrator()) return
-            val attributes = AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-            @Suppress("DEPRECATION")
-            vibrator.vibrate(VibrationEffect.createOneShot(BUZZ_MS, VibrationEffect.DEFAULT_AMPLITUDE), attributes)
+            val effect = VibrationEffect.createOneShot(BUZZ_MS, VibrationEffect.DEFAULT_AMPLITUDE)
+            if (Build.VERSION.SDK_INT >= 33) {
+                val usage = if (why == Buzz.PRESS) VibrationAttributes.USAGE_HARDWARE_FEEDBACK
+                    else VibrationAttributes.USAGE_NOTIFICATION
+                vibrator.vibrate(effect, VibrationAttributes.createForUsage(usage))
+            } else {
+                val attributes = if (why == Buzz.PRESS) {
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                } else {
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                }
+                @Suppress("DEPRECATION")
+                vibrator.vibrate(effect, attributes)
+            }
         } catch (t: Throwable) {
             ModWatchLog.w("buzz failed: ${t.javaClass.simpleName}")
         }

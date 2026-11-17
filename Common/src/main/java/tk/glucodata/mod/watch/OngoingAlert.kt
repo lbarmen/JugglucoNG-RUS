@@ -4,19 +4,27 @@ import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import tk.glucodata.Natives
 import tk.glucodata.Notify
 import tk.glucodata.alerts.AlertActions
+import tk.glucodata.alerts.AlertStateTracker
 import tk.glucodata.alerts.AlertType
 import tk.glucodata.ui.AlarmActivityAccess
 
 /**
  * JugglucoNGmod, watch block: the standard alert that is going on now and its snooze, the same on the phone and on
- * the watch (watch plan, decision 3).
+ * the watch (watch plan, decision 3; user's decision: no alert going on - nothing happens).
  *
- * "Going on" is a kind from [AlertType.settingsEntries] for which [Notify.isCurrentStandardAlert] holds - presented and
- * not taken back. Not `Notify.resolveAlertKind`: that one can return the last alert after it was over. Custom (user)
- * alerts are not covered: upstream has no public "which custom alert is ringing".
+ * "Going on" is a kind from [AlertType.settingsEntries] for which [Notify.isCurrentStandardAlert] holds (presented,
+ * not a manual test) and whose episode is still live: [AlertStateTracker.isEpisodeActive] and not
+ * [AlertStateTracker.isDismissed] - the check upstream's Notify.isActivePresentedRecoveryBlocker adds, because "a
+ * notification can outlive its condition". The presented mark alone stays after the sound and the condition are over,
+ * and snoozing that stale kind would silence its next real alert. LOSS never opens an episode (the native side calls
+ * Notify.lossalarm directly), so for LOSS "going on" is "its sound is on now" ([Natives.getisalarm]). Not
+ * `Notify.resolveAlertKind`: that one can return the last alert after it was over. Custom (user) alerts are not
+ * covered: upstream has no public "which custom alert is ringing".
  *
  * The snooze is what upstream's "Snooze" button does: [AlertActions.handle] with the alert's default minutes (it
  * also sends their `/alertack` to the other device), then [AlarmActivityAccess.acknowledge] - `handle` stops the sound
@@ -27,8 +35,28 @@ object OngoingAlert {
     /** How long a listener thread waits for the main thread in [snoozeOngoingOnMain]. */
     const val MAIN_WAIT_MS = 5_000L
 
+    /** [snoozeOngoingOnMain]: the main thread did not run the snooze in time, and it never will. */
+    const val LATE = -2
+
+    private const val PENDING = 0
+    private const val STARTED = 1
+    private const val CANCELLED = 2
+
     /** The kind (AlertType id) of the standard alert going on now, `null` when there is none. */
-    fun find(): Int? = AlertType.settingsEntries.firstOrNull { Notify.isCurrentStandardAlert(it.id) }?.id
+    fun find(): Int? = AlertType.settingsEntries.firstOrNull { isGoingOn(it) }?.id
+
+    /** [type] is presented now and its episode is live (see the class comment). */
+    fun isGoingOn(type: AlertType): Boolean {
+        if (!Notify.isCurrentStandardAlert(type.id)) return false
+        if (AlertStateTracker.isEpisodeActive(type)) return !AlertStateTracker.isDismissed(type)
+        return type == AlertType.LOSS && soundOn()
+    }
+
+    private fun soundOn(): Boolean = try {
+        Natives.getisalarm()
+    } catch (_: Throwable) {
+        false
+    }
 
     /** Snoozes [kind] as upstream's "Snooze" does. Main thread only: elsewhere refuses and returns false. */
     fun snooze(kind: Int): Boolean {
@@ -48,14 +76,20 @@ object OngoingAlert {
     }
 
     /**
-     * [snoozeOngoing] from any thread: runs it on the main thread and waits up to [waitMs]. `null` when there was no
-     * alert, on a failure, or when the main thread did not answer in time.
+     * [snoozeOngoing] from any thread: runs it on the main thread and waits up to [waitMs]. The kind snoozed; `null`
+     * when there was no alert or on a failure; [LATE] when the main thread did not start it in time - the queued task
+     * is then cancelled and does nothing when it runs, so a late answer is never a snooze "from the past".
      */
     fun snoozeOngoingOnMain(waitMs: Long = MAIN_WAIT_MS): Int? {
         if (Looper.myLooper() == Looper.getMainLooper()) return snoozeOngoing()
         val result = AtomicReference<Int?>(null)
         val done = CountDownLatch(1)
-        Handler(Looper.getMainLooper()).post {
+        val state = AtomicInteger(PENDING)
+        val posted = Handler(Looper.getMainLooper()).post {
+            if (!state.compareAndSet(PENDING, STARTED)) {
+                ModWatchLog.i("snooze: late task dropped")
+                return@post
+            }
             try {
                 result.set(snoozeOngoing())
             } catch (t: Throwable) {
@@ -64,9 +98,20 @@ object OngoingAlert {
                 done.countDown()
             }
         }
+        if (!posted) {
+            ModWatchLog.w("snooze: main thread gone")
+            return LATE
+        }
         if (!done.await(waitMs, TimeUnit.MILLISECONDS)) {
-            ModWatchLog.w("snooze: main thread did not answer in time")
-            return null
+            if (state.compareAndSet(PENDING, CANCELLED)) {
+                ModWatchLog.w("snooze: main thread did not answer in time")
+                return LATE
+            }
+            // started right at the deadline: it is running now, so its result is the answer
+            if (!done.await(waitMs, TimeUnit.MILLISECONDS)) {
+                ModWatchLog.w("snooze: main thread did not finish in time")
+                return LATE
+            }
         }
         return result.get()
     }

@@ -26,7 +26,8 @@ import tk.glucodata.ui.AlarmActivityAccess
 /**
  * JugglucoNGmod, watch block: what the snooze button relies on in upstream's alert code (plan, "Technique", contract
  * tests). A rename alone already breaks the compile; these tests hold the meaning - the overloads, `null` as "a
- * standard alert", return types, which kinds count and that only the presented alert is "current". A red test here
+ * standard alert", return types, which kinds count, that only the presented alert is "current" and how an episode is
+ * opened, dismissed and reset. A red test here
  * after merging an upstream release means their API moved: OngoingAlert needs a look, not this test a change.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -105,6 +106,33 @@ class WatchAlertApiContractTest {
         } finally {
             presented.setInt(null, -1)
         }
+    }
+
+    @Test
+    fun anEpisodeLastsFromItsFiringToItsResetAndADismissalIsSeparate() {
+        for (name in listOf("isEpisodeActive", "isDismissed")) {
+            val m = AlertStateTracker::class.java.getMethod(name, AlertType::class.java)
+            assertEquals(name, java.lang.Boolean.TYPE, m.returnType)
+        }
+        val type = AlertType.HIGH
+        assertFalse(AlertStateTracker.isEpisodeActive(type))
+        AlertStateTracker.onAlertTriggered(type)
+        assertTrue(AlertStateTracker.isEpisodeActive(type))
+        assertFalse(AlertStateTracker.isDismissed(type))
+        AlertStateTracker.onAlertDismissed(type)
+        assertTrue(AlertStateTracker.isEpisodeActive(type))
+        assertTrue(AlertStateTracker.isDismissed(type))
+        AlertStateTracker.resetState(type)
+        assertFalse(AlertStateTracker.isEpisodeActive(type))
+        assertFalse(AlertStateTracker.isDismissed(type))
+    }
+
+    @Test
+    fun theNativeSoundFlagIsAStaticBoolean() {
+        // LOSS has no episode; OngoingAlert reads "its sound is on" from here
+        val m = Natives::class.java.getMethod("getisalarm")
+        assertTrue(Modifier.isStatic(m.modifiers))
+        assertEquals(java.lang.Boolean.TYPE, m.returnType)
     }
 
     @Test

@@ -35,6 +35,30 @@ class ModWatchMessagesTest {
     }
 
     @Test
+    fun snoozeDoneRoundTripForLate() {
+        val late = SnoozeDone(null, at, late = true)
+        val bytes = ModWatchMessages.encodeSnoozeDone(late)
+        assertEquals(1 + 4 + 8, bytes.size)
+        assertEquals(late, ModWatchMessages.decodeSnoozeDone(bytes))
+        // "late" wins over a kind: nothing was snoozed
+        val lateWithKind = ModWatchMessages.encodeSnoozeDone(SnoozeDone(1, at, late = true))
+        assertEquals(late, ModWatchMessages.decodeSnoozeDone(lateWithKind))
+    }
+
+    @Test
+    fun onlyStandardAlertKindsCountAsSnoozed() {
+        for (type in tk.glucodata.alerts.AlertType.settingsEntries) {
+            val done = SnoozeDone(type.id, at)
+            assertEquals(type.name, done, ModWatchMessages.decodeSnoozeDone(ModWatchMessages.encodeSnoozeDone(done)))
+        }
+        // legacy-only kinds (2, 3), a kind past the list and a value below "late"
+        for (kind in listOf(2, 3, 15, 999, Int.MAX_VALUE, -3, Int.MIN_VALUE)) {
+            val bytes = ModWatchMessages.encodeSnoozeDone(SnoozeDone(kind, at))
+            assertNull("kind $kind", ModWatchMessages.decodeSnoozeDone(bytes))
+        }
+    }
+
+    @Test
     fun emptyShortAndNullMessagesAreNull() {
         assertNull(ModWatchMessages.decodeSnooze(null))
         assertNull(ModWatchMessages.decodeSnooze(ByteArray(0)))
@@ -59,7 +83,7 @@ class ModWatchMessagesTest {
     @Test
     fun brokenFieldsAreNull() {
         assertNull(ModWatchMessages.decodeSnooze(ModWatchMessages.encodeSnooze(SnoozeRequest(-5))))
-        assertNull(ModWatchMessages.decodeSnoozeDone(ModWatchMessages.encodeSnoozeDone(SnoozeDone(-2, at))))
+        assertNull(ModWatchMessages.decodeSnoozeDone(ModWatchMessages.encodeSnoozeDone(SnoozeDone(-3, at))))
         assertNull(ModWatchMessages.decodeSnoozeDone(ModWatchMessages.encodeSnoozeDone(SnoozeDone(1, -1))))
     }
 
@@ -75,6 +99,8 @@ class ModWatchMessagesTest {
     fun theWireFormatIsBigEndianAfterTheVersionByte() {
         val bytes = ModWatchMessages.encodeSnoozeDone(SnoozeDone(null, 0x0102030405060708L))
         assertArrayEquals(byteArrayOf(1, -1, -1, -1, -1, 1, 2, 3, 4, 5, 6, 7, 8), bytes)
+        val late = ModWatchMessages.encodeSnoozeDone(SnoozeDone(null, 0x0102030405060708L, late = true))
+        assertArrayEquals(byteArrayOf(1, -1, -1, -1, -2, 1, 2, 3, 4, 5, 6, 7, 8), late)
     }
 
     @Test

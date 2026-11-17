@@ -1,6 +1,7 @@
 package tk.glucodata.mod.watch
 
 import java.nio.ByteBuffer
+import tk.glucodata.alerts.AlertType
 
 /**
  * JugglucoNGmod, watch block: the Data Layer contract between our phone and watch code - paths, capabilities and the
@@ -20,7 +21,10 @@ object ModWatchMessages {
     const val PATH_PREFIX = "/mod/"
     /** Watch -> phone: the snooze button was pressed. Body: press time (ms, long). */
     const val PATH_SNOOZE = "/mod/snooze"
-    /** Phone -> watch: answer to [PATH_SNOOZE]. Body: snoozed kind (int, [NO_ALERT] = none) and phone time (ms, long). */
+    /**
+     * Phone -> watch: answer to [PATH_SNOOZE]. Body: snoozed kind (int: an AlertType id, [NO_ALERT] = none, [LATE] =
+     * the phone did not get to it in time) and phone time (ms, long).
+     */
     const val PATH_SNOOZE_DONE = "/mod/snooze/done"
     /** Phone -> watch, every 5 minutes: wake-up and phone battery (body - part 2). */
     const val PATH_TICK = "/mod/tick"
@@ -34,11 +38,20 @@ object ModWatchMessages {
 
     /** Kind in a [SnoozeDone] when no standard alert was going on. */
     const val NO_ALERT = -1
+    /**
+     * Kind in a [SnoozeDone] when the phone's main thread did not run the snooze in time (nothing was snoozed, and
+     * nothing will be). A new value of the same field, so still version 1: a reader without it drops the message as
+     * broken (below [NO_ALERT]) and stays silent, which is also the right answer to "late".
+     */
+    const val LATE = -2
 
     data class SnoozeRequest(val pressedAtMs: Long)
 
-    /** [snoozedKind] - the alert kind that was snoozed (AlertType id), `null` when none was going on. */
-    data class SnoozeDone(val snoozedKind: Int?, val atMs: Long)
+    /**
+     * [snoozedKind] - the alert kind that was snoozed (AlertType id), `null` when none was snoozed; [late] - the phone
+     * did not get to the press in time (then [snoozedKind] is `null`).
+     */
+    data class SnoozeDone(val snoozedKind: Int?, val atMs: Long, val late: Boolean = false)
 
     fun encodeSnooze(request: SnoozeRequest): ByteArray =
         allocate(Long.SIZE_BYTES).putLong(request.pressedAtMs).array()
@@ -51,7 +64,7 @@ object ModWatchMessages {
 
     fun encodeSnoozeDone(done: SnoozeDone): ByteArray =
         allocate(Int.SIZE_BYTES + Long.SIZE_BYTES)
-            .putInt(done.snoozedKind ?: NO_ALERT)
+            .putInt(if (done.late) LATE else done.snoozedKind ?: NO_ALERT)
             .putLong(done.atMs)
             .array()
 
@@ -59,9 +72,17 @@ object ModWatchMessages {
         val body = open(data, Int.SIZE_BYTES + Long.SIZE_BYTES) ?: return null
         val kind = body.int
         val at = body.long
-        if (kind < NO_ALERT || at < 0) return null
-        return SnoozeDone(if (kind == NO_ALERT) null else kind, at)
+        if (at < 0) return null
+        return when {
+            kind == NO_ALERT -> SnoozeDone(null, at)
+            kind == LATE -> SnoozeDone(null, at, late = true)
+            isStandardKind(kind) -> SnoozeDone(kind, at)
+            else -> null
+        }
     }
+
+    /** [kind] is one of the standard alert kinds a snooze can name. */
+    fun isStandardKind(kind: Int): Boolean = AlertType.settingsEntries.any { it.id == kind }
 
     /** A message buffer: the version byte written, room for [bodyBytes] of fields. */
     fun allocate(bodyBytes: Int): ByteBuffer =

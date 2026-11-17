@@ -7,10 +7,12 @@
     <application>
         <!-- "Snooze alarm": a launcher entry without a screen for a hardware button of the watch. Theme.NoDisplay
              (the activity finishes inside onCreate), out of recents and history, its own task so it never brings
-             the main app forward. Exported: the launcher and the button settings start it. -->
+             the main app forward. Exported: the launcher and the button settings start it. showWhenLocked: a press
+             on a locked watch snoozes the alert at once, as the alarm screen itself shows over the lock. -->
         <activity
             android:name="tk.glucodata.mod.watch.SnoozeButtonActivity"
             android:exported="true"
+            android:showWhenLocked="true"
             android:label="@string/mod_watch_snooze_label"
             android:icon="@drawable/mod_watch_snooze"
             android:theme="@android:style/Theme.NoDisplay"
