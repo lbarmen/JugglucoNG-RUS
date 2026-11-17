@@ -159,14 +159,15 @@ class CareLinkJournalContractTest {
         assertTrue(default!!.countsTowardIob && default.useForCalculation && !default.isArchived)
         val long = presets.first { !it.countsTowardIob }
         assertEquals("a long-acting type is not taken", default.id, CareLinkInsulin.choose(presets, long.id))
-        val other = presets.first { it.countsTowardIob && !it.isArchived && it.id != default.id }
-        assertEquals(other.id, CareLinkInsulin.choose(presets, other.id))
+        // a chosen rapid type other than the default is taken (made up beside theirs: their other built-in rapid types
+        // are archived on a fresh install)
+        val other = default.copy(id = 999_998L, sortOrder = default.sortOrder + 1)
+        assertEquals(other.id, CareLinkInsulin.choose(presets + other, other.id))
         // critic 4d, N6: a chosen type archived since is not taken
+        assertEquals(default.id, CareLinkInsulin.choose(presets + other.copy(isArchived = true), other.id))
         presets.firstOrNull { it.countsTowardIob && it.isArchived }?.let { archived ->
             assertEquals(default.id, CareLinkInsulin.choose(presets, archived.id))
         }
-        val archivedOther = other.copy(isArchived = true)
-        assertEquals(default.id, CareLinkInsulin.choose(presets.map { if (it.id == other.id) archivedOther else it }, other.id))
         assertEquals(default.id, CareLinkInsulin.choose(presets, null))
         assertEquals(default.id, CareLinkInsulin.choose(presets, 999_999L))
     }
