@@ -1,0 +1,17 @@
+# JugglucoNGmod: our paths - the one list for every mod/ script (sync report, hook budget, overlay of old releases).
+# Everything else in this repository is upstream's (ctqvva/JugglucoNG) and is changed only by MOD-HOOK lines.
+# A line is a directory (ending in /) or a glob; `*` matches across directories.
+mod/
+Common/src/mod/
+Common/src/wearMod/
+Common/src/testMobile/java/mod/
+.github/workflows/mod-*.yml
+.github/README.md
+# phone only (CareLink, stage 4): code seen by every phone build and by their debug tests, never by the watch;
+# components in the manifest of the phone `mod` build only; strings with the mod_ prefix next to theirs
+Common/src/mobile/java/tk/glucodata/mod/
+Common/src/mobileMod/
+# CareLink trial (part 4p): test builds of the phone only (mod/mod-init.gradle adds it with -PmodRelease=0)
+Common/src/modTrial/
+Common/src/mobile/res/values/mod_*
+Common/src/mobile/res/values-ru/mod_*

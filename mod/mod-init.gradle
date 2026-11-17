@@ -1,0 +1,148 @@
+// JugglucoNGmod: build type `mod`, added from outside the upstream build files.
+//
+// Run every build through mod/gradlew-mod.sh, which passes `-I mod/mod-init.gradle`.
+// Upstream Common/build.gradle stays untouched (rule: easy upstream merges, see mod/HOOKS.md).
+//
+// What this script does, all for the `mod` build type only:
+//  - creates `mod` from upstream `release` (initWith), then adds exactly our changes:
+//    package suffix .mod, version suffix -modN, own versionCode, own update repo,
+//    no SourceForge fallback, -DAPPSUFFIX for the native side, our R8 rules mod/proguard-mod.pro and
+//    mod/proguard-mod-trial.pro; test builds (N = 0) of the phone also get Common/src/modTrial/java (CareLink trial);
+//  - fails the build loudly if `mod` no longer matches `release` apart from those changes
+//    (upstream added a flag to `release` that initWith did not copy, etc.);
+//  - fails the build if any of the four signing properties is missing or empty,
+//    so a `mod` APK can never silently fall back to upstream's public everyone.keystore.
+//
+// Release number N: -PmodRelease=N (0 = test build, 1..99 = published releases).
+
+final String MOD_TYPE = 'mod'
+final String MOD_SUFFIX = '.mod'
+final String MOD_REPO = 'lbarmen/JugglucoNGmod'
+
+gradle.beforeProject { Project p ->
+    if (p.path != ':Common') return
+
+    def relRaw = (p.findProperty('modRelease') ?: '0').toString().trim()
+    if (!(relRaw ==~ /\d{1,2}/)) {
+        throw new GradleException("MOD: -PmodRelease must be 0..99, got '$relRaw'")
+    }
+    final int modRelease = relRaw.toInteger()
+
+    p.pluginManager.withPlugin('com.android.application') {
+        def comps = p.extensions.getByName('androidComponents')
+
+        comps.finalizeDsl { android ->
+            def release = android.buildTypes.getByName('release')
+            def mod = android.buildTypes.create(MOD_TYPE)
+            mod.initWith(release)
+
+            mod.applicationIdSuffix = MOD_SUFFIX
+            mod.versionNameSuffix = "-mod${modRelease}"
+            mod.buildConfigField 'String', 'UPDATE_REPO', "\"${MOD_REPO}\""
+            mod.buildConfigField 'String', 'UPDATE_BACKUP_SOURCE', '""'
+            mod.buildConfigField 'int', 'MOD_RELEASE', "${modRelease}"
+            // Our R8 rules after upstream's (mod/proguard-mod.pro: constructors of classes inflated from XML).
+            final String MOD_PROGUARD = 'proguard-mod.pro'
+            mod.proguardFile(p.rootProject.file("mod/${MOD_PROGUARD}"))
+            // CareLink trial entry point (part 4p): always added - in a candidate it matches nothing.
+            final String MOD_TRIAL_PROGUARD = 'proguard-mod-trial.pro'
+            mod.proguardFile(p.rootProject.file("mod/${MOD_TRIAL_PROGUARD}"))
+            // CareLink trial sources (part 4p): test builds of the phone only (source set mobileMod = phone + mod); a
+            // candidate and the watch never get them. The source set's `kotlin` dirs: AGP's built-in Kotlin compiles .kt
+            // only from them (plus the default src/<set>/java); an extra java dir reaches javac alone, which skips .kt -
+            // upstream's extra java.srcDirs hold .java only (runs 43936569206 variant API java dir, 43940679304
+            // sourceSets java.srcDir: no trial class in the APK).
+            if (modRelease == 0) {
+                android.sourceSets.maybeCreate('mobileMod').kotlin.srcDir('src/modTrial/java')
+                p.logger.lifecycle("MOD: mobileMod gets the CareLink trial (src/modTrial/java, test build)")
+            }
+            def appSuffixFlag = "-DAPPSUFFIX=\"quotes(${MOD_SUFFIX})\""
+            mod.externalNativeBuild.cmake.cppFlags.add(appSuffixFlag)
+            mod.externalNativeBuild.cmake.cFlags.add(appSuffixFlag)
+
+            // ---- inheritance check: mod == release + our additions, nothing else ----
+            def problems = []
+            def same = { String what, a, b ->
+                if (a != b) problems << "$what: release=$a mod=$b"
+            }
+            same('signingConfig', release.signingConfig?.name, mod.signingConfig?.name)
+            same('minifyEnabled', release.minifyEnabled, mod.minifyEnabled)
+            same('shrinkResources', release.shrinkResources, mod.shrinkResources)
+            same('debuggable', release.debuggable, mod.debuggable)
+            same('jniDebuggable', release.jniDebuggable, mod.jniDebuggable)
+            same('proguardFiles', release.proguardFiles*.name + [MOD_PROGUARD, MOD_TRIAL_PROGUARD], mod.proguardFiles*.name)
+            same('consumerProguardFiles', release.consumerProguardFiles*.name, mod.consumerProguardFiles*.name)
+            same('manifestPlaceholders', release.manifestPlaceholders, mod.manifestPlaceholders)
+            same('matchingFallbacks', release.matchingFallbacks, mod.matchingFallbacks)
+
+            def fieldMap = { bt ->
+                bt.buildConfigFields.collectEntries { k, v -> [(k): "${v.type} ${v.value}".toString()] }
+            }
+            def ours = ['UPDATE_REPO', 'UPDATE_BACKUP_SOURCE', 'MOD_RELEASE'] as Set
+            def relFields = fieldMap(release).findAll { k, v -> !(k in ours) }
+            def modFields = fieldMap(mod).findAll { k, v -> !(k in ours) }
+            same('buildConfigFields', relFields, modFields)
+            if (release.buildConfigFields.keySet().any { it in ours }) {
+                problems << "upstream release now sets one of our buildConfigFields ${ours}: review mod-init.gradle"
+            }
+            def resMap = { bt ->
+                bt.resValues.collectEntries { k, v -> [(k): "${v.type} ${v.value}".toString()] }
+            }
+            same('resValues', resMap(release), resMap(mod))
+
+            def relCmake = release.externalNativeBuild.cmake
+            def modCmake = mod.externalNativeBuild.cmake
+            same('cmake.cppFlags', relCmake.cppFlags + [appSuffixFlag], modCmake.cppFlags)
+            same('cmake.cFlags', relCmake.cFlags + [appSuffixFlag], modCmake.cFlags)
+            same('cmake.arguments', relCmake.arguments, modCmake.arguments)
+            same('cmake.abiFilters', relCmake.abiFilters, modCmake.abiFilters)
+            same('cmake.targets', relCmake.targets, modCmake.targets)
+            same('ndk.abiFilters', release.ndk.abiFilters, mod.ndk.abiFilters)
+            same('ndk.debugSymbolLevel', release.ndk.debugSymbolLevel, mod.ndk.debugSymbolLevel)
+
+            // Upstream release must not grow suffixes of its own that we would silently inherit.
+            if (release.applicationIdSuffix) problems << "upstream release has applicationIdSuffix '${release.applicationIdSuffix}'"
+            if (release.versionNameSuffix) problems << "upstream release has versionNameSuffix '${release.versionNameSuffix}'"
+            if (!relCmake.cppFlags.any { it.contains('-DRELEASEDIR=1') }) problems << 'upstream release no longer passes -DRELEASEDIR=1'
+            // Sources/resources that only `release` sees would be missing from `mod` without any error.
+            ['src/release', 'src/mobileRelease', 'src/wearRelease'].each { dir ->
+                if (p.file(dir).exists()) problems << "upstream now has ${dir}/ (release-only sources): mod would not get them"
+            }
+
+            if (problems) {
+                throw new GradleException("MOD: build type 'mod' no longer matches upstream 'release':\n  - " +
+                        problems.join('\n  - ') + "\nFix mod/mod-init.gradle (copy the value explicitly), do not edit Common/build.gradle.")
+            }
+            p.logger.lifecycle("MOD: build type 'mod' = upstream 'release' + .mod / -mod${modRelease} / ${MOD_REPO} (inheritance check passed)")
+        }
+
+        // Own versionCode: upstream code * 100 + N (1032 -> 103200 + N); wear keeps upstream's +1 000 000.
+        comps.onVariants(comps.selector().withBuildType(MOD_TYPE)) { variant ->
+            int upstreamCode = (p.property('appVersionCode') as Integer)
+            boolean isWear = variant.productFlavors.any { it.second == 'wear' }
+            int code = upstreamCode * 100 + modRelease + (isWear ? 1000000 : 0)
+            variant.outputs.each { out -> out.versionCode.set(code) }
+        }
+    }
+
+    // Signing guard: any mod task in the graph needs all four signing properties and an existing key file.
+    p.gradle.taskGraph.whenReady { graph ->
+        // Mod as a word in the task name (assembleMobileMod, generateWearModRFile), not inside "Module"
+        boolean modRequested = graph.allTasks.any { t -> t.project == p && t.name =~ /Mod([A-Z]|$)/ }
+        if (!modRequested) return
+        def missing = ['thekeyfile', 'thepassword', 'thekeyalias', 'thekeypassword'].findAll { name ->
+            !p.hasProperty(name) || p.property(name).toString().isEmpty()
+        }
+        if (missing) {
+            throw new GradleException("MOD: signing property missing or empty: ${missing.join(', ')}. " +
+                    "A mod build is never signed with upstream's everyone.keystore.")
+        }
+        def keyFile = p.file(p.property('thekeyfile').toString())
+        if (!keyFile.isFile()) {
+            throw new GradleException("MOD: signing key file does not exist: thekeyfile (path resolved from Common/)")
+        }
+        if (keyFile.canonicalFile == p.file('everyone.keystore').canonicalFile) {
+            throw new GradleException("MOD: thekeyfile points to upstream's everyone.keystore")
+        }
+    }
+}

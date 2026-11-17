@@ -1,0 +1,86 @@
+# JugglucoNGmod: reminder about block branches on test for more than 7 days (plan of stage 2, E3; ТЗ 3.6).
+# A candidate run of mod-build.yml is named "MOD candidate N blocks: b1 b2" (its run-name). Every block branch
+# from a successful candidate that is still not merged into main 7+ days after its first candidate -> this run is
+# red, and GitHub sends the e-mail. The owner decides: merge the block, keep testing, or drop it (СТАТУС.md, «На тесте»).
+# Read only, no secrets. Manual run for the check: pretend_days adds days to "now"; probe adds one synthetic
+# candidate "N branch ISO-date" to the list.
+name: MOD remind
+
+on:
+  schedule:
+    - cron: '45 8 * * *'
+  workflow_dispatch:
+    inputs:
+      pretend_days:
+        description: 'check only: add this many days to now'
+        required: false
+        default: '0'
+      probe:
+        description: 'check only: a synthetic candidate "N branch 2026-11-15T00:00:00Z"'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  remind:
+    name: blocks on test for more than 7 days
+    if: github.repository == 'lbarmen/JugglucoNGmod'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Candidates and their block branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRETEND: ${{ inputs.pretend_days || '0' }}
+          PROBE: ${{ inputs.probe }}
+        run: |
+          set -euo pipefail
+          [[ "$PRETEND" =~ ^[0-9]+$ ]] || { echo "::error::pretend_days '$PRETEND' is not a number"; exit 1; }
+          now=$(( $(date +%s) + PRETEND * 86400 ))
+          list=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/mod-build.yml/runs?event=workflow_dispatch&status=success&per_page=100" \
+            --jq '.workflow_runs[] | select(.display_title | test("^MOD candidate [0-9]+ blocks: ")) |
+                  "\(.display_title | capture("^MOD candidate (?<n>[0-9]+) blocks: (?<b>.*)$") | "\(.n)|\(.b)")|\(.created_at)"')
+          [ -n "$PROBE" ] && list="$list"$'\n'"$(echo "$PROBE" | awk '{print $1 "|" $2 "|" $3}')"
+          declare -A first
+          while IFS='|' read -r n blocks created; do
+            [ -n "${n:-}" ] || continue
+            # an urgent candidate carries " (hold=0)" after its blocks (mod-build.yml run-name)
+            for b in ${blocks% (hold=0)}; do
+              [ "$b" = "-" ] && continue
+              t=$(date -d "$created" +%s)
+              if [ -z "${first[$b]:-}" ] || [ "$t" -lt "${first[$b]%% *}" ]; then first[$b]="$t $n"; fi
+            done
+          done <<< "$list"
+          stale=""; ok=0
+          for b in "${!first[@]}"; do
+            t="${first[$b]%% *}"; n="${first[$b]#* }"
+            # exit 2 = no such branch (deleted); any other failure = GitHub not answering -> red, never silent
+            set +e; git ls-remote --exit-code --heads origin "refs/heads/$b" > /dev/null; rc=$?; set -e
+            if [ "$rc" = 2 ]; then echo "gone   $b (candidate $n): branch deleted"; continue; fi
+            [ "$rc" = 0 ] || { echo "::error::cannot read branch $b from GitHub (git exit $rc): today's reminder is not reliable"; exit 1; }
+            git fetch -q --no-tags origin "+refs/heads/$b:refs/remotes/origin/$b"
+            if git merge-base --is-ancestor "origin/$b" origin/main; then
+              echo "merged $b (candidate $n)"; continue
+            fi
+            days=$(( (now - t) / 86400 ))
+            if [ "$days" -ge 7 ]; then
+              stale="$stale"$'\n'"- \`$b\` — на тесте $days дн. (первый кандидат $n, $(date -u -d "@$t" +%Y-%m-%d))"
+            else
+              echo "test   $b: $days day(s) (candidate $n)"; ok=$((ok + 1))
+            fi
+          done
+          if [ -n "$stale" ]; then
+            { echo "### Блоки на тесте дольше 7 дней"; echo "$stale"; echo
+              echo "Решение владельца: влить в \`main\`, тестировать дальше или отказаться (СТАТУС.md, «На тесте»)."; } | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::block branch(es) on test for 7+ days:$(echo "$stale" | tr '\n' ' ')"
+            exit 1
+          fi
+          echo "Блоков на тесте дольше 7 дней нет (на тесте сейчас: $ok)." | tee -a "$GITHUB_STEP_SUMMARY"

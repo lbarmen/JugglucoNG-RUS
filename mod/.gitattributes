@@ -1,0 +1,2 @@
+# JugglucoNGmod: our scripts always with LF line endings (they run on Linux in GitHub Actions).
+* text eol=lf

@@ -636,7 +636,7 @@ fun ExpressiveSettingsScreen(
                         onClick = { navController.navigate("settings/lumiflex") }
                     )
                 }
-                tk.glucodata.rus.carelink.RusCareLinkEntry(sharingColor) // RUS-HOOK:carelink-settings
+                tk.glucodata.mod.carelink.ModCareLinkEntry(sharingColor) // MOD-HOOK:carelink-settings
                 if (showMqAccount) {
                     SettingsItem(
                         title = stringResource(R.string.mq_account_title),
