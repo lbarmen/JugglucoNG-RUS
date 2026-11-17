@@ -150,9 +150,12 @@ class CareLinkActivity : ComponentActivity() {
          * compile the class but have no such window (no BuildConfig field tells it in debug).
          */
         fun intentIfDeclared(context: Context): Intent? {
-            val intent = Intent(context, CareLinkActivity::class.java)
+            val component = android.content.ComponentName(context, CareLinkActivity::class.java)
             return try {
-                if (intent.resolveActivity(context.packageManager) != null) intent else null
+                // the manifest entry itself (not declared - NameNotFoundException); resolveActivity is no help in tests:
+                // Robolectric resolves an explicit intent of any class it knows
+                context.packageManager.getActivityInfo(component, 0)
+                Intent().setComponent(component)
             } catch (_: Throwable) {
                 null
             }

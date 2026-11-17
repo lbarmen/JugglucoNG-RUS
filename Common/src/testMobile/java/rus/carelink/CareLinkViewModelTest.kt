@@ -204,8 +204,8 @@ class CareLinkViewModelTest {
 
     @Test
     fun settingsRowAndNotificationTapOnlyWhereTheWindowIsDeclared() {
-        // upstream's builds: no window - the row is not drawn, a tap opens the app (Robolectric resolves an explicit
-        // intent of a class it knows, so the window is taken out of its package manager first)
+        // upstream's builds: no window - the row is not drawn, a tap opens the app (taken out of Robolectric's package
+        // manager first, in case its test manifest has it)
         val window = ComponentName(app, CareLinkActivity::class.java)
         shadowOf(app.packageManager).removeActivity(window)
         assertNull(CareLinkActivity.intentIfDeclared(app))
