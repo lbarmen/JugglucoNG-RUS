@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod: components of the watch `mod` build only (source set wear + build type mod). The classes live in
+     Common/src/wear/java/tk/glucodata/mod/ (compiled by every watch build, never by the phone); declared here they
+     exist only in MOD. No package attribute: the namespace comes from Common/build.gradle. VIBRATE comes from
+     upstream's Common/src/main/AndroidManifest.xml. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- "Snooze alarm": a launcher entry without a screen for a hardware button of the watch. Theme.NoDisplay
+             (the activity finishes inside onCreate), out of recents and history, its own task so it never brings
+             the main app forward. Exported: the launcher and the button settings start it. -->
+        <activity
+            android:name="tk.glucodata.mod.watch.SnoozeButtonActivity"
+            android:exported="true"
+            android:label="@string/mod_watch_snooze_label"
+            android:icon="@drawable/mod_watch_snooze"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity="${applicationId}.modsnooze">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Our Data Layer messages (/mod/...). Exported like upstream's MessageReceiver: Google Play services
+             delivers them; only our phone app (same package and signature) can send them. -->
+        <service
+            android:name="tk.glucodata.mod.watch.ModWearListener"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:host="*" android:pathPrefix="/mod/" android:scheme="wear" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>

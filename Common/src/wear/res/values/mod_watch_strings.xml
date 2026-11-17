@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- JugglucoNGmod, watch block: our watch strings (mod_watch_ prefix), next to upstream's; never in their strings.xml. -->
+<resources>
+    <!-- Launcher name of the screenless entry the user puts on a hardware button -->
+    <string name="mod_watch_snooze_label">Snooze alarm</string>
+</resources>
