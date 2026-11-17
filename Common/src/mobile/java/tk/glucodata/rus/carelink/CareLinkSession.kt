@@ -105,7 +105,7 @@ class AesGcmSessionCipher(
     }
 
     override fun open(sealed: ByteArray): ByteArray {
-        require(sealed.size > IV_BYTES) { "sealed data too short" }
+        if (sealed.size <= IV_BYTES) throw SealedDataTooShortException()
         val cipher = Cipher.getInstance(TRANSFORM)
         cipher.init(Cipher.DECRYPT_MODE, keyProvider(), GCMParameterSpec(TAG_BITS, sealed, 0, IV_BYTES))
         return cipher.doFinal(sealed, IV_BYTES, sealed.size - IV_BYTES)
@@ -114,6 +114,12 @@ class AesGcmSessionCipher(
     override fun resetKey() {
         keyReset()
     }
+
+    /**
+     * The sealed data is shorter than its IV: a cut file that will never open. Its own class, not the wide
+     * IllegalArgumentException, so that only this case wipes the session (critic 4d2, N8).
+     */
+    class SealedDataTooShortException : java.security.GeneralSecurityException("sealed data too short")
 
     companion object {
         private const val TRANSFORM = "AES/GCM/NoPadding"

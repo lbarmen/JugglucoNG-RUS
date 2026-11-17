@@ -11,6 +11,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.ConscryptMode
+import tk.glucodata.rus.carelink.CareLinkBasalWriter
 import tk.glucodata.rus.carelink.CareLinkConfig
 import tk.glucodata.rus.carelink.CareLinkData
 import tk.glucodata.rus.carelink.CareLinkMarkers
@@ -381,6 +382,20 @@ class CareLinkParseTest {
         assertNull(pump(other)!!.tempBasal)
         val emptyType = live.replace("0.7000000179}", """0.7, "tempBasalType": "", "tempBasalPercentage": 50}""")
         assertNull("empty type and no banner - no temporary basal", pump(emptyType)!!.tempBasal)
+        // critic 4d2, N4: the banner alone with 0 % - not a 0 % temporary basal (it would be a 0 U/h segment, a stop in
+        // Nightscout); the basal rate stands. A stated percentage type with 0 % is believed.
+        val bannerZero = live.replace(
+            "0.7000000179}",
+            """0.7, "tempBasalRate": 0, "tempBasalPercentage": 0}, "pumpBannerState": [{"type": "TEMP_BASAL", "timeRemaining": 30}]""",
+        )
+        val p = pump(bannerZero)!!
+        assertEquals(TempBasal(0.0, null, 30), p.tempBasal)
+        assertEquals(0.7, CareLinkBasalWriter.rateOf(p, 0.9)!!, 1e-9)
+        val statedZero = live.replace(
+            "0.7000000179}",
+            """0.7, "tempBasalType": "PERCENTAGE", "tempBasalPercentage": 0}, "pumpBannerState": [{"type": "TEMP_BASAL", "timeRemaining": 30}]""",
+        )
+        assertEquals(0, pump(statedZero)!!.tempBasal!!.percent)
     }
 
     @Test

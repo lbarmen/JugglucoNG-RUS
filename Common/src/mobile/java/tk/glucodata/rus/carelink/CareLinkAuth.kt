@@ -99,12 +99,13 @@ object CareLinkAuth {
 
     /**
      * Why a session file does not open, when it never will: the tag does not match (another key), the key was
-     * invalidated, a file too short ([AesGcmSessionCipher.open]'s `require`), or it opened but did not parse
-     * ([CareLinkVault.StorageException] without a cause). A read error of the file or a Keystore hiccup is not here:
-     * the file is kept and the poll reports a storage error.
+     * invalidated, a file too short ([AesGcmSessionCipher.SealedDataTooShortException]; no longer the wide
+     * IllegalArgumentException - critic 4d2, N8), or it opened but did not parse ([CareLinkVault.StorageException]
+     * without a cause). A read error of the file or a Keystore hiccup is not here: the file is kept and the poll reports
+     * a storage error.
      */
     private val DEAD_SESSION_ERRORS = setOf(
-        "AEADBadTagException", "BadPaddingException", "KeyPermanentlyInvalidatedException", "IllegalArgumentException",
+        "AEADBadTagException", "BadPaddingException", "KeyPermanentlyInvalidatedException", "SealedDataTooShortException",
         "StorageException",
     )
 

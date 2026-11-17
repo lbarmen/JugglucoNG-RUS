@@ -66,10 +66,13 @@ object CareLinkBasalWriter {
         withContext(Dispatchers.IO) {
             val app = context.applicationContext
             val seen = CareLinkSeenStore.load(app, atMs)
+            val run = Run(app, seen, CareLinkJournal(app))
             try {
-                Run(app, seen, CareLinkJournal(app)).step(pumpNow)
+                run.step(pumpNow)
             } finally {
                 CareLinkSeenStore.save(app, seen, atMs)
+                // diagnostics for upstream's debug log (4e): numbers only - no rates or times
+                CareLinkLog.i("basal: ${run.stats}")
             }
         }
     }
@@ -87,7 +90,11 @@ object CareLinkBasalWriter {
             val seen = CareLinkSeenStore.load(app, atMs)
             if (seen.basalOpen == null && seen.stopOpen == null && seen.lastNormalRate == null) return@withContext
             try {
-                if (seen.basalOpen != null || seen.stopOpen != null) Run(app, seen, CareLinkJournal(app)).close()
+                if (seen.basalOpen != null || seen.stopOpen != null) {
+                    val run = Run(app, seen, CareLinkJournal(app))
+                    run.close()
+                    CareLinkLog.i("basal closed: ${run.stats}")
+                }
                 seen.lastNormalRate = null
                 seen.lastNormalAtMs = null
             } finally {
@@ -111,8 +118,21 @@ object CareLinkBasalWriter {
         return t.rate?.takeIf { it > 0.0 || t.absolute } ?: p.basalRate
     }
 
+    /** What one snapshot did: segments opened / closed / moved on, stop notes opened / closed. Numbers only. */
+    internal class BasalStats {
+        var opened = 0
+        var closed = 0
+        var extended = 0
+        var stopsOpened = 0
+        var stopsClosed = 0
+
+        override fun toString(): String =
+            "opened=$opened closed=$closed extended=$extended stopsOpened=$stopsOpened stopsClosed=$stopsClosed"
+    }
+
     private class Run(val app: Context, val seen: SeenData, val j: CareLinkJournal) {
         private val settings = CareLinkSettings(app)
+        val stats = BasalStats()
 
         private fun newSource(): JournalEntrySource =
             if (settings.sendToNightscout) JournalEntrySource.HEALTH_CONNECT else JournalEntrySource.API
@@ -142,6 +162,7 @@ object CareLinkBasalWriter {
             }
             if (abs(rate - open.rate) > CareLinkBasalWriter.SAME_RATE) {
                 writeSegment(open.key, open.startMs, open.rate, t)
+                stats.closed++
                 start(rate, t)
                 return
             }
@@ -149,6 +170,7 @@ object CareLinkBasalWriter {
             if (end - t < CareLinkBasalWriter.EXTEND_BEFORE_MS) {
                 end = t + CareLinkBasalWriter.AHEAD_MS
                 writeSegment(open.key, open.startMs, open.rate, end)
+                stats.extended++
             }
             seen.basalOpen = open.copy(endMs = end, lastDataAtMs = t)
         }
@@ -186,6 +208,7 @@ object CareLinkBasalWriter {
             val open = seen.basalOpen ?: return
             if (open.endMs != open.lastDataAtMs) writeSegment(open.key, open.startMs, open.rate, open.lastDataAtMs)
             seen.basalOpen = null
+            stats.closed++
         }
 
         private suspend fun start(rate: Double, t: Long) {
@@ -193,6 +216,7 @@ object CareLinkBasalWriter {
             val end = t + CareLinkBasalWriter.AHEAD_MS
             writeSegment(key, t, rate, end)
             seen.basalOpen = BasalOpen(key, t, rate, end, t)
+            stats.opened++
         }
 
         private suspend fun writeSegment(key: String, startMs: Long, rate: Double, endMs: Long) {
@@ -226,6 +250,7 @@ object CareLinkBasalWriter {
                 val text = app.getString(R.string.rus_carelink_note_stop_open, hhmm(t))
                 val written = j.upsert(note(key, t, row, text))
                 seen.stopOpen = StopOpen(key, t, written.id, written.updatedAt, t, text)
+                stats.stopsOpened++
                 return
             }
             if (p.suspended != false || open == null) return
@@ -252,6 +277,7 @@ object CareLinkBasalWriter {
                 j.upsert(note(open.key, open.startMs, row, text))
             }
             seen.stopOpen = null
+            stats.stopsClosed++
         }
 
         private fun note(key: String, startMs: Long, row: JournalEntryEntity?, text: String) =

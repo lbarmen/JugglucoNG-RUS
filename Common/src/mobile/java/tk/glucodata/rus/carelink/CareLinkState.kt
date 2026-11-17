@@ -111,6 +111,23 @@ class CareLinkStateStore(context: Context) {
             prefs.edit().putBoolean(K_NO_DATA_SHOWN, v).apply()
         }
 
+    /**
+     * When the journal or basal write started failing poll after poll (null - the last poll wrote fine); cleared by a
+     * good poll. For the "pump records are not saved" notification (critic 4d2, C3).
+     */
+    var writeFailSinceMs: Long?
+        get() = long(K_WRITE_FAIL_SINCE)
+        set(v) {
+            prefs.edit().apply { if (v == null) remove(K_WRITE_FAIL_SINCE) else putLong(K_WRITE_FAIL_SINCE, v) }.apply()
+        }
+
+    /** "Pump records are not saved" was shown and no write has worked since. */
+    var writeFailShown: Boolean
+        get() = prefs.getBoolean(K_WRITE_FAIL_SHOWN, false)
+        set(v) {
+            prefs.edit().putBoolean(K_WRITE_FAIL_SHOWN, v).apply()
+        }
+
     /** Back to nothing (sign-out; may run on the main thread - preferences written in the background). */
     fun clear() {
         synchronized(LOCK) {
@@ -176,6 +193,8 @@ class CareLinkStateStore(context: Context) {
         private const val K_FIRST_PENDING = "firstPollPending"
         private const val K_NEED_LOGIN_SHOWN = "needLoginShown"
         private const val K_NO_DATA_SHOWN = "noDataShown"
+        private const val K_WRITE_FAIL_SINCE = "writeFailSinceMs"
+        private const val K_WRITE_FAIL_SHOWN = "writeFailShown"
     }
 }
 
@@ -183,7 +202,9 @@ class CareLinkStateStore(context: Context) {
  * JugglucoNG-RUS, CareLink (stage 4c): settings of the CareLink window (SharedPreferences `rus_carelink_settings`, no
  * secrets). [enabled] - polling on (a sign-in turns it on, a sign-out off; a file, see there); [intervalMin] - 5/10/15
  * min, default 5; [presetId] - insulin type of pump boluses, null - upstream's default for calculation (4d);
- * [writeCarbs] - record calculator carbs (on); [sendToNightscout] - pump records go to Nightscout (off; plan, decision 8).
+ * [writeCarbs] - record calculator carbs (on); [sendToNightscout] - pump records go to Nightscout (off; plan, decision 8);
+ * [warnAfterMin] - "no pump data" and "pump records are not saved" come after this long: 5/10/15/30/60 min, default 30
+ * (the person's word 17.11: "I want 5 minutes to test it"; one threshold for both - decision of 4e).
  */
 class CareLinkSettings(context: Context) {
 
@@ -240,15 +261,27 @@ class CareLinkSettings(context: Context) {
             prefs.edit().putBoolean(K_NIGHTSCOUT, v).apply()
         }
 
+    var warnAfterMin: Int
+        get() = prefs.getInt(K_WARN, DEFAULT_WARN_MIN).takeIf { it in WARN_AFTER_MIN } ?: DEFAULT_WARN_MIN
+        set(v) {
+            prefs.edit().putInt(K_WARN, v.takeIf { it in WARN_AFTER_MIN } ?: DEFAULT_WARN_MIN).apply()
+        }
+
+    /** [warnAfterMin] in milliseconds. */
+    val warnAfterMs: Long get() = warnAfterMin * 60_000L
+
     companion object {
         const val PREFS = "rus_carelink_settings"
         const val DEFAULT_INTERVAL_MIN = 5
         val INTERVALS_MIN = listOf(5, 10, 15)
+        const val DEFAULT_WARN_MIN = 30
+        val WARN_AFTER_MIN = listOf(5, 10, 15, 30, 60)
         /** The polling flag in noBackupFilesDir/rus-carelink/ (the `enabled` preference of 4c builds is not read). */
         const val ENABLED_FILE = "enabled"
         private const val K_INTERVAL = "intervalMin"
         private const val K_PRESET = "presetId"
         private const val K_CARBS = "writeCarbs"
         private const val K_NIGHTSCOUT = "sendToNightscout"
+        private const val K_WARN = "warnAfterMin"
     }
 }

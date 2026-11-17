@@ -82,7 +82,11 @@ object CareLinkPoller {
         val app = context.applicationContext
         return background.launch {
             try {
-                mutex.withLock { withContext(NonCancellable) { closeBasal(app) } }
+                mutex.withLock {
+                    withContext(NonCancellable) { closeBasal(app) }
+                    // a poll running at the sign-out may have put the pump's IoB back on the plate (critic 4d2, N3)
+                    CareLinkIob.clear()
+                }
             } catch (t: Throwable) {
                 CareLinkLog.w("basal not closed after sign-out (${t.javaClass.simpleName})")
             }
@@ -203,7 +207,8 @@ object CareLinkPoller {
                 if (error == null) error = CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName)
             }
             try {
-                publishIob(pump)
+                // signed out while writing: the pump's number stays off the plate (critic 4d2, N3)
+                if (CareLinkSettings(app).enabled) publishIob(pump)
             } catch (t: Throwable) {
                 // the IoB plate is a display: a failure here is not a failed poll
                 CareLinkLog.w("poll: active insulin not published (${t.javaClass.simpleName})")

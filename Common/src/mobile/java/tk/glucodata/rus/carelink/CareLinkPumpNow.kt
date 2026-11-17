@@ -155,7 +155,10 @@ object CareLinkPumpNow {
         if (banner == null && type == null) return null
         val rate = basal.clDouble("tempBasalRate")?.takeIf { it >= 0.0 }?.let(CareLinkMarkers::round3)
         val absolute = type?.uppercase()?.startsWith("ABS") == true
-        val percent = if (absolute) null else basal.clDouble("tempBasalPercentage")?.takeIf { it >= 0.0 }?.let { Math.round(it).toInt() }
+        // type not given (the banner alone) and 0 %: not believed - the field may just be empty; a 0 U/h segment would go to
+        // Nightscout as a stop (critic 4d2, N4). A stated percentage type with 0 % stands.
+        val percent = if (absolute) null else basal.clDouble("tempBasalPercentage")
+            ?.takeIf { it > 0.0 || (it == 0.0 && type != null) }?.let { Math.round(it).toInt() }
         val left = banner?.clDouble("timeRemaining")?.takeIf { it >= 0.0 }?.toInt()
         return TempBasal(rate, percent, left, absolute)
     }

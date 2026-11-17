@@ -7,6 +7,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,6 +23,7 @@ import tk.glucodata.data.journal.JournalEntrySource
 import tk.glucodata.data.journal.JournalEntryType
 import tk.glucodata.data.journal.JournalRepository
 import tk.glucodata.rus.carelink.CareLinkInsulin
+import tk.glucodata.rus.carelink.CareLinkJournal
 import tk.glucodata.rus.carelink.CareLinkJournalWriter
 import tk.glucodata.rus.carelink.CareLinkSeenStore
 import tk.glucodata.rus.carelink.CareLinkSettings
@@ -47,7 +49,10 @@ class CareLinkJournalWriterTest {
     fun setUp() = CareLinkJournalTestEnv.setUp { now }
 
     @After
-    fun tearDown() = CareLinkJournalTestEnv.tearDown()
+    fun tearDown() {
+        CareLinkJournalWriter.journal = { CareLinkJournal(it) }
+        CareLinkJournalTestEnv.tearDown()
+    }
 
     private fun bolus(
         sec: Int, programmed: Double, delivered: Double, completed: Boolean = true, type: String = "FAST",
@@ -370,5 +375,74 @@ class CareLinkJournalWriterTest {
         assertEquals(2, byKey.size)
         assertEquals(running.id, byKey["carelink:INSULIN:2027-01-15T06:00:30:0:insulin"]!!.id)
         assertEquals(1.0f, byKey["carelink:INSULIN:2027-01-15T06:00:05:0:insulin"]!!.amount!!, 1e-6f)
+    }
+
+    // ---------------------------------------------------------------- critic 4d2 (second round)
+
+    private val k10 = "carelink:INSULIN:2027-01-15T06:00:10:0:insulin"
+    private val k30 = "carelink:INSULIN:2027-01-15T06:00:30:0:insulin"
+
+    @Test
+    fun oneRowThatFailsDoesNotStopTheLaterBoluses() {
+        // critic 4d2, C1: upstream refuses one row - the later bolus and its carbs are still written, the failure reported
+        CareLinkJournalWriter.journal = { c ->
+            object : CareLinkJournal(c) {
+                override suspend fun upsert(input: JournalEntryInput): JournalEntryEntity {
+                    if (input.sourceRecordId == k10) throw IllegalStateException("made-up refusal")
+                    return super.upsert(input)
+                }
+            }
+        }
+        try {
+            write(bolus(10, 1.0, 1.0), meal(28, 30.0), bolus(30, 2.0, 2.0))
+            fail("the failure is reported to the poll")
+        } catch (_: IllegalStateException) {
+        }
+        assertEquals(listOf(k30), insulin().map { it.sourceRecordId })
+        assertEquals(1, carbs().size)
+        // the journal works again: the next poll writes the first one, nothing twice
+        CareLinkJournalWriter.journal = { CareLinkJournal(it) }
+        write(bolus(10, 1.0, 1.0), meal(28, 30.0), bolus(30, 2.0, 2.0))
+        assertEquals(setOf(k10, k30), insulin().map { it.sourceRecordId }.toSet())
+        assertEquals(1, carbs().size)
+    }
+
+    @Test
+    fun aFailedKeyMoveIsTriedAgainAndMakesNoSecondBolus() {
+        // critic 4d2, C2: the database fails during the move - the old key is not marked moved, the next poll moves it
+        write(bolus(10, 3.0, 1.0, completed = false))
+        var failures = 1
+        CareLinkJournalWriter.journal = { c ->
+            object : CareLinkJournal(c) {
+                override suspend fun retag(id: Long, key: String): Boolean {
+                    if (failures-- > 0) throw IllegalStateException("made-up disk error")
+                    return super.retag(id, key)
+                }
+            }
+        }
+        try {
+            write(bolus(30, 3.0, 3.0))
+            fail("the failure is reported to the poll")
+        } catch (_: IllegalStateException) {
+        }
+        assertEquals("no trace before the move", SeenState.LIVE, state(k10))
+        write(bolus(30, 3.0, 3.0))
+        val row = insulin().single()
+        assertEquals(k30, row.sourceRecordId)
+        assertEquals(3.0f, row.amount!!, 1e-6f)
+        assertEquals(SeenState.MOVED, state(k10))
+    }
+
+    @Test
+    fun lostRecordAndAnOlderAnswerDoNotTakeAFinishedBolusBackToRunning() {
+        // critic 4d2, N8: the record file is lost, then an older answer shows the finished bolus running
+        write(bolus(10, 3.0, 1.2))
+        val done = insulin().single()
+        CareLinkSeenStore.clear(app)
+        Thread.sleep(5)
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val row = insulin().single()
+        assertEquals(1.2f, row.amount!!, 1e-6f)
+        assertEquals("not even written", done.updatedAt, row.updatedAt)
     }
 }

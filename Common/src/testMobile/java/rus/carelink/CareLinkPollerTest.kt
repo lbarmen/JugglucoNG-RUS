@@ -555,4 +555,64 @@ class CareLinkPollerTest {
         CareLinkNotifier.checkNoData(app, store.read(), now)
         assertNull("never any data since the sign-in - the window shows it", shown(CareLinkNotifier.ID_NO_DATA))
     }
+
+    // ---------------------------------------------------------------- critic 4d2 (second round)
+
+    @Test
+    fun writeFailureNotifiesAfterTheThresholdAndGoesAwayAfterAGoodWrite() {
+        // critic 4d2, C3 and the person's word 17.11: "warn after" 5 min - the 5th minute of failed writes notifies
+        CareLinkSettings(app).warnAfterMin = 5
+        CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
+        net.on(dm, ok(answer()))
+        poll()
+        assertNull("the first failed write only starts the clock", shown(CareLinkNotifier.ID_WRITE_FAIL))
+        assertEquals(now, store.writeFailSinceMs)
+        now += 4 * 60_000L
+        poll()
+        assertNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        now += 60_000L
+        poll()
+        val n = shown(CareLinkNotifier.ID_WRITE_FAIL)
+        assertNotNull("5 min of failed writes", n)
+        assertTrue(n!!.extras.getCharSequence(Notification.EXTRA_TEXT).toString().contains("5"))
+        assertNull("the data comes: not \"no data\"", shown(CareLinkNotifier.ID_NO_DATA))
+        // a network failure in between changes nothing; a good write takes it away and stops the clock
+        net.on(dm, NO_NETWORK)
+        now += 60_000L
+        poll()
+        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        CareLinkPoller.writeJournal = { _, e, first -> journal += e to first }
+        net.on(dm, ok(answer()))
+        now += 60_000L
+        poll()
+        assertNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        assertNull(store.writeFailSinceMs)
+    }
+
+    @Test
+    fun aNewWarningThresholdCountsWithoutARestart() {
+        // "no data" with the default 30 min: 6 min old data - nothing; the person picks 5 min - the next check notifies
+        seed(now - 6 * 60_000L)
+        CareLinkNotifier.checkNoData(app, store.read(), now)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
+        CareLinkSettings(app).warnAfterMin = 5
+        CareLinkNotifier.checkNoData(app, store.read(), now)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
+        // a value not offered falls back to the default
+        CareLinkSettings(app).warnAfterMin = 7
+        assertEquals(30, CareLinkSettings(app).warnAfterMin)
+    }
+
+    @Test
+    fun signOutDuringTheWritesKeepsThePumpIobOffThePlate() {
+        // critic 4d2, N3: signed out while the writers ran - no IoB published after it
+        CareLinkPoller.writeBasal = { _, p, at ->
+            basal += p to at
+            CareLinkSettings(app).enabled = false
+        }
+        net.on(dm, ok(answer()))
+        poll()
+        assertEquals(1, basal.size)
+        assertTrue(iob.isEmpty())
+    }
 }

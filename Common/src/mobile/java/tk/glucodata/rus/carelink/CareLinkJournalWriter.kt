@@ -1,6 +1,7 @@
 package tk.glucodata.rus.carelink
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import tk.glucodata.R
@@ -46,6 +47,10 @@ object CareLinkJournalWriter {
     /** A running bolus whose marker moved by at most this much keeps its row (Glucove's rekey). */
     const val REKEY_MS = 60_000L
 
+    /** The journal calls; tests put one that fails on a key or once. */
+    @Volatile
+    internal var journal: (Context) -> CareLinkJournal = { CareLinkJournal(it) }
+
     const val KIND_INSULIN = "insulin"
     const val KIND_CARBS = "carbs"
 
@@ -64,12 +69,31 @@ object CareLinkJournalWriter {
             val app = context.applicationContext
             val now = CareLinkAuth.clock()
             val seen = CareLinkSeenStore.load(app, now)
+            val run = Run(app, seen, journal(app))
             try {
-                Run(app, seen, CareLinkJournal(app)).write(boluses, events)
+                run.write(boluses, events)
             } finally {
                 CareLinkSeenStore.save(app, seen, now)
+                // diagnostics for upstream's debug log (4e): numbers only - no doses, times or keys
+                CareLinkLog.i("journal: boluses=${boluses.size} ${run.stats}")
             }
         }
+    }
+
+    /**
+     * What one answer did to the journal: rows new / updated / deleted, left as the person's (changed or deleted by
+     * them), kept from an older answer (a finished bolus shown as running), failed. Numbers only.
+     */
+    internal class JournalStats {
+        var created = 0
+        var updated = 0
+        var deleted = 0
+        var persons = 0
+        var older = 0
+        var failed = 0
+
+        override fun toString(): String =
+            "new=$created updated=$updated deleted=$deleted persons=$persons older=$older failed=$failed"
     }
 
     private class Run(val app: Context, val seen: SeenData, val j: CareLinkJournal) {
@@ -96,26 +120,47 @@ object CareLinkJournalWriter {
         private fun sourceOf(row: JournalEntryEntity?, rec: SeenRecord?): JournalEntrySource =
             if (row == null) newSource() else JournalEntrySource.fromStorage(rec?.source ?: row.source)
 
+        /** Counts of this answer for the log line (numbers only). */
+        val stats = JournalStats()
+
+        /**
+         * Each bolus (with its carbs) on its own: one row upstream refuses must not stop the later boluses of the answer
+         * - the cloud keeps that row for 24 h (critic 4d2, C1). The first failure is thrown after the loop (the poll
+         * reports a write error); cancellation is not swallowed.
+         */
         suspend fun write(boluses: List<ClEvent>, events: List<ClEvent>) {
             val keysNow = boluses.map { CareLinkJournalWriter.insulinKey(it) }.toSet()
             val meals = events.filter { it.kind == ClKind.MEAL && (it.grams ?: 0.0) > 0.0 }
             val pairedMeals = HashSet<String>()
+            var failure: Throwable? = null
             for (b in boluses.sortedWith(compareBy({ it.atMs }, { it.key }))) {
-                val key = CareLinkJournalWriter.insulinKey(b)
-                val rec = seen.records[key] ?: rekey(b, key, keysNow)
-                val window = (b.atMs - CareLinkJournalWriter.PAIR_WINDOW_MS)..b.atMs
-                val meal = meals.filter { it.key !in pairedMeals && it.atMs in window }.maxByOrNull { it.atMs }
-                if (meal != null) pairedMeals += meal.key
-                val mealKey = meal?.let { CareLinkJournalWriter.carbsKey(it) }
-                val cancelled = b.completed == true && (b.dose ?: 0.0) <= CareLinkMarkers.EPS
-                // the person's bolus (changed or deleted) or one done with: its carbs are left alone too (critic 4d, N3)
-                if (!bolus(b, key, rec, cancelled, mealKey)) continue
-                if (meal != null && mealKey != null) {
-                    carbs(meal, mealKey, cancelled)
-                } else if (cancelled) {
-                    // the carbs of a cancelled bolus go even when their marker has left the answer
-                    seen.records[key]?.carbsKey?.let { removeCarbs(it) }
+                try {
+                    one(b, keysNow, meals, pairedMeals)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (t: Throwable) {
+                    stats.failed++
+                    if (failure == null) failure = t
                 }
+            }
+            failure?.let { throw it }
+        }
+
+        private suspend fun one(b: ClEvent, keysNow: Set<String>, meals: List<ClEvent>, pairedMeals: HashSet<String>) {
+            val key = CareLinkJournalWriter.insulinKey(b)
+            val rec = seen.records[key] ?: rekey(b, key, keysNow)
+            val window = (b.atMs - CareLinkJournalWriter.PAIR_WINDOW_MS)..b.atMs
+            val meal = meals.filter { it.key !in pairedMeals && it.atMs in window }.maxByOrNull { it.atMs }
+            if (meal != null) pairedMeals += meal.key
+            val mealKey = meal?.let { CareLinkJournalWriter.carbsKey(it) }
+            val cancelled = b.completed == true && (b.dose ?: 0.0) <= CareLinkMarkers.EPS
+            // the person's bolus (changed or deleted) or one done with: its carbs are left alone too (critic 4d, N3)
+            if (!bolus(b, key, rec, cancelled, mealKey)) return
+            if (meal != null && mealKey != null) {
+                carbs(meal, mealKey, cancelled)
+            } else if (cancelled) {
+                // the carbs of a cancelled bolus go even when their marker has left the answer
+                seen.records[key]?.carbsKey?.let { removeCarbs(it) }
             }
         }
 
@@ -133,7 +178,10 @@ object CareLinkJournalWriter {
             ours: (JournalEntryEntity) -> Boolean,
             adopt: (JournalEntryEntity) -> SeenRecord,
         ): Found {
-            if (rec != null && rec.state != SeenState.LIVE) return Found(null, rec, free = false)
+            if (rec != null && rec.state != SeenState.LIVE) {
+                if (rec.state == SeenState.EDITED || rec.state == SeenState.DELETED) stats.persons++
+                return Found(null, rec, free = false)
+            }
             if (rec == null) {
                 val row = j.byKey(key) ?: return Found(null, null, free = true)
                 val adopted = adopt(row)
@@ -144,10 +192,12 @@ object CareLinkJournalWriter {
             if (row == null) {
                 if (rec.rowId == null) return Found(null, rec, free = true)
                 seen.records[key] = rec.copy(state = SeenState.DELETED)
+                stats.persons++
                 return Found(null, rec, free = false)
             }
             if (rec.writtenAt != null && row.updatedAt > rec.writtenAt && !ours(row)) {
                 seen.records[key] = rec.copy(state = SeenState.EDITED)
+                stats.persons++
                 return Found(null, rec, free = false)
             }
             return Found(row, rec, free = true)
@@ -175,16 +225,23 @@ object CareLinkJournalWriter {
             val dose = if (cancelled) null else b.dose
             val note = note(b)
             val f = find(key, recIn, { row -> bolusLooksOurs(row, recIn, b.atMs, dose, note) }) { row ->
+                // the record was lost: a row of a running bolus carries the running note - one without it was written
+                // finished, and an older answer must not take it back to running (critic 4d2, N8)
+                val finishedRow = b.completed == false && row.note != note
                 SeenRecord(
                     CareLinkJournalWriter.KIND_INSULIN, b.atMs, row.id, row.updatedAt, row.source,
-                    dose = row.amount?.toDouble(), completed = b.completed, note = row.note, carbsKey = mealKey,
+                    dose = row.amount?.toDouble(), completed = if (finishedRow) true else b.completed, note = row.note,
+                    carbsKey = mealKey,
                 )
             }
             if (!f.free) return false
             val row = f.row
             val rec = f.rec
             if (cancelled) {
-                row?.let { j.delete(it.id) }
+                row?.let {
+                    j.delete(it.id)
+                    stats.deleted++
+                }
                 seen.records[key] = (rec ?: SeenRecord(CareLinkJournalWriter.KIND_INSULIN, b.atMs)).copy(
                     rowId = row?.id, dose = 0.0, completed = true, carbsKey = rec?.carbsKey ?: mealKey,
                     state = SeenState.REMOVED,
@@ -193,7 +250,10 @@ object CareLinkJournalWriter {
             }
             if (dose == null) return true
             // an older answer showing a finished bolus as running again: the finished one stands (critic 4d, C1)
-            if (rec?.completed == true && b.completed == false) return true
+            if (rec?.completed == true && b.completed == false) {
+                stats.older++
+                return true
+            }
             val carbsKey = rec?.carbsKey ?: mealKey
             // the row already says it (a repeated answer, or our write whose record was lost): no write - it would send
             // the row to Nightscout again; the record catches up
@@ -219,6 +279,7 @@ object CareLinkJournalWriter {
                     sourceRecordId = key,
                 )
             )
+            if (row == null) stats.created++ else stats.updated++
             seen.records[key] = SeenRecord(
                 CareLinkJournalWriter.KIND_INSULIN, b.atMs, written.id, written.updatedAt, written.source, dose = dose,
                 completed = b.completed, note = note, carbsKey = carbsKey,
@@ -263,6 +324,7 @@ object CareLinkJournalWriter {
                     sourceRecordId = key,
                 )
             )
+            if (row == null) stats.created++ else stats.updated++
             seen.records[key] = SeenRecord(
                 CareLinkJournalWriter.KIND_CARBS, meal.atMs, written.id, written.updatedAt, written.source, grams = grams,
             )
@@ -276,7 +338,10 @@ object CareLinkJournalWriter {
         }
 
         private suspend fun removeFound(key: String, row: JournalEntryEntity?, rec: SeenRecord?, atMs: Long) {
-            row?.let { j.delete(it.id) }
+            row?.let {
+                j.delete(it.id)
+                stats.deleted++
+            }
             seen.records[key] = (rec ?: SeenRecord(CareLinkJournalWriter.KIND_CARBS, atMs))
                 .copy(rowId = row?.id, state = SeenState.REMOVED)
         }
@@ -299,7 +364,9 @@ object CareLinkJournalWriter {
                 .minByOrNull { abs(it.value.atMs - b.atMs) } ?: return null
             if (j.byKey(key) != null) return null
             val rec = old.value
-            seen.records[old.key] = rec.copy(rowId = null, carbsKey = null, state = SeenState.MOVED)
+            // the old key becomes a trace (MOVED) only once the row has moved: a database failure before that leaves the
+            // record as it was, and the next poll tries the move again instead of writing a second bolus (critic 4d2, C2)
+            val trace = rec.copy(rowId = null, carbsKey = null, state = SeenState.MOVED)
             val row = rec.rowId?.let { j.byId(it) }
             val moved = when {
                 rec.state != SeenState.LIVE -> rec
@@ -307,14 +374,13 @@ object CareLinkJournalWriter {
                 else -> {
                     val edited = rec.writtenAt != null && row.updatedAt > rec.writtenAt &&
                         !bolusLooksOurs(row, rec, b.atMs, b.dose, note(b))
-                    if (!j.retag(row.id, key)) {
-                        seen.records[old.key] = rec
-                        return null
-                    }
+                    if (!j.retag(row.id, key)) return null
+                    seen.records[old.key] = trace
                     val after = j.byId(row.id)
                     if (edited) rec.copy(state = SeenState.EDITED) else rec.copy(writtenAt = after?.updatedAt ?: rec.writtenAt)
                 }
             }
+            seen.records[old.key] = trace
             seen.records[key] = moved
             return moved
         }
@@ -342,7 +408,7 @@ object CareLinkJournalWriter {
  * `JournalRepository` (its side effects: IOB, Nightscout wake, the watch, the screen); reads a row by id or key
  * straight from their DAO (the repository has no such read).
  */
-internal class CareLinkJournal(app: Context) {
+internal open class CareLinkJournal(app: Context) {
     private val repo = JournalRepository()
     private val dao = HistoryDatabase.getInstance(app.applicationContext).journalDao()
 
@@ -354,7 +420,7 @@ internal class CareLinkJournal(app: Context) {
     suspend fun row(id: Long?, key: String): JournalEntryEntity? = id?.let { dao.getEntryById(it) } ?: byKey(key)
 
     /** Writes and reads the row back: its id and the `updatedAt` upstream stamped. */
-    suspend fun upsert(input: JournalEntryInput): JournalEntryEntity {
+    open suspend fun upsert(input: JournalEntryInput): JournalEntryEntity {
         repo.upsertEntry(input)
         val key = input.sourceRecordId ?: error("no key")
         return byKey(key) ?: error("row not found after write")
@@ -362,5 +428,5 @@ internal class CareLinkJournal(app: Context) {
 
     suspend fun delete(id: Long) = repo.deleteEntry(id)
 
-    suspend fun retag(id: Long, key: String): Boolean = repo.retagSourceRecordId(id, key)
+    open suspend fun retag(id: Long, key: String): Boolean = repo.retagSourceRecordId(id, key)
 }
