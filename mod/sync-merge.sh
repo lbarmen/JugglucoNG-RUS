@@ -12,7 +12,7 @@
 #       red checks (alias: prepare-after-conflict). Not after the push: then fix, commit, git push, finish.
 #   bash mod/sync-merge.sh finish <PR>
 #       waits for the required check report; green -> switches off their new workflows (also done right after
-#       the push), merges with a merge commit (never squash/rebase, ТЗ 3.2), switches them off again (stop if one
+#       the push), merges with a merge commit (never squash/rebase, spec 3.2), switches them off again (stop if one
 #       stays on) and cancels runs that are not ours; updates local main.
 #       A red check -> stop: the chat decides (an owner-approved red merge goes through the ruleset bypass).
 # MOD_SYNC_DRY=1 with prepare: everything except push and PR (probe git, rerere check).
@@ -141,7 +141,7 @@ continue|prepare-after-conflict)
   point="${branch#sync/}"
   theirs=$(git rev-parse "$m^2")
   old=$(git merge-base origin/main upstream/main)
-  [ "$conflicts" = "?" ] || conflicts="$conflicts (вручную)"
+  [ "$conflicts" = "?" ] || conflicts="$conflicts (by hand)"
   exec bash mod/sync-merge.sh checks-and-pr "$point" "$old" "$theirs" "$decision" "$minutes" "$conflicts"
   ;;
 checks-and-pr)
@@ -154,12 +154,12 @@ checks-and-pr)
   [ $fail = 0 ] || die "checks are red: fix on this branch, commit, then bash mod/sync-merge.sh continue --decision \"...\" --minutes N --conflicts ${conflicts%% *} (nothing pushed)"
   read -r version commits flags < <(py -c "
 import json,sys; d=json.load(open(sys.argv[1],encoding='utf-8'))
-f=', '.join(f'{k} {v}' for k,v in (d.get('flags') or {}).items()) or 'нет'
+f=', '.join(f'{k} {v}' for k,v in (d.get('flags') or {}).items()) or 'none'
 print(d.get('version_new','?'), d.get('commits',0), f)" "$STATE/report.json")
   log=mod/SYNC-LOG.md
   if [ ! -f "$log" ]; then
-    printf '%s\n' "# Журнал вливаний JugglucoNG (mod/sync-merge.sh)" "" \
-      "| дата | их выпуск | версия | коммитов | конфликтов | флаги риска | решение | разбор, мин |" \
+    printf '%s\n' "# Log of JugglucoNG merges (mod/sync-merge.sh)" "" \
+      "| date | their release | version | commits | conflicts | risk flags | decision | review, min |" \
       "|---|---|---|---|---|---|---|---|" > "$log"
   fi
   echo "| $(date +%Y-%m-%d) | $point | $version | $commits | $conflicts | $flags | ${decision//|//} | $minutes |" >> "$log"
@@ -172,11 +172,11 @@ print(d.get('version_new','?'), d.get('commits',0), f)" "$STATE/report.json")
     exit 0
   fi
   body="$STATE/pr-body.md"
-  { echo "Вливание их выпуска **$point** в \`main\` (mod/sync-merge.sh). Решение чата: $decision"
-    echo; echo "Проверка этого PR — задача \`MOD sync\` (report). Отчёт до слияния:"; echo
+  { echo "Merge of their release **$point** into \`main\` (mod/sync-merge.sh). Chat decision: $decision"
+    echo; echo "The check of this PR is the job \`MOD sync\` (report). Report before the merge:"; echo
     cat "$STATE/report.md"; } > "$body.full"
   # a PR body holds 65536 characters: cut at a whole line, in Python (no pipe, no cut inside a letter)
-  py -c "import sys; t = open(sys.argv[1], encoding='utf-8').read(); n = 60000; t = t if len(t) <= n else t[:t.rfind(chr(10), 0, n) + 1] + '… (отчёт обрезан: полный — на странице запуска MOD sync)' + chr(10); open(sys.argv[2], 'w', encoding='utf-8', newline='').write(t)" "$body.full" "$body"
+  py -c "import sys; t = open(sys.argv[1], encoding='utf-8').read(); n = 60000; t = t if len(t) <= n else t[:t.rfind(chr(10), 0, n) + 1] + '… (report cut: the full one is on the MOD sync run page)' + chr(10); open(sys.argv[2], 'w', encoding='utf-8', newline='').write(t)" "$body.full" "$body"
   git push -q -u origin "$branch"
   # their new workflows with push or pull_request triggers would run on this branch and on the PR: off now
   new_wf=$(their_new_wf HEAD)

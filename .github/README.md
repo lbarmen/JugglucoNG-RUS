@@ -1,72 +1,50 @@
 # JugglucoNGmod
 
-**Неофициальная версия [JugglucoNG](https://github.com/ctqvva/JugglucoNG)** для Android-телефона и часов Wear OS.
-Её делает не автор JugglucoNG. Об ошибках этой версии не пишите авторам JugglucoNG и Juggluco.
+**Unofficial build of [JugglucoNG](https://github.com/ctqvva/JugglucoNG)** for Android phones and Wear OS watches.
+It is not made by the author of JugglucoNG. Do not report problems of this build to the JugglucoNG or Juggluco authors.
 
 > [!WARNING]
-> **Не медицинское изделие.** Приложение не сертифицировано. Показания и тревоги могут быть неверными или не прийти.
-> Решения о лечении принимайте по своему глюкометру и вместе с врачом. Используете на свой риск
-> (GPL-3.0, разделы 15–16).
+> **Not a medical device.** The app is not certified. Readings and alarms may be wrong or may not arrive.
+> Base treatment decisions on your own glucose meter and on your doctor's advice. Use at your own risk
+> (GPL-3.0, sections 15–16).
 
-## Что это
-Тот же JugglucoNG плюс небольшие свои изменения. Код автора не переписывается: всё своё лежит в своих файлах
-(папка [`mod/`](/mod) и ресурсы типа сборки `mod`), чтобы обновления JugglucoNG вливались легко. В файлах автора
-сейчас не изменено ни строки ([реестр врезок](/mod/HOOKS.md)).
+## What it is
+The same JugglucoNG plus a few changes of our own. The author's code is not rewritten: everything of ours lives in our
+own files (the folder [`mod/`](/mod) and the resources of the `mod` build type), so that JugglucoNG updates can be
+merged easily. Not a single line of the author's files is modified at the moment ([registry of hooks](/mod/HOOKS.md)).
 
-Основа — JugglucoNG 1.3.2-Alpha. Последняя версия — `rus-1.3.2-2` от 15.11.2026.
-Что умеет само приложение — в [README автора](/README.md).
+Based on JugglucoNG 1.3.2-Alpha. Latest version: 1.3.2-2 of 2026-11-15 (built under the former
+name: formerly JugglucoNG-RUS, package tk.glucodata.ng.rus).
+What the app itself can do is in the [author's README](/README.md).
 
-## Чем отличается от официального
-
-| Что | JugglucoNG 1.3.2-Alpha | JugglucoNGmod | С версии |
-|---|---|---|---|
-| Циферблат на часах Wear OS | не добавляется: «String resource ID #0x0» | добавляется и работает (проверено на часах 15.11.2026) | 1.3.2-2 |
-| Установка | — | своё имя пакета `tk.glucodata.ng.mod`: ставится рядом с официальным, не поверх | 1.3.2-2 |
-| Название и значок | JugglucoNG | «JugglucoNGmod» на 16 языках, значок автора с другим цветом фона, циферблат «JugglucoNGmod» | 1.3.2-2 |
-| Подпись | ключ автора | свой ключ, отпечаток — [`mod/mod-cert.sha256`](/mod/mod-cert.sha256) | 1.3.2-2 |
-| Обновление внутри приложения | — | из выпусков этого репозитория (пока не публикуются) | 1.3.2-2 |
-| Режим Clone, сервис BloodControl (для AiDEX) | есть | не работают: им нужны секреты автора JugglucoNG | 1.3.2-2 |
-
-Два приложения на одном датчике мешают друг другу: подключайте датчик только к одному.
-
-Строка попадает в таблицу, когда изменение проверено на телефоне или часах и влито в `main`.
-Все изменения по версиям и с датами, включая сборку и проверки, — [mod/CHANGES.md](/mod/CHANGES.md).
-
-## Скачать
-Готовых выпусков пока нет. Обсуждения (Issues) в этом репозитории выключены.
-
-## Подробнее
-- [mod/CHANGES.md](/mod/CHANGES.md) — изменения по версиям.
-- [mod/README.md](/mod/README.md) — сборка, номер версии, закрытые библиотеки производителей в APK.
-- [mod/HOOKS.md](/mod/HOOKS.md) — правки в файлах автора (сейчас их нет).
-
-## Авторы и лицензия
-- [JugglucoNG](https://github.com/ctqvva/JugglucoNG) — [ctqvva](https://github.com/ctqvva) и участники.
-- [Juggluco](https://github.com/j-kaltes/Juggluco) — Jaap Korthals Altes; JugglucoNG вырос из него.
-- Спасибо им за открытый код.
-
-Лицензия — GPL-3.0, как у оригинала ([LICENSE.txt](/LICENSE.txt)). Исходники каждой версии — тег `mod-…`
-в этом репозитории.
-
----
-
-## English (short)
-**Unofficial build of [JugglucoNG](https://github.com/ctqvva/JugglucoNG)** for Android phones and Wear OS, not made by
-its author. Do not report problems of this build to the JugglucoNG or Juggluco authors. **Not a medical device**;
-use at your own risk.
-
-It is JugglucoNG plus a few changes of our own, all kept in our own files (`mod/`, build type `mod`); no line of the
-upstream files is modified. Based on JugglucoNG 1.3.2-Alpha, latest version 1.3.2-2 (2026-11-15, built under the former name: formerly JugglucoNG-RUS, package tk.glucodata.ng.rus).
+## How it differs from the official app
 
 | What | JugglucoNG 1.3.2-Alpha | JugglucoNGmod | Since |
 |---|---|---|---|
-| Wear OS watch face | cannot be added: "String resource ID #0x0" | works (checked on a watch, 2026-11-15) | 1.3.2-2 |
-| Install | — | own package `tk.glucodata.ng.mod`, installs next to the official app | 1.3.2-2 |
-| Name and icon | JugglucoNG | "JugglucoNGmod", upstream icon on another background, watch face "JugglucoNGmod" | 1.3.2-2 |
+| Wear OS watch face | cannot be added: "String resource ID #0x0" | can be added and works (checked on a watch, 2026-11-15) | 1.3.2-2 |
+| Install | — | own package name `tk.glucodata.ng.mod`: installs next to the official app, not over it | 1.3.2-2 |
+| Name and icon | JugglucoNG | "JugglucoNGmod" in 16 languages, the author's icon on another background color, watch face "JugglucoNGmod" | 1.3.2-2 |
 | Signing | upstream key | own key, fingerprint in [`mod/mod-cert.sha256`](/mod/mod-cert.sha256) | 1.3.2-2 |
-| In-app update | — | from this repository's releases (none published yet) | 1.3.2-2 |
-| Clone mode, BloodControl (AiDEX) | present | do not work: they need upstream's secrets | 1.3.2-2 |
+| In-app update | — | from the releases of this repository (none published yet) | 1.3.2-2 |
+| Clone mode, BloodControl service (for AiDEX) | present | do not work: they need secrets of the JugglucoNG author | 1.3.2-2 |
 
-Connect a sensor to one of the two apps only. No downloads yet; Issues are switched off here. Per-version change
-list: [mod/CHANGES.md](/mod/CHANGES.md); build details and closed-source vendor libraries: [mod/README.md](/mod/README.md).
-Credits: ctqvva (JugglucoNG), Jaap Korthals Altes (Juggluco). License: GPL-3.0.
+Two apps on one sensor interfere with each other: connect a sensor to one of them only.
+
+A row is added to the table when the change has been checked on a phone or a watch and merged into `main`.
+All changes by version and with dates, including the build and checks, are in [mod/CHANGES.md](/mod/CHANGES.md).
+
+## Download
+There are no ready releases yet. Discussions (Issues) are switched off in this repository.
+
+## More
+- [mod/CHANGES.md](/mod/CHANGES.md) — changes by version.
+- [mod/README.md](/mod/README.md) — build, version number, closed-source vendor libraries in the APK.
+- [mod/HOOKS.md](/mod/HOOKS.md) — changes in the author's files (none at the moment).
+
+## Credits and license
+- [JugglucoNG](https://github.com/ctqvva/JugglucoNG) — [ctqvva](https://github.com/ctqvva) and contributors.
+- [Juggluco](https://github.com/j-kaltes/Juggluco) — Jaap Korthals Altes; JugglucoNG grew out of it.
+- Thanks to them for the open code.
+
+License: GPL-3.0, as the original ([LICENSE.txt](/LICENSE.txt)). The sources of each version are the tag `mod-…`
+in this repository.

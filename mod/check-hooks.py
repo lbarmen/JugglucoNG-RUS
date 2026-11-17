@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""JugglucoNGmod: hooks registry and budget of changes in upstream files (plan of stage 2, A3; ТЗ 3.3 п. 5).
+"""JugglucoNGmod: hooks registry and budget of changes in upstream files (stage 2 plan, A3; spec 3.3 item 5).
 
   python3 mod/check-hooks.py [--ref REF] [--base UPSTREAM_POINT]
 
@@ -8,7 +8,7 @@
 2. Budget: upstream files changed in REF against their code in it (default `git merge-base REF upstream/main`, i.e.
    their release that REF holds - not their fresh main), our paths (mod/our-paths.txt) left out: at most 15 files
    and 60 lines (added + removed).
-3. Every change in an upstream file is a hook (ТЗ 3.3: a hook is 1-3 lines with a MOD-HOOK mark): each changed piece
+3. Every change in an upstream file is a hook (spec 3.3: a hook is 1-3 lines with a MOD-HOOK mark): each changed piece
    (hunk) adds and removes at most 3 lines, and carries the mark in its own new lines - or, when it only removes
    lines, has the mark on the line right above or below. Their file deleted, a new file outside our paths, a binary
    file, a mode or submodule change -> FAIL: none of them can carry a mark.
@@ -26,7 +26,7 @@ import mod_common as rc  # noqa: E402
 
 MAX_FILES = 15
 MAX_LINES = 60
-HOOK_LINES = 3  # ТЗ 3.3: a hook is 1-3 lines
+HOOK_LINES = 3  # spec 3.3: a hook is 1-3 lines
 HUNK_RE = re.compile(r'^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', re.M)
 failures = []
 
@@ -67,7 +67,7 @@ def hunk_problems(path, diff, new_lines):
         where = f'line {start}' if added <= 1 else f'lines {start}-{start + added - 1}'
         if added > HOOK_LINES or removed > HOOK_LINES:
             out.append(f'{path}: {where}: {added} line(s) added, {removed} removed in one piece - a hook is 1-'
-                       f'{HOOK_LINES} lines (ТЗ 3.3); move the code to our files')
+                       f'{HOOK_LINES} lines (spec 3.3); move the code to our files')
         elif added == 0:  # lines removed after line `start`: the mark right above or below
             if not marked & {start, start + 1}:
                 out.append(f'{path}: lines removed after line {start} with no MOD-HOOK mark right above or below')
@@ -135,7 +135,7 @@ def main():
     msg = (f'budget: {len(files)} upstream file(s) and {lines} line(s) changed against their code {base[:9]} '
            f'(limit {MAX_FILES} files, {MAX_LINES} lines)')
     if len(files) > MAX_FILES or lines > MAX_LINES:
-        msg += ' - too much in their files: move code to our files (ТЗ 3.3), files: ' + ', '.join(files[:20])
+        msg += ' - too much in their files: move code to our files (spec 3.3), files: ' + ', '.join(files[:20])
     check(len(files) <= MAX_FILES and lines <= MAX_LINES, msg)
 
     # 3. every change in an upstream file is a hook
