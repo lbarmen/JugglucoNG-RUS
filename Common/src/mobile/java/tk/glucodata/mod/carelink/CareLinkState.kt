@@ -229,6 +229,7 @@ class CareLinkSettings(context: Context) {
                 if (v) {
                     f.parentFile?.mkdirs()
                     if (!f.exists() && !f.createNewFile() && !f.exists()) CareLinkLog.w("polling flag not written")
+                    f.setLastModified(CareLinkAuth.clock())
                 } else if (f.exists() && !f.delete()) {
                     CareLinkLog.w("polling flag not removed")
                 }
@@ -236,6 +237,14 @@ class CareLinkSettings(context: Context) {
                 CareLinkLog.w("polling flag not changed (${t.javaClass.simpleName})")
             }
         }
+
+    /**
+     * When polling was turned on (a sign-in, the window's "turn polling on"): the time of the flag file, which upstream's
+     * settings import does not touch. For "no data" while no answer has brought pump data yet (critic of the joints 4e,
+     * N4). null - off or unknown.
+     */
+    val enabledSinceMs: Long?
+        get() = enabledFile.takeIf { it.exists() }?.lastModified()?.takeIf { it > 0L }
 
     var intervalMin: Int
         get() = prefs.getInt(K_INTERVAL, DEFAULT_INTERVAL_MIN).takeIf { it in INTERVALS_MIN } ?: DEFAULT_INTERVAL_MIN

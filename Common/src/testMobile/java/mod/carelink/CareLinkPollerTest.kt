@@ -559,7 +559,20 @@ class CareLinkPollerTest {
         CareLinkVault.save(app, session())
         store.write(CareLinkState(CareLinkStatus.OK, now, null, null, null))
         CareLinkNotifier.checkNoData(app, store.read(), now)
-        assertNull("never any data since the sign-in - the window shows it", shown(CareLinkNotifier.ID_NO_DATA))
+        assertNull("never any data, polling just on - not yet", shown(CareLinkNotifier.ID_NO_DATA))
+    }
+
+    @Test
+    fun noDataEverSinceTheSignInCountsFromIt() {
+        // critic of the joints 4e, N4: only empty answers since polling was turned on - "no data" from that time,
+        // threshold + 10 min (also after upstream's settings import cleared our state: the flag file keeps the time)
+        CareLinkSettings(app).warnAfterMin = 5
+        store.write(CareLinkState(CareLinkStatus.OK, now, null, null, null))
+        CareLinkNotifier.checkNoData(app, store.read(), now + 14 * 60_000L)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
+        app.getSharedPreferences(CareLinkStateStore.PREFS, 0).edit().clear().commit()
+        CareLinkNotifier.checkNoData(app, CareLinkState(CareLinkStatus.OK), now + 15 * 60_000L)
+        assertNotNull(shown(CareLinkNotifier.ID_NO_DATA))
     }
 
     // ---------------------------------------------------------------- critic 4d2 (second round)

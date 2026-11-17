@@ -83,6 +83,9 @@ object CareLinkPoller {
         return background.launch {
             try {
                 mutex.withLock {
+                    // a new sign-in got the lock first: the open segment and the IoB are the new session's (critic of
+                    // the joints 4e, N1)
+                    if (CareLinkSettings(app).enabled) return@withLock
                     try {
                         withContext(NonCancellable) { closeBasal(app) }
                     } finally {

@@ -316,4 +316,22 @@ class CareLinkBasalWriterTest {
         }
         assertNull("closing the basal failed", ApiIobSnapshot.fresh(now))
     }
+
+    @Test
+    fun aNewSignInBeforeTheClosingKeepsItsIob() {
+        // critic of the joints 4e, N1: signed out and in again within seconds - the closing left for later must not
+        // close the new session's segment or take its IoB off
+        CareLinkIob.publish(PumpNow(now - min, iobUnits = 1.5))
+        var closedCount = 0
+        CareLinkPoller.closeBasal = { closedCount++ }
+        tk.glucodata.mod.carelink.CareLinkSettings(app).enabled = true
+        try {
+            runBlocking { CareLinkPoller.closeAfterSignOut(app).join() }
+        } finally {
+            tk.glucodata.mod.carelink.CareLinkSettings(app).enabled = false
+            CareLinkPoller.resetForTest()
+        }
+        assertEquals(0, closedCount)
+        assertNotNull(ApiIobSnapshot.fresh(now))
+    }
 }

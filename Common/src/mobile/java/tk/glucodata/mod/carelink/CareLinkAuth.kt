@@ -102,12 +102,21 @@ object CareLinkAuth {
      * invalidated, a file too short ([AesGcmSessionCipher.SealedDataTooShortException]; no longer the wide
      * IllegalArgumentException - critic 4d2, N8), or it opened but did not parse ([CareLinkVault.StorageException]
      * without a cause). A read error of the file or a Keystore hiccup is not here: the file is kept and the poll reports
-     * a storage error.
+     * a storage error. Our two classes by type: the release build (R8, upstream's `-repackageclasses`) renames them, so
+     * their names would never match there (critic of the joints 4e, C1); the platform's by name (not renamed).
      */
-    private val DEAD_SESSION_ERRORS = setOf(
-        "AEADBadTagException", "BadPaddingException", "KeyPermanentlyInvalidatedException", "SealedDataTooShortException",
-        "StorageException",
-    )
+    private val DEAD_SESSION_ERRORS = setOf("AEADBadTagException", "BadPaddingException", "KeyPermanentlyInvalidatedException")
+
+    /** The name for the log of a reason of [readSession] - our classes by a fixed name (renamed in release builds). */
+    private fun sessionErrorName(c: Throwable): String = when (c) {
+        is AesGcmSessionCipher.SealedDataTooShortException -> "SealedDataTooShortException"
+        is CareLinkVault.StorageException -> "StorageException"
+        else -> c.javaClass.simpleName
+    }
+
+    private fun deadSession(c: Throwable): Boolean =
+        c is AesGcmSessionCipher.SealedDataTooShortException || c is CareLinkVault.StorageException ||
+            c.javaClass.simpleName in DEAD_SESSION_ERRORS
 
     /** One sign-in or renewal at a time: two renewals with one rotating refresh key would kill the session. */
     private val mutex = Mutex()
@@ -383,7 +392,7 @@ object CareLinkAuth {
 
     /**
      * The session: from memory first (one not yet stored is written again), else from the file. No file or a sign-out
-     * since (generation moved) - sign-in needed; a file that will never open ([DEAD_SESSION_ERRORS]) - wiped, sign-in
+     * since (generation moved) - sign-in needed; a file that will never open ([deadSession]) - wiped, sign-in
      * needed; any other failure to open - a storage failure, the file is kept.
      */
     private fun readSession(app: Context): SessionRead {
@@ -400,8 +409,9 @@ object CareLinkAuth {
         val s = try {
             CareLinkVault.load(app)
         } catch (t: Throwable) {
-            val why = (t.cause ?: t).javaClass.simpleName
-            if (why in DEAD_SESSION_ERRORS) {
+            val reason = t.cause ?: t
+            val why = sessionErrorName(reason)
+            if (deadSession(reason)) {
                 // The file will never open again: the Keystore key no longer fits it (lock screen changed on some phones,
                 // Keystore reset) or the file is cut or garbled. Only a new sign-in helps - wipe it and say so, instead of
                 // "no data" forever (critic of the joints, C4). The app is not direct-boot aware, so "Keystore locked

@@ -217,6 +217,18 @@ class CareLinkAuthTest {
     }
 
     @Test
+    fun sessionFileThatOpensButDoesNotParseIsWipedAndNeedsSignIn() = runBlocking {
+        // critic of the joints 4e, C1: the vault's StorageException without a cause - recognised by type, not by its
+        // name (renamed by R8 in release builds)
+        CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L))
+        val f = File(app.noBackupFilesDir, "mod-carelink/session.bin")
+        f.writeBytes(CareLinkVault.cipher.seal("not a session".toByteArray(Charsets.UTF_8)))
+        assertEquals(FreshResult.NeedLogin, CareLinkAuth.ensureFresh(app))
+        assertFalse("wiped", f.exists())
+        assertFalse(CareLinkAuth.hasSession(app))
+    }
+
+    @Test
     fun sessionWithoutRoleAsksUsersMe() = runBlocking {
         CareLinkVault.save(app, session(expiresInMs = 2 * 3_600_000L, role = null))
         net.on("$CARELINK_BASE/users/me", ok("""{"role": "PATIENT"}"""))

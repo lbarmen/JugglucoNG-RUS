@@ -32,6 +32,9 @@ object CareLinkNotifier {
     /** The default warning threshold (the person can choose 5-60 min in the CareLink window). */
     const val NO_DATA_MS = CareLinkSettings.DEFAULT_WARN_MIN * 60_000L
 
+    /** No data ever since polling was turned on: "no data" comes this much later than the threshold. */
+    internal const val FIRST_DATA_MARGIN_MS = 10 * 60_000L
+
     /** The sign-in is gone: show "sign in again" once; "no data" and "not saved" are replaced by it. */
     fun needLogin(context: Context) {
         val app = context.applicationContext
@@ -115,8 +118,8 @@ object CareLinkNotifier {
      * "No pump data for over N min": shown once when the newest pump data is older than the warning threshold while
      * polling is on and the session lives; taken away when data is fresh again or the link is off. Called after every
      * poll that reached the cloud or failed on the way, by the alarm when no poll runs ([checkNoDataOnAlarm]) and by
-     * the CareLink window when the threshold changes. No data ever since the sign-in - no notification (the CareLink
-     * window shows that). The threshold is read each time.
+     * the CareLink window when the threshold changes. No data ever since the sign-in - counted from it, 10 min later
+     * ([FIRST_DATA_MARGIN_MS]). The threshold is read each time.
      */
     fun checkNoData(context: Context, state: CareLinkState = CareLinkStateStore(context).read(),
                     nowMs: Long = CareLinkAuth.clock()) {
@@ -126,7 +129,9 @@ object CareLinkNotifier {
             val settings = CareLinkSettings(app)
             val live = settings.enabled && CareLinkAuth.hasSession(app) &&
                 (state.status == CareLinkStatus.OK || state.status == CareLinkStatus.ERROR)
-            val last = state.lastDataAtMs
+            // no pump data at all since polling was turned on: counted from then, with a margin for the first polls
+            // (critic of the joints 4e, N4: a cloud giving only empty answers after a sign-in must not stay silent)
+            val last = state.lastDataAtMs ?: settings.enabledSinceMs?.plus(FIRST_DATA_MARGIN_MS)
             val stale = live && last != null && nowMs - last >= settings.warnAfterMs
             if (stale) {
                 if (store.noDataShown && !blocked(app)) return

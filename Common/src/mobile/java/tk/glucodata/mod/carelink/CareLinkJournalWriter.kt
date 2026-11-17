@@ -33,6 +33,8 @@ import kotlin.math.abs
  *   upstream sends it nowhere). A row keeps the source it was made with.
  * - A running bolus whose marker time moved by up to 60 s (its old key gone from the answer, the same programmed dose)
  *   keeps its row under the new key (upstream's `retagSourceRecordId`), as Glucove's rekey.
+ * - A row found by its key keeps its time (only a moved running bolus takes the new marker time): the moment of a
+ *   marker is counted with the phone's offset of each answer, which a zone change moves (critic of the joints 4e, C2).
  *
  * The whole answer (24 h) is written every poll: the record of what was written makes it cheap, and no poll can lose
  * a bolus (critic 4c, C1). A row found by key but not in the record (the record file was lost, or the write ended
@@ -205,15 +207,30 @@ object CareLinkJournalWriter {
 
         private class Found(val row: JournalEntryEntity?, val rec: SeenRecord?, val free: Boolean)
 
-        /** The row holds the bolus as [rec] recorded it, or as ([atMs], [dose], [note]) is about to write it. */
-        private fun bolusLooksOurs(row: JournalEntryEntity, rec: SeenRecord?, atMs: Long, dose: Double?, note: String?) =
+        /**
+         * The row holds the bolus as [rec] recorded it, or as ([dose], [note]) is about to write it - the time of a row
+         * found by key is not written again (see [rekeyed]), so it is not compared here.
+         */
+        private fun bolusLooksOurs(row: JournalEntryEntity, rec: SeenRecord?, dose: Double?, note: String?) =
             (rec != null && row.timestamp == rec.atMs && same(row.amount, rec.dose) && row.note == rec.note) ||
-                (dose != null && row.timestamp == atMs && same(row.amount, dose) && row.note == note)
+                (dose != null && same(row.amount, dose) && row.note == note)
 
-        /** The row holds the carbs as [rec] recorded them, or as ([atMs], [grams]) is about to write them. */
-        private fun carbsLooksOurs(row: JournalEntryEntity, rec: SeenRecord?, atMs: Long, grams: Double?) =
+        /** The row holds the carbs as [rec] recorded them, or as [grams] is about to write them (the time - as above). */
+        private fun carbsLooksOurs(row: JournalEntryEntity, rec: SeenRecord?, grams: Double?) =
             (rec != null && row.timestamp == rec.atMs && same(row.amount, rec.grams)) ||
-                (grams != null && row.timestamp == atMs && same(row.amount, grams))
+                (grams != null && same(row.amount, grams))
+
+        /**
+         * Keys whose row came from a moved running bolus in this answer ([rekey]): their time follows the marker. Any
+         * other row found by key keeps its time (critic of the joints 4e, C2): the marker key is the pump's local time,
+         * but its moment is counted with the phone's offset of this answer - after a zone change (a flight, summer
+         * time) every marker of the 24 h would move, the rows would jump and go to Nightscout again.
+         */
+        private val rekeyed = HashSet<String>()
+
+        /** The time to write for [key]: a row found by key keeps its own, else the marker's. */
+        private fun timeOf(key: String, row: JournalEntryEntity?, markerAtMs: Long): Long =
+            if (row != null && key !in rekeyed) row.timestamp else markerAtMs
 
         private fun same(a: Float?, b: Double?): Boolean = a != null && b != null && abs(a - b) <= CareLinkMarkers.EPS
 
@@ -224,12 +241,12 @@ object CareLinkJournalWriter {
         private suspend fun bolus(b: ClEvent, key: String, recIn: SeenRecord?, cancelled: Boolean, mealKey: String?): Boolean {
             val dose = if (cancelled) null else b.dose
             val note = note(b)
-            val f = find(key, recIn, { row -> bolusLooksOurs(row, recIn, b.atMs, dose, note) }) { row ->
+            val f = find(key, recIn, { row -> bolusLooksOurs(row, recIn, dose, note) }) { row ->
                 // the record was lost: a row of a running bolus carries the running note - one without it was written
                 // finished, and an older answer must not take it back to running (critic 4d2, N8)
                 val finishedRow = b.completed == false && row.note != note
                 SeenRecord(
-                    CareLinkJournalWriter.KIND_INSULIN, b.atMs, row.id, row.updatedAt, row.source,
+                    CareLinkJournalWriter.KIND_INSULIN, row.timestamp, row.id, row.updatedAt, row.source,
                     dose = row.amount?.toDouble(), completed = if (finishedRow) true else b.completed, note = row.note,
                     carbsKey = mealKey,
                 )
@@ -255,13 +272,14 @@ object CareLinkJournalWriter {
                 return true
             }
             val carbsKey = rec?.carbsKey ?: mealKey
+            val at = timeOf(key, row, b.atMs)
             // the row already says it (a repeated answer, or our write whose record was lost): no write - it would send
             // the row to Nightscout again; the record catches up
-            if (row != null && row.sourceRecordId == key && row.timestamp == b.atMs && same(row.amount, dose) &&
+            if (row != null && row.sourceRecordId == key && row.timestamp == at && same(row.amount, dose) &&
                 row.note == note
             ) {
                 seen.records[key] = SeenRecord(
-                    CareLinkJournalWriter.KIND_INSULIN, b.atMs, row.id, row.updatedAt, rec?.source ?: row.source,
+                    CareLinkJournalWriter.KIND_INSULIN, at, row.id, row.updatedAt, rec?.source ?: row.source,
                     dose = dose, completed = b.completed, note = note, carbsKey = carbsKey,
                 )
                 return true
@@ -269,7 +287,7 @@ object CareLinkJournalWriter {
             val written = j.upsert(
                 JournalEntryInput(
                     id = row?.id,
-                    timestamp = b.atMs,
+                    timestamp = at,
                     type = JournalEntryType.INSULIN,
                     title = app.getString(R.string.mod_carelink_journal_bolus),
                     note = note,
@@ -281,7 +299,7 @@ object CareLinkJournalWriter {
             )
             if (row == null) stats.created++ else stats.updated++
             seen.records[key] = SeenRecord(
-                CareLinkJournalWriter.KIND_INSULIN, b.atMs, written.id, written.updatedAt, written.source, dose = dose,
+                CareLinkJournalWriter.KIND_INSULIN, at, written.id, written.updatedAt, written.source, dose = dose,
                 completed = b.completed, note = note, carbsKey = carbsKey,
             )
             return true
@@ -290,10 +308,10 @@ object CareLinkJournalWriter {
         private suspend fun carbs(meal: ClEvent, key: String, cancelled: Boolean) {
             val grams = meal.grams ?: return
             val recIn = seen.records[key]
-            val ours = { row: JournalEntryEntity -> carbsLooksOurs(row, recIn, meal.atMs, if (cancelled) null else grams) }
+            val ours = { row: JournalEntryEntity -> carbsLooksOurs(row, recIn, if (cancelled) null else grams) }
             val f = find(key, recIn, ours) { row ->
                 SeenRecord(
-                    CareLinkJournalWriter.KIND_CARBS, meal.atMs, row.id, row.updatedAt, row.source,
+                    CareLinkJournalWriter.KIND_CARBS, row.timestamp, row.id, row.updatedAt, row.source,
                     grams = row.amount?.toDouble(),
                 )
             }
@@ -306,9 +324,10 @@ object CareLinkJournalWriter {
             }
             // new calculator carbs only with the switch on; rows already written stay ours either way
             if (row == null && !settings.writeCarbs) return
-            if (row != null && row.sourceRecordId == key && row.timestamp == meal.atMs && same(row.amount, grams)) {
+            val at = timeOf(key, row, meal.atMs)
+            if (row != null && row.sourceRecordId == key && row.timestamp == at && same(row.amount, grams)) {
                 seen.records[key] = SeenRecord(
-                    CareLinkJournalWriter.KIND_CARBS, meal.atMs, row.id, row.updatedAt, rec?.source ?: row.source,
+                    CareLinkJournalWriter.KIND_CARBS, at, row.id, row.updatedAt, rec?.source ?: row.source,
                     grams = grams,
                 )
                 return
@@ -316,7 +335,7 @@ object CareLinkJournalWriter {
             val written = j.upsert(
                 JournalEntryInput(
                     id = row?.id,
-                    timestamp = meal.atMs,
+                    timestamp = at,
                     type = JournalEntryType.CARBS,
                     title = app.getString(R.string.mod_carelink_journal_carbs),
                     amount = grams.toFloat(),
@@ -326,13 +345,13 @@ object CareLinkJournalWriter {
             )
             if (row == null) stats.created++ else stats.updated++
             seen.records[key] = SeenRecord(
-                CareLinkJournalWriter.KIND_CARBS, meal.atMs, written.id, written.updatedAt, written.source, grams = grams,
+                CareLinkJournalWriter.KIND_CARBS, at, written.id, written.updatedAt, written.source, grams = grams,
             )
         }
 
         private suspend fun removeCarbs(key: String) {
             val rec = seen.records[key] ?: return
-            val f = find(key, rec, { row -> carbsLooksOurs(row, rec, rec.atMs, null) }) { r -> rec.copy(rowId = r.id) }
+            val f = find(key, rec, { row -> carbsLooksOurs(row, rec, null) }) { r -> rec.copy(rowId = r.id) }
             if (!f.free) return
             removeFound(key, f.row, f.rec, rec.atMs)
         }
@@ -373,9 +392,10 @@ object CareLinkJournalWriter {
                 row == null -> rec.copy(state = SeenState.DELETED)
                 else -> {
                     val edited = rec.writtenAt != null && row.updatedAt > rec.writtenAt &&
-                        !bolusLooksOurs(row, rec, b.atMs, b.dose, note(b))
+                        !bolusLooksOurs(row, rec, b.dose, note(b))
                     if (!j.retag(row.id, key)) return null
                     seen.records[old.key] = trace
+                    rekeyed += key
                     val after = j.byId(row.id)
                     if (edited) rec.copy(state = SeenState.EDITED) else rec.copy(writtenAt = after?.updatedAt ?: rec.writtenAt)
                 }

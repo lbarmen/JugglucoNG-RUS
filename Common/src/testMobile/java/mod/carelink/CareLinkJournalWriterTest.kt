@@ -230,6 +230,29 @@ class CareLinkJournalWriterTest {
     }
 
     @Test
+    fun aZoneChangeDoesNotMoveRowsAlreadyWritten() {
+        // critic of the joints 4e, C2: the same pump history counted with another phone offset (+03:00 -> +06:00) - the
+        // keys are the same, every moment 3 h earlier; the rows keep their time and are not written again
+        val shift = -3 * 3_600_000L
+        fun moved(e: ClEvent) = e.copy(atMs = e.atMs + shift)
+        write(meal(8, 30.0), bolus(10, 3.0, 3.0), bolus(50, 2.0, 1.0, completed = false))
+        val before = rows().associateBy { it.sourceRecordId }
+        Thread.sleep(5)
+        write(moved(meal(8, 30.0)), moved(bolus(10, 3.0, 3.0)), moved(bolus(50, 2.0, 1.0, completed = false)))
+        val after = rows().associateBy { it.sourceRecordId }
+        assertEquals(before.keys, after.keys)
+        for ((k, r) in before) {
+            assertEquals(k, r.timestamp, after[k]!!.timestamp)
+            assertEquals("not written again: $k", r.updatedAt, after[k]!!.updatedAt)
+        }
+        // the running one finishes after the change: the dose is written, the time stays
+        write(moved(meal(8, 30.0)), moved(bolus(10, 3.0, 3.0)), moved(bolus(50, 2.0, 2.0)))
+        val done = insulin().single { it.sourceRecordId == "carelink:INSULIN:2027-01-15T06:00:50:0:insulin" }
+        assertEquals(2.0f, done.amount!!, 1e-6f)
+        assertEquals(t0 + 50_000L, done.timestamp)
+    }
+
+    @Test
     fun finishedBolusWithTheSameDoseIsNotRewritten() {
         write(bolus(10, 2.0, 2.0))
         val first = insulin().single()
