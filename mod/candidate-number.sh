@@ -7,7 +7,7 @@
 #   - every other candidate run of VERSION that built its APKs (some attempt succeeded) or may still do so (not
 #     finished: queued, building, waiting for approval). Candidates are found by their run name "MOD candidate N
 #     blocks: ..." (run-name in mod-build.yml);
-#   - for 1.3.2 also 2: candidates 1 and 2 were built under the former name (tag rus-1.3.2-2, removed from GitHub
+#   - for 1.3.2 also 2: candidates 1 and 2 were built under the former name (their tag was removed from GitHub
 #     17.11.2026; candidates 3 of 15.11 were refused without APKs), so one number stays one APK in the owner's notes.
 #     The run list shows the latest attempt only: for a red run with several attempts the earlier ones are asked.
 #     The list holds the last 1000 manual runs (GitHub limit with an event filter, from memory): years away.
@@ -35,7 +35,7 @@ attempt_succeeded() {
 }
 
 max=0; why="no tag or candidate of $ver yet"
-if [ "$ver" = 1.3.2 ]; then max=2; why="candidates 1-2 built under the former name (tag rus-1.3.2-2)"; fi
+if [ "$ver" = 1.3.2 ]; then max=2; why="candidates 1-2 built under the former name"; fi
 for t in $(git tag -l "mod-$ver-*"); do
   m="${t##*-}"
   if [[ "$m" =~ ^[0-9]+$ ]] && [ "$m" -gt "$max" ]; then max="$m"; why="tag $t"; fi
