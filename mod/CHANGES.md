@@ -8,21 +8,21 @@ A version is a tag `mod-<JugglucoNG version>-<our number>` on `main`; it is set 
 Each version has two lists: "For the user" - what is visible in the app, "Build and checks" - everything else.
 A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
-## After rus-1.3.2-2 (in `main`, no tag yet)
+## After candidate 2 (in `main`, no tag yet)
 For the user:
-- 2026-11-17 — renamed to JugglucoNGmod (formerly JugglucoNG-RUS, package tk.glucodata.ng.rus): app name
+- 2026-11-17 — renamed to JugglucoNGmod (candidates 1-2 were built under the former name and package): app name
   "JugglucoNGmod" (watch face too), package `tk.glucodata.ng.mod` (installs as a new app), repository
-  `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. Versions
-  below are the old-name tags `rus-…`.
+  `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. The
+  versions below were built under the former name.
 - 2026-11-17 — new signing key (certificate CN=JugglucoNGmod), fingerprint in `mod/mod-cert.sha256`. Builds
-  signed with the former key (rus-1.3.2-1, rus-1.3.2-2) cannot be updated in place: install as a new app.
+  signed with the former key (candidates 1 and 2) cannot be updated in place: install as a new app.
 - 2026-11-16 — the author's code is exactly his JugglucoNG 1.3.2-Alpha release: 47 of his unreleased changes (alarms,
-  Nightscout, watch) that were in rus-1.3.2-2 are removed; they will return with his next release.
+  Nightscout, watch) that were in candidate 2 are removed; they will return with his next release.
 
 Build and checks:
 - 2026-11-16 — `main` rebuilt once on the 1.3.2-Alpha release (6d8bb06f6): our commits are carried over on top, our
-  files did not change, commit messages have no service marks. The former history (and the sources of rus-1.3.2-2) is
-  the tag `rus-old-main-2026-11-16`.
+  files did not change, commit messages have no service marks. The former history (and the sources of candidate 2) is
+  kept on the owner's computer.
 - 2026-11-16 — `mod-sync.yml`: the author's test that is not yet in his code of the checked version is skipped with a
   note in the table instead of turning the check red (`tools/test-nightscout-backlog.py` appeared after 1.3.2-Alpha).
 - 2026-11-16 — `mod/check-hooks.py`: every change in an author's file must be within 3 lines of a `MOD-HOOK` mark; a
@@ -61,7 +61,7 @@ Build and checks:
 - 2026-11-15 — `mod/SYNC.md`: what to do in every red case (before and after sending the PR), `continue`, golden
   runs to the end, the Juggluco summary command for Windows.
 
-## rus-1.3.2-2 — 2026-11-15 (based on JugglucoNG 1.3.2-Alpha and 47 of his unreleased changes from 14.11)
+## Candidate 2 — 2026-11-15 (based on JugglucoNG 1.3.2-Alpha and 47 of his unreleased changes from 14.11)
 The first version with a tag. Candidate 1 did not get the tag: the watch face crashed on the watch (the second error
 below).
 
