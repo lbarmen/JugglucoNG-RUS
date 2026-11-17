@@ -44,7 +44,7 @@
     <string name="mod_carelink_status_polling_off">Signed in, updates are off</string>
     <string name="mod_carelink_status_polling_off_text">Pump data is not coming in because automatic updates are off. Tap \"Turn updates on\".</string>
     <string name="mod_carelink_status_waiting">Waiting for the first data</string>
-    <string name="mod_carelink_status_waiting_text">Signed in. The first data usually comes within 1–2 minutes. If there is still none after 10 minutes, check that MiniMed Mobile is running and sees the pump. No notification is sent in this case.</string>
+    <string name="mod_carelink_status_waiting_text">Signed in. The first data usually comes within 1–2 minutes. If there is still none after 10 minutes, check that MiniMed Mobile is running and sees the pump. If there is no data for longer than the chosen time, you will get a notification.</string>
     <string name="mod_carelink_status_ok">Pump data is coming in</string>
     <string name="mod_carelink_status_stale">Pump data is out of date</string>
     <!-- %1$s - "2 h 5 min ago" -->

@@ -40,7 +40,7 @@
     <string name="mod_carelink_status_polling_off">Вход выполнен, обновление выключено</string>
     <string name="mod_carelink_status_polling_off_text">Данные помпы не приходят, потому что автоматическое обновление выключено. Нажмите «Включить обновление».</string>
     <string name="mod_carelink_status_waiting">Ждём первых данных</string>
-    <string name="mod_carelink_status_waiting_text">Вход выполнен. Первые данные обычно приходят за 1–2 минуты. Если через 10 минут их всё ещё нет, проверьте, что MiniMed Mobile работает и видит помпу. Уведомления об этом не будет.</string>
+    <string name="mod_carelink_status_waiting_text">Вход выполнен. Первые данные обычно приходят за 1–2 минуты. Если через 10 минут их всё ещё нет, проверьте, что MiniMed Mobile работает и видит помпу. Если данных не будет дольше выбранного срока, придёт уведомление.</string>
     <string name="mod_carelink_status_ok">Данные помпы приходят</string>
     <string name="mod_carelink_status_stale">Данные помпы устарели</string>
     <string name="mod_carelink_status_stale_text">Последние данные помпы пришли %1$s. Проверьте, что MiniMed Mobile работает и видит помпу. Цифры ниже старые.</string>
