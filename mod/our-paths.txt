@@ -1,0 +1,9 @@
+# JugglucoNGmod: our paths - the one list for every mod/ script (sync report, hook budget, overlay of old releases).
+# Everything else in this repository is upstream's (ctqvva/JugglucoNG) and is changed only by MOD-HOOK lines.
+# A line is a directory (ending in /) or a glob; `*` matches across directories.
+mod/
+Common/src/mod/
+Common/src/wearMod/
+Common/src/testMobile/java/mod/
+.github/workflows/mod-*.yml
+.github/README.md

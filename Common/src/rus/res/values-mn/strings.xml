@@ -1,5 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- JugglucoNG-RUS: own app name, overrides upstream app_name (Common/src/main/res/values-mn). -->
-<resources>
-    <string name="app_name">JugglucoNG RUS</string>
-</resources>

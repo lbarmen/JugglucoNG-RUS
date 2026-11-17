@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<!-- JugglucoNG-RUS (wear only). The watch face color styles reach their name strings and icons only
-     through `private const val X = R.string/R.drawable...` (ColorStyleIdAndResourceIds.kt). With non-final
-     R ids these compile to 0 ("String resource ID #0x0" in getUserStyleSchema; upstream 1.3.2 wear has the
-     same bug), and the 7 *_style_name strings and 6 color icons are shrunk away. rus/gradlew-rus.sh builds
-     wear with final R ids (real ids in the code); this file keeps the resources, since inlined ids are not
-     seen as uses. rus/check-apk.py verifies both against the sources. Remove once upstream fixes it. -->
-<resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@string/*_style_name,@drawable/red,@drawable/green,@drawable/blue,@drawable/yellow,@drawable/gray,@drawable/white" />
