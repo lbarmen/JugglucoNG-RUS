@@ -3,7 +3,6 @@ package tk.glucodata.rus.carelink
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.util.Log
 
 /**
  * JugglucoNG-RUS, CareLink (stage 4c): the poll alarm. It does not poll (a broadcast has ~10 s): the next alarm first,
@@ -24,16 +23,12 @@ class CareLinkAlarmReceiver : BroadcastReceiver() {
             val op = CareLinkScheduler.enqueuePoll(context, PollReason.ALARM)
             if (op == null) pending.finish() else op.result.addListener({ pending.finish() }, { it.run() })
         } catch (t: Throwable) {
-            Log.w(TAG, "poll alarm failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("poll alarm failed (${t.javaClass.simpleName})")
             try {
                 pending.finish()
             } catch (_: Throwable) {
             }
         }
-    }
-
-    private companion object {
-        const val TAG = "RusCareLink"
     }
 }
 
@@ -48,7 +43,7 @@ class CareLinkBootReceiver : BroadcastReceiver() {
         try {
             CareLinkScheduler.arm(context, force = true)
         } catch (t: Throwable) {
-            Log.w("RusCareLink", "arm after $action failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("arm after $action failed (${t.javaClass.simpleName})")
         }
     }
 }

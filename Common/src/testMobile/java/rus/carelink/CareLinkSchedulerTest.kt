@@ -99,6 +99,7 @@ class CareLinkSchedulerTest {
         CareLinkScheduler.elapsed = { elapsed }
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
+        CareLinkSettings(app).enabled = false
     }
 
     @After
@@ -122,13 +123,37 @@ class CareLinkSchedulerTest {
     }
 
     @Test
-    fun withPollingOffNothingIsScheduled() {
+    fun withPollingOffNothingIsScheduledAndTheSafetyWorkGoes() {
+        // critic of the joints, B1: off with a live session - the safety work is removed even without the "armed" mark
         saveSession()
         CareLinkSettings(app).enabled = false
         assertFalse(CareLinkScheduler.arm(app))
         assertTrue(alarms.isEmpty())
-        assertTrue(work.log.isEmpty())
+        assertEquals(listOf("cancel"), work.log)
         assertNull(CareLinkScheduler.enqueuePoll(app, PollReason.MANUAL))
+    }
+
+    @Test
+    fun settingsImportDoesNotStopPolling() {
+        // critic of the joints, B1: upstream's import clears our shared_prefs files; the flag is a file beside the session
+        saveSession()
+        RusCareLinkStarter.afterLogin(app)
+        for (name in listOf(CareLinkSettings.PREFS, CareLinkStateStore.PREFS, "rus_carelink_schedule")) {
+            app.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit()
+        }
+        assertTrue(CareLinkSettings(app).enabled)
+        assertTrue(CareLinkScheduler.arm(app))
+        assertEquals(1, alarms.size)
+        assertFalse(work.log.contains("cancel"))
+    }
+
+    @Test
+    fun signInListenerWithoutASessionTurnsNothingOn() {
+        // critic of the joints, N3: a sign-out came between the session write and the listener
+        RusCareLinkStarter.afterLogin(app)
+        assertFalse(CareLinkSettings(app).enabled)
+        assertEquals(CareLinkStatus.OFF, CareLinkStateStore(app).read().status)
+        assertTrue(work.log.isEmpty())
     }
 
     @Test

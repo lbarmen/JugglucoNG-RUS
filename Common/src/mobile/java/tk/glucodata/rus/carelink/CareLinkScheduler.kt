@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.SystemClock
-import android.util.Log
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingPeriodicWorkPolicy
@@ -44,7 +43,6 @@ object CareLinkScheduler {
     private const val K_NEXT = "nextAlarmElapsedMs"
     private const val K_ARMED = "armed"
     private const val REQUEST_CODE = 1_947_000
-    private const val TAG = "RusCareLink"
 
     /** WorkManager; tests put a recording fake here. */
     @Volatile
@@ -63,13 +61,15 @@ object CareLinkScheduler {
         val prefs = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val settings = CareLinkSettings(app)
         if (!settings.enabled || !CareLinkAuth.hasSession(app)) {
-            if (prefs.getBoolean(K_ARMED, false)) disarm(app)
+            // off with a live session: the 15-min safety work must not wake the app for nothing even when the "armed"
+            // mark is gone (upstream's settings import clears it; critic of the joints, B1)
+            if (prefs.getBoolean(K_ARMED, false) || CareLinkAuth.hasSession(app)) disarm(app)
             return false
         }
         try {
             work.ensurePeriodic(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "safety work not scheduled (${t.javaClass.simpleName})")
+            CareLinkLog.w("safety work not scheduled (${t.javaClass.simpleName})")
         }
         val now = elapsed()
         val interval = settings.intervalMin * 60_000L
@@ -93,12 +93,12 @@ object CareLinkScheduler {
                 p.cancel()
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "alarm not removed (${t.javaClass.simpleName})")
+            CareLinkLog.w("alarm not removed (${t.javaClass.simpleName})")
         }
         try {
             work.cancelPeriodic(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "safety work not removed (${t.javaClass.simpleName})")
+            CareLinkLog.w("safety work not removed (${t.javaClass.simpleName})")
         }
         app.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().clear().apply()
     }
@@ -117,7 +117,7 @@ object CareLinkScheduler {
         val alarms = app.getSystemService(Context.ALARM_SERVICE) as? AlarmManager
         val pending = pollIntent(app, 0)
         if (alarms == null || pending == null) {
-            Log.w(TAG, "no alarm service: the 15-min safety work polls alone")
+            CareLinkLog.w("no alarm service: the 15-min safety work polls alone")
             return
         }
         val exact = Build.VERSION.SDK_INT < Build.VERSION_CODES.S || alarms.canScheduleExactAlarms()
@@ -131,7 +131,7 @@ object CareLinkScheduler {
             try {
                 alarms.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, atElapsedMs, pending)
             } catch (t2: Throwable) {
-                Log.w(TAG, "alarm refused (${t2.javaClass.simpleName}): the 15-min safety work polls alone")
+                CareLinkLog.w("alarm refused (${t2.javaClass.simpleName}): the 15-min safety work polls alone")
             }
         }
     }

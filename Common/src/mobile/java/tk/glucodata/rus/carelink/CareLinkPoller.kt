@@ -1,9 +1,13 @@
 package tk.glucodata.rus.carelink
 
 import android.content.Context
-import android.util.Log
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -22,22 +26,26 @@ enum class PollReason { ALARM, WORKER, LOGIN, FOREGROUND, MANUAL }
  * sign-in and the button - always. Then: a live key
  * ([CareLinkAuth.ensureFresh]) -> POST `baseUrlCumulus/display/message` (`{"username", "role": "patient"}`, a care
  * partner `carepartner` + `patientId`) -> on 401/403 [CareLinkAuth.forceRefresh] and one more try -> parsing ->
- * [CareLinkJournalWriter], [CareLinkBasalWriter], [CareLinkIob] -> state.
+ * [CareLinkBasalWriter], [CareLinkJournalWriter], [CareLinkIob] -> state.
  *
- * `NeedLogin` (only `invalid_grant`) -> NEED_LOGIN, alarms off, notification. Network, 5xx, a broken answer, a failed
- * parse or write -> ERROR: nothing is wiped, the last snapshot stays and `lastDataAtMs` does not move. The empty answer
- * (no pump upload yet) is a good poll that brings no data: the data time stays where it was.
+ * `NeedLogin` (`invalid_grant`, or a session file that will never open) -> NEED_LOGIN, alarms off, the open basal
+ * segment closed, the pump's IoB off the plate, notification. Network, 5xx, a broken answer, a failed parse -> ERROR:
+ * nothing is wiped, the last snapshot stays and `lastDataAtMs` does not move. A failed write (journal or basal) ->
+ * ERROR with the write error, but the data came: the data time, the snapshot and the other writers go on (critic of the
+ * joints, C3: one bad journal row must not stop the basal, the IoB plate and bring "no data"). The empty answer (no
+ * pump upload yet) is a good poll that brings no data: the data time stays where it was.
  *
  * Off the main thread (Keystore, network). Keys, the user name and the answer are never logged.
  */
 object CareLinkPoller {
 
-    private const val TAG = "RusCareLink"
-
     /** The app opening polls not more often than this. */
     internal const val FOREGROUND_GAP_MS = 2 * 60_000L
 
     private val mutex = Mutex()
+
+    /** Work that outlives its caller: closing the basal after a sign-out (the sign-out may be on the main thread). */
+    private val background = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     @Volatile
     internal var zone: () -> ZoneId = { ZoneId.systemDefault() }
@@ -53,15 +61,33 @@ object CareLinkPoller {
     @Volatile
     internal var publishIob: (PumpNow?) -> Unit = { p -> CareLinkIob.publish(p) }
 
+    @Volatile
+    internal var closeBasal: suspend (Context) -> Unit = { c -> CareLinkBasalWriter.close(c) }
+
     /**
      * One poll; the state after it (unchanged when skipped: off, no session, not due). [firstPoll] - the first poll
-     * after a sign-in (the journal writer takes the whole 24 h); also true while no pump data was ever written.
+     * after a sign-in (the journal writer takes the whole 24 h every poll anyway; kept for the log).
      */
     suspend fun poll(context: Context, reason: PollReason, firstPoll: Boolean = false): CareLinkState =
         withContext(Dispatchers.IO) {
             val app = context.applicationContext
             mutex.withLock { pollLocked(app, reason, firstPoll) }
         }
+
+    /**
+     * After a sign-out: the open basal segment and the stop note end at their last data (critic of the joints, C2), in
+     * the background and after a poll running now. The returned job is for tests.
+     */
+    fun closeAfterSignOut(context: Context): Job {
+        val app = context.applicationContext
+        return background.launch {
+            try {
+                mutex.withLock { withContext(NonCancellable) { closeBasal(app) } }
+            } catch (t: Throwable) {
+                CareLinkLog.w("basal not closed after sign-out (${t.javaClass.simpleName})")
+            }
+        }
+    }
 
     private suspend fun pollLocked(app: Context, reason: PollReason, firstPollAsked: Boolean): CareLinkState {
         val store = CareLinkStateStore(app)
@@ -121,49 +147,69 @@ object CareLinkPoller {
             return failed(app, store, now, reason, CareLinkError(CareLinkErrorKind.PARSE, 0, t.javaClass.simpleName))
         }
         // an answer older than the snapshot already taken (the cloud sometimes serves an older one): the state keeps
-        // the last snapshot (merge), so the basal and the IoB plate must not get it either (critic 4c, C3)
+        // the last snapshot (merge), and no writer gets it - its markers would bring back a finished bolus as running or
+        // a moved one under its old key (critic 4c, C3; critic 4d, B1, C1)
         val stale = pump != null && CareLinkPumpNow.older(before.pumpNow, pump)
 
         // signed out while this poll ran: nothing more is written (critic 4c, N2)
         if (!CareLinkSettings(app).enabled) return store.read()
-        try {
-            writeJournal(app, events, firstPoll)
-            if (!stale) writeBasal(app, pump, now)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (t: Throwable) {
-            return failed(app, store, now, reason, CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName))
-        }
-        if (!stale) {
-            try {
-                publishIob(pump)
-            } catch (t: Throwable) {
-                // the IoB plate is a display: a failure here does not undo the written poll
-                Log.w(TAG, "poll: active insulin not published (${t.javaClass.simpleName})")
-            }
-        }
+        val writeError = if (stale) null else write(app, events, pump, now, firstPoll)
 
         // checked under the lock of the sign-out's clear(): its result must not bring the state back
         val after = store.updateIf({ CareLinkSettings(app).enabled }) { cur ->
             cur.copy(
-                status = CareLinkStatus.OK,
+                status = if (writeError == null) CareLinkStatus.OK else CareLinkStatus.ERROR,
                 lastPollAtMs = now,
                 lastDataAtMs = listOfNotNull(cur.lastDataAtMs, dataAt).maxOrNull(),
-                lastError = null,
+                lastError = writeError,
                 pumpNow = CareLinkPumpNow.merge(cur.pumpNow, pump),
             )
         } ?: return store.read()
-        store.firstPollPending = false
-        Log.i(TAG, "poll ok: reason=$reason first=$firstPoll events=${events.size} empty=${pump == null} stale=$stale code=${http.code}")
+        if (writeError == null) store.firstPollPending = false
+        if (writeError == null) {
+            CareLinkLog.i("poll ok: reason=$reason first=$firstPoll events=${events.size} empty=${pump == null} stale=$stale code=${http.code}")
+        } else {
+            CareLinkLog.w("poll written with an error: reason=$reason events=${events.size} error=${writeError.errorClass}")
+        }
         CareLinkNotifier.afterPoll(app, after, now)
         // self-repair of the chain: a "sign in again" of an older poll may have removed the alarms (critic 4c, C2)
         try {
             CareLinkScheduler.arm(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "arm after poll failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("arm after poll failed (${t.javaClass.simpleName})")
         }
         return after
     }
+
+    /**
+     * The writers of one fresh answer, each on its own (critic of the joints, C3): the basal, then the journal, then
+     * the IoB plate. Without cancellation: WorkManager cancels running work when the network goes, and a journal row
+     * written whose record was not saved would look like the person's edit next time (critic of the joints, C1). The
+     * first write failure (null - none).
+     */
+    private suspend fun write(app: Context, events: List<ClEvent>, pump: PumpNow?, now: Long, firstPoll: Boolean): CareLinkError? =
+        withContext(NonCancellable) {
+            var error: CareLinkError? = null
+            try {
+                writeBasal(app, pump, now)
+            } catch (t: Throwable) {
+                CareLinkLog.w("poll: basal not written (${t.javaClass.simpleName})")
+                error = CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName)
+            }
+            try {
+                writeJournal(app, events, firstPoll)
+            } catch (t: Throwable) {
+                CareLinkLog.w("poll: journal not written (${t.javaClass.simpleName})")
+                if (error == null) error = CareLinkError(CareLinkErrorKind.WRITE, 0, t.javaClass.simpleName)
+            }
+            try {
+                publishIob(pump)
+            } catch (t: Throwable) {
+                // the IoB plate is a display: a failure here is not a failed poll
+                CareLinkLog.w("poll: active insulin not published (${t.javaClass.simpleName})")
+            }
+            error
+        }
 
     private fun displayMessage(s: CareLinkSession): HttpResult {
         val body = JSONObject().put("username", s.username)
@@ -178,19 +224,27 @@ object CareLinkPoller {
         )
     }
 
-    private fun needLogin(app: Context, store: CareLinkStateStore, now: Long, reason: PollReason): CareLinkState {
+    private suspend fun needLogin(app: Context, store: CareLinkStateStore, now: Long, reason: PollReason): CareLinkState {
         // a sign-out during this poll also ends the session: no "sign in again" for a deliberate sign-out
         if (!CareLinkSettings(app).enabled) return store.read()
         // a new sign-in during this poll (the renewal found the vault changed): the new session stands, its alarms
         // and its first poll stay (critic 4c, C2)
         if (CareLinkAuth.hasSession(app)) return store.read()
         val after = store.update { it.copy(status = CareLinkStatus.NEED_LOGIN, lastPollAtMs = now, lastError = null) }
-        Log.w(TAG, "poll: sign-in needed (reason=$reason)")
+        CareLinkLog.w("poll: sign-in needed (reason=$reason)")
         try {
             CareLinkScheduler.disarm(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "alarms not removed (${t.javaClass.simpleName})")
+            CareLinkLog.w("alarms not removed (${t.javaClass.simpleName})")
         }
+        // no more data until a sign-in: the basal segment and the stop note end at their last data, the pump's number
+        // leaves the IoB plate (critic of the joints, C2 and N2)
+        try {
+            withContext(NonCancellable) { closeBasal(app) }
+        } catch (t: Throwable) {
+            CareLinkLog.w("basal not closed (${t.javaClass.simpleName})")
+        }
+        CareLinkIob.clear()
         CareLinkNotifier.needLogin(app)
         return after
     }
@@ -198,15 +252,15 @@ object CareLinkPoller {
     private fun failed(app: Context, store: CareLinkStateStore, now: Long, reason: PollReason, e: CareLinkError): CareLinkState {
         if (!CareLinkSettings(app).enabled) return store.read()
         val after = store.update { it.copy(status = CareLinkStatus.ERROR, lastPollAtMs = now, lastError = e) }
-        Log.w(TAG, "poll failed: reason=$reason kind=${e.kind} code=${e.code} error=${e.errorClass}")
+        CareLinkLog.w("poll failed: reason=$reason kind=${e.kind} code=${e.code} error=${e.errorClass}")
         CareLinkNotifier.afterPoll(app, after, now)
         return after
     }
 
     /**
      * A renewal that did not give a key. Code 0 means no HTTP answer: a network exception class - no network; the
-     * renewal answer did not parse - a bad answer; anything else (Keystore locked before unlock, a broken session
-     * file: [CareLinkAuth] gives the exception class) - storage.
+     * renewal answer did not parse - a bad answer; anything else (a session file that did not open this time:
+     * [CareLinkAuth] gives the exception class; one that never will is a sign-in needed) - storage.
      */
     private fun keyError(f: FreshResult.Failed): CareLinkError = when {
         f.code == 0 && f.errorClass in NETWORK_ERRORS -> CareLinkError(CareLinkErrorKind.NO_NETWORK, 0, f.errorClass)
@@ -234,5 +288,6 @@ object CareLinkPoller {
         writeJournal = { c, e, first -> CareLinkJournalWriter.apply(c, e, first) }
         writeBasal = { c, p, at -> CareLinkBasalWriter.apply(c, p, at) }
         publishIob = { p -> CareLinkIob.publish(p) }
+        closeBasal = { c -> CareLinkBasalWriter.close(c) }
     }
 }

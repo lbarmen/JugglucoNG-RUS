@@ -33,7 +33,7 @@ class RusCareLinkStarter : ContentProvider() {
                 try {
                     CareLinkScheduler.arm(app)
                 } catch (t: Throwable) {
-                    Log.w(TAG, "arm on start failed (${t.javaClass.simpleName})")
+                    CareLinkLog.w("arm on start failed (${t.javaClass.simpleName})")
                 }
             }
         } catch (t: Throwable) {
@@ -83,10 +83,12 @@ class RusCareLinkStarter : ContentProvider() {
          * After a sign-in (a background thread of [CareLinkAuth]): polling on, "sign in again" away, the chain armed
          * and the first poll - it takes the whole 24 h of the cloud window. The first poll stays pending until one is
          * written (critic 4c, C1). The last snapshot and data time go: they may be of another account, and an old data
-         * time would show "no data for 2000 min" at once (critic 4c, N4).
+         * time would show "no data for 2000 min" at once (critic 4c, N4). A sign-out that came between the session write
+         * and this call leaves nothing to turn on (critic of the joints, N3).
          */
         internal fun afterLogin(context: Context) {
             val app = context.applicationContext
+            if (!CareLinkAuth.hasSession(app)) return
             CareLinkSettings(app).enabled = true
             val store = CareLinkStateStore(app)
             store.firstPollPending = true
@@ -96,13 +98,19 @@ class RusCareLinkStarter : ContentProvider() {
             CareLinkScheduler.enqueuePoll(app, PollReason.LOGIN, firstPoll = true)
         }
 
-        /** After a sign-out (may be the main thread; file and preference work only): polling off, state cleared. */
+        /**
+         * After a sign-out (may be the main thread; file and preference work only): polling off, state cleared, the
+         * pump's IoB off the plate; the open basal segment and stop note are closed at their last data in the
+         * background (the journal is not for the main thread; critic of the joints, C2).
+         */
         internal fun afterSignOut(context: Context) {
             val app = context.applicationContext
             CareLinkSettings(app).enabled = false
             CareLinkScheduler.disarm(app)
             CareLinkStateStore(app).clear()
             CareLinkNotifier.cancelAll(app)
+            CareLinkIob.clear()
+            CareLinkPoller.closeAfterSignOut(app)
         }
     }
 }

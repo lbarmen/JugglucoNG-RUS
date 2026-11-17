@@ -6,10 +6,11 @@ import java.time.ZoneId
 /**
  * A temporary basal on the pump (cloud banner `TEMP_BASAL` and the `basal.tempBasal*` fields). [rate] -
  * `tempBasalRate`, U/h; [percent] - `tempBasalPercentage`, only for a percentage temporary basal (null for an absolute
- * one, by `tempBasalType`); [minutesLeft] - `timeRemaining` of the banner (whole minutes; may be stale by one poll).
- * A percentage one may carry rate 0: then the rate is the last normal rate times [percent] (plan, decision 1; 4d).
+ * one, by `tempBasalType`); [minutesLeft] - `timeRemaining` of the banner (whole minutes; may be stale by one poll);
+ * [absolute] - the type says absolute (ABS...): its rate is believed even at 0; type not known - a 0 is not (critic 4d,
+ * C2). A percentage one may carry rate 0: then the rate is the last normal rate times [percent] (plan, decision 1; 4d).
  */
-data class TempBasal(val rate: Double?, val percent: Int?, val minutesLeft: Int?)
+data class TempBasal(val rate: Double?, val percent: Int?, val minutesLeft: Int?, val absolute: Boolean = false)
 
 /**
  * What the pump shows now (stage 4c, contract of the plan). [dataAtMs] - when its data reached the cloud (not later
@@ -46,6 +47,7 @@ data class PumpNow(
                 putOpt("rate", t.rate)
                 putOpt("percent", t.percent)
                 putOpt("minutesLeft", t.minutesLeft)
+                if (t.absolute) put("absolute", true)
             })
         }
         putOpt("suspended", suspended)
@@ -58,7 +60,9 @@ data class PumpNow(
             val at = o.clLong("dataAtMs") ?: return null
             val t = o.clObj("tempBasal")
             val rate = o.clDouble("basalRate")
-            val temp = t?.let { TempBasal(it.clDouble("rate"), it.clInt("percent"), it.clInt("minutesLeft")) }
+            val temp = t?.let {
+                TempBasal(it.clDouble("rate"), it.clInt("percent"), it.clInt("minutesLeft"), it.clBool("absolute") == true)
+            }
             return PumpNow(
                 dataAtMs = at,
                 iobUnits = o.clDouble("iobUnits"),
@@ -153,7 +157,7 @@ object CareLinkPumpNow {
         val absolute = type?.uppercase()?.startsWith("ABS") == true
         val percent = if (absolute) null else basal.clDouble("tempBasalPercentage")?.takeIf { it >= 0.0 }?.let { Math.round(it).toInt() }
         val left = banner?.clDouble("timeRemaining")?.takeIf { it >= 0.0 }?.toInt()
-        return TempBasal(rate, percent, left)
+        return TempBasal(rate, percent, left, absolute)
     }
 
     /** [new] is older than [prev]: the cloud gave an older answer. */

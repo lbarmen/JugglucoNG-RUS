@@ -11,7 +11,7 @@ import tk.glucodata.data.journal.JournalRepository
  * action curves (plan decision 2). The one chosen in the CareLink window ([CareLinkSettings.presetId]), else
  * upstream's default for calculation: the first by `sortOrder` of the types not archived, counted in IOB and used for
  * calculation (upstream has no ready "default type" function). A chosen type not counted in IOB (a long-acting
- * insulin) is not taken: a pump gives rapid insulin only.
+ * insulin) or archived since is not taken: a pump gives rapid insulin only (critic 4d, N6).
  */
 object CareLinkInsulin {
 
@@ -31,7 +31,8 @@ object CareLinkInsulin {
     }
 
     internal fun choose(presets: List<JournalInsulinPreset>, chosen: Long?): Long? =
-        chosen?.let { id -> presets.firstOrNull { it.id == id && it.countsTowardIob } }?.id ?: defaultOf(presets)?.id
+        chosen?.let { id -> presets.firstOrNull { it.id == id && it.countsTowardIob && !it.isArchived } }?.id
+            ?: defaultOf(presets)?.id
 
     /** The default for calculation by the plan's rule (upstream has no such function to call). */
     internal fun defaultOf(presets: List<JournalInsulinPreset>): JournalInsulinPreset? =

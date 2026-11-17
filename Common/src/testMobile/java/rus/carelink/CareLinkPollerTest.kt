@@ -3,6 +3,7 @@ package rus.carelink
 import android.app.Application
 import android.app.Notification
 import android.app.NotificationManager
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
@@ -64,6 +65,7 @@ class CareLinkPollerTest {
     private val journal = mutableListOf<Pair<List<ClEvent>, Boolean>>()
     private val basal = mutableListOf<Pair<PumpNow?, Long>>()
     private val iob = mutableListOf<PumpNow?>()
+    private var closed = 0
 
     private fun session(role: String = "PATIENT", patientId: String? = null) = CareLinkSession(
         accessToken = access((now + 2 * 3_600_000L) / 1000), refreshToken = "made-up-refresh-1",
@@ -102,6 +104,7 @@ class CareLinkPollerTest {
         CareLinkPoller.writeJournal = { _, e, first -> journal += e to first }
         CareLinkPoller.writeBasal = { _, p, at -> basal += p to at }
         CareLinkPoller.publishIob = { p -> iob += p }
+        CareLinkPoller.closeBasal = { closed++ }
         CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { key })
         CareLinkVault.clear(app)
         CareLinkVault.save(app, session())
@@ -187,6 +190,8 @@ class CareLinkPollerTest {
         assertFalse("session wiped", CareLinkVault.exists(app))
         assertNotNull(shown(CareLinkNotifier.ID_NEED_LOGIN))
         assertTrue("alarms and safety work off", work.log.contains("cancel"))
+        // critic of the joints, C2: no data until a sign-in - the open basal segment is closed at its last data
+        assertEquals(1, closed)
         // no session: the next poll does nothing, the notification is not posted again after a swipe
         nm.cancel(CareLinkNotifier.ID_NEED_LOGIN)
         net.calls.clear()
@@ -220,7 +225,9 @@ class CareLinkPollerTest {
     }
 
     @Test
-    fun failedJournalWriteDoesNotMoveTheDataTime() {
+    fun failedJournalWriteIsAnErrorButTheBasalTheIobAndTheDataTimeGoOn() {
+        // critic of the joints, C3: one journal row that keeps failing must not stop the basal and the IoB plate, nor
+        // bring "no data" in 30 min while the data comes
         val before = now - 10 * 60_000L
         seed(before)
         CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
@@ -229,21 +236,102 @@ class CareLinkPollerTest {
         assertEquals(CareLinkStatus.ERROR, s.status)
         assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
         assertEquals("IllegalStateException", s.lastError!!.errorClass)
-        assertEquals(before, s.lastDataAtMs)
-        assertEquals("snapshot unchanged", 90.0, s.pumpNow!!.reservoirUnits!!, 1e-9)
-        assertTrue("basal not written after a failed journal", basal.isEmpty())
-        assertTrue(iob.isEmpty())
+        assertEquals("the data came", now - 3 * 60_000L, s.lastDataAtMs)
+        assertEquals("the new snapshot", 150.0, s.pumpNow!!.reservoirUnits!!, 1e-9)
+        assertEquals(1, basal.size)
+        assertEquals(1.5, iob.single()!!.iobUnits!!, 1e-9)
+        // 31 min later with no new poll: still no "no data" - the data time moved
+        CareLinkNotifier.checkNoData(app, store.read(), now + 31 * 60_000L)
+        assertNull(shown(CareLinkNotifier.ID_NO_DATA))
     }
 
     @Test
-    fun failedBasalWriteDoesNotMoveTheDataTime() {
+    fun failedBasalWriteDoesNotStopTheJournalAndTheIob() {
         val before = now - 10 * 60_000L
         seed(before)
         CareLinkPoller.writeBasal = { _, _, _ -> throw java.io.IOException("made-up") }
         net.on(dm, ok(answer()))
         val s = poll()
+        assertEquals(CareLinkStatus.ERROR, s.status)
         assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
-        assertEquals(before, s.lastDataAtMs)
+        assertEquals("IOException", s.lastError!!.errorClass)
+        assertEquals(now - 3 * 60_000L, s.lastDataAtMs)
+        assertEquals(1, journal.size)
+        assertEquals(1, iob.size)
+        // the next good poll clears the error
+        CareLinkPoller.writeBasal = { _, p, at -> basal += p to at }
+        assertEquals(CareLinkStatus.OK, poll().status)
+        assertNull(store.read().lastError)
+    }
+
+    @Test
+    fun writesAreNotCancelledHalfWay() {
+        // critic of the joints, C1: the work is cancelled (network gone) while the journal writes - the write and its
+        // record finish, the cancellation comes after
+        net.on(dm, ok(answer()))
+        val started = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val journalDone = java.util.concurrent.atomic.AtomicBoolean(false)
+        CareLinkPoller.writeJournal = { _, _, _ ->
+            started.complete(Unit)
+            kotlinx.coroutines.delay(100)
+            journalDone.set(true)
+        }
+        runBlocking {
+            val job = launch(kotlinx.coroutines.Dispatchers.IO) { CareLinkPoller.poll(app, PollReason.MANUAL) }
+            started.await()
+            job.cancel()
+            job.join()
+        }
+        assertTrue("the journal write ran to its end", journalDone.get())
+        assertEquals("the IoB after it too", 1, iob.size)
+    }
+
+    @Test
+    fun settingsImportKeepsPollingWhileTheSessionLives() {
+        // critic of the joints, B1: upstream's import clears every shared_prefs file it does not carry
+        net.on(dm, ok(answer()))
+        for (name in listOf(CareLinkSettings.PREFS, CareLinkStateStore.PREFS, "rus_carelink_schedule")) {
+            app.getSharedPreferences(name, 0).edit().clear().commit()
+        }
+        assertTrue(CareLinkSettings(app).enabled)
+        val s = poll(PollReason.ALARM)
+        assertEquals(1, net.calls.size)
+        assertEquals(CareLinkStatus.OK, s.status)
+        assertEquals(1, journal.size)
+    }
+
+    @Test
+    fun deadSessionFileNeedsSignInInsteadOfNoDataForever() {
+        // critic of the joints, C4: the Keystore key no longer fits the file - wiped, "sign in again"
+        val other = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { other })
+        net.on(dm, ok(answer()))
+        val s = poll()
+        assertEquals(CareLinkStatus.NEED_LOGIN, s.status)
+        assertFalse("wiped", CareLinkVault.exists(app))
+        assertNotNull(shown(CareLinkNotifier.ID_NEED_LOGIN))
+        assertTrue(work.log.contains("cancel"))
+        assertTrue(net.calls.isEmpty())
+    }
+
+    @Test
+    fun sessionFileNotOpenedThisTimeIsAStorageErrorAndIsKept() {
+        // a Keystore hiccup is not a dead file: kept, reported as storage
+        CareLinkVault.cipher = AesGcmSessionCipher(keyProvider = { throw java.security.KeyStoreException("made-up") })
+        val s = poll()
+        assertEquals(CareLinkStatus.ERROR, s.status)
+        assertEquals(CareLinkErrorKind.STORAGE, s.lastError!!.kind)
+        assertEquals("KeyStoreException", s.lastError!!.errorClass)
+        assertTrue(CareLinkVault.exists(app))
+    }
+
+    @Test
+    fun signOutClosesTheBasalInTheBackground() {
+        val done = kotlinx.coroutines.CompletableDeferred<Unit>()
+        CareLinkPoller.closeBasal = { done.complete(Unit) }
+        RusCareLinkStarter.afterSignOut(app)
+        runBlocking { kotlinx.coroutines.withTimeout(5_000) { done.await() } }
+        assertFalse(CareLinkSettings(app).enabled)
     }
 
     @Test
@@ -278,10 +366,11 @@ class CareLinkPollerTest {
         val s = poll()
         assertEquals(before, s.lastDataAtMs)
         assertEquals("an older snapshot is not taken", 90.0, s.pumpNow!!.reservoirUnits!!, 1e-9)
-        // critic 4c, C3: nor does the basal or the IoB plate get it; the journal still does (24 h history)
+        // critic 4c, C3: nor does the basal or the IoB plate get it; critic 4d, B1 and C1: nor the journal - its
+        // markers would bring a finished bolus back to running, or a moved one under its old key as a second bolus
         assertTrue(basal.isEmpty())
         assertTrue(iob.isEmpty())
-        assertEquals(1, journal.size)
+        assertTrue(journal.isEmpty())
     }
 
     @Test

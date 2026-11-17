@@ -1,7 +1,6 @@
 package tk.glucodata.rus.carelink
 
 import android.content.Context
-import android.util.Log
 import androidx.annotation.Keep
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
@@ -26,7 +25,7 @@ class CareLinkWorker(context: Context, params: WorkerParameters) : CoroutineWork
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
-            Log.w("RusCareLink", "poll work failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("poll work failed (${t.javaClass.simpleName})")
         }
         return Result.success()
     }

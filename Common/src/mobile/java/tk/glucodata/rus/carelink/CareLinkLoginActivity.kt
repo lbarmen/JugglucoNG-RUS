@@ -6,7 +6,6 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Bundle
-import android.util.Log
 import android.webkit.CookieManager
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -86,7 +85,7 @@ class CareLinkLoginActivity : ComponentActivity() {
             newWebView()
         } catch (t: Throwable) {
             // no WebView on the phone (disabled, updating): say so instead of crashing upstream's app
-            Log.w(TAG, "sign-in window: WebView not available (${t.javaClass.simpleName})")
+            CareLinkLog.w("sign-in window: WebView not available (${t.javaClass.simpleName})")
             null
         }
         webView = web
@@ -172,7 +171,7 @@ class CareLinkLoginActivity : ComponentActivity() {
             } catch (e: CancellationException) {
                 throw e
             } catch (t: Throwable) {
-                Log.w(TAG, "sign-in not started (${t.javaClass.simpleName})")
+                CareLinkLog.w("sign-in not started (${t.javaClass.simpleName})")
                 LoginStart.Failed(LoginFail.SERVER, 0)
             }
             when (r) {
@@ -242,7 +241,7 @@ class CareLinkLoginActivity : ComponentActivity() {
                 throw e
             } catch (t: Throwable) {
                 // without the address: it holds the code and the mark
-                Log.w(TAG, "sign-in failed (${t.javaClass.simpleName})")
+                CareLinkLog.w("sign-in failed (${t.javaClass.simpleName})")
                 LoginFail.SERVER
             }
             withContext(Dispatchers.Main) {
@@ -281,7 +280,7 @@ class CareLinkLoginActivity : ComponentActivity() {
         try {
             CookieManager.getInstance().flush()
         } catch (t: Throwable) {
-            Log.w(TAG, "sign-in cookies not flushed (${t.javaClass.simpleName})")
+            CareLinkLog.w("sign-in cookies not flushed (${t.javaClass.simpleName})")
         }
     }
 
@@ -310,7 +309,6 @@ class CareLinkLoginActivity : ComponentActivity() {
     }
 
     companion object {
-        private const val TAG = "RusCareLink"
         const val EXTRA_FAIL = "rus_carelink_login_fail"
         private const val STATE_REDIRECT = "rus_carelink_redirect"
 

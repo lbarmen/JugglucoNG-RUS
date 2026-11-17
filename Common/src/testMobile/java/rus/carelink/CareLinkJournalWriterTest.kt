@@ -16,15 +16,18 @@ import org.robolectric.annotation.ConscryptMode
 import rus.carelink.CareLinkJournalTestEnv.app
 import rus.carelink.CareLinkJournalTestEnv.dao
 import rus.carelink.CareLinkJournalTestEnv.rows
+import tk.glucodata.data.journal.JournalEntryEntity
 import tk.glucodata.data.journal.JournalEntryInput
 import tk.glucodata.data.journal.JournalEntrySource
 import tk.glucodata.data.journal.JournalEntryType
 import tk.glucodata.data.journal.JournalRepository
 import tk.glucodata.rus.carelink.CareLinkInsulin
 import tk.glucodata.rus.carelink.CareLinkJournalWriter
+import tk.glucodata.rus.carelink.CareLinkSeenStore
 import tk.glucodata.rus.carelink.CareLinkSettings
 import tk.glucodata.rus.carelink.ClEvent
 import tk.glucodata.rus.carelink.ClKind
+import tk.glucodata.rus.carelink.SeenState
 
 /**
  * JugglucoNG-RUS, CareLink 4d: pump boluses and calculator carbs in upstream's real journal (Room under Robolectric):
@@ -233,9 +236,139 @@ class CareLinkJournalWriterTest {
     @Test
     fun lostRecordAdoptsTheRowInsteadOfAddingOne() {
         write(bolus(10, 2.0, 2.0))
-        tk.glucodata.rus.carelink.CareLinkSeenStore.clear(app)
+        CareLinkSeenStore.clear(app)
         write(bolus(10, 2.0, 2.0))
         assertEquals(1, insulin().size)
         assertFalse(rows().isEmpty())
+    }
+
+    // ---------------------------------------------------------------- critic 4d and critic of the joints
+
+    private fun state(key: String) = CareLinkSeenStore.load(app, now).records[key]?.state
+
+    private fun editLikeTheirEditor(row: JournalEntryEntity, amount: Float, note: String?) = runBlocking {
+        // upstream's JournalCompose.toInput: the preset's name as the title, no source (MANUAL), no key
+        JournalRepository().upsertEntry(
+            JournalEntryInput(
+                id = row.id, timestamp = row.timestamp, type = JournalEntryType.INSULIN, title = "Made-up preset",
+                note = note, amount = amount, insulinPresetId = row.insulinPresetId,
+            )
+        )
+    }
+
+    @Test
+    fun movedKeyAndAnOlderAnswerMakeNoSecondBolus() {
+        // critic 4d, B1: running K1 -> moved to K2 and finished -> an older answer brings K1 "running" again
+        write(bolus(10, 3.0, 1.0, completed = false))
+        write(bolus(30, 3.0, 3.0))
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val row = insulin().single()
+        assertEquals("carelink:INSULIN:2027-01-15T06:00:30:0:insulin", row.sourceRecordId)
+        assertEquals(3.0f, row.amount!!, 1e-6f)
+        assertNull(row.note)
+        assertEquals(SeenState.MOVED, state("carelink:INSULIN:2027-01-15T06:00:10:0:insulin"))
+        // and the fresh answers after it change nothing
+        write(bolus(30, 3.0, 3.0))
+        assertEquals(1, insulin().size)
+    }
+
+    @Test
+    fun olderAnswerDoesNotTakeAFinishedBolusBackToRunning() {
+        // critic 4d, C1: written finished (1.2 of 3 delivered), an older answer shows it running
+        write(bolus(10, 3.0, 1.2))
+        val done = insulin().single()
+        Thread.sleep(5)
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val row = insulin().single()
+        assertEquals(1.2f, row.amount!!, 1e-6f)
+        assertEquals(done.note, row.note)
+        assertEquals("not even written", done.updatedAt, row.updatedAt)
+    }
+
+    @Test
+    fun ourWriteWithALostRecordIsNotTakenForThePersonsEdit() {
+        // critic of the joints, C1: our write went through, its record did not (work cancelled, process killed)
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val running = insulin().single()
+        Thread.sleep(5)
+        runBlocking {
+            JournalRepository().upsertEntry(
+                JournalEntryInput(
+                    id = running.id, timestamp = running.timestamp, type = JournalEntryType.INSULIN, title = running.title,
+                    amount = 3.0f, insulinPresetId = running.insulinPresetId,
+                    source = JournalEntrySource.fromStorage(running.source), sourceRecordId = running.sourceRecordId,
+                )
+            )
+        }
+        val key = running.sourceRecordId!!
+        write(bolus(10, 3.0, 3.0))
+        assertEquals("still ours", SeenState.LIVE, state(key))
+        // ours: a later cancellation still removes it
+        write(bolus(10, 3.0, 0.0, completed = true))
+        assertTrue(insulin().isEmpty())
+    }
+
+    @Test
+    fun personsEditThroughTheirEditorIsKept() {
+        // critic 4d, N8: their editor makes a Health Connect row MANUAL without its key
+        CareLinkSettings(app).sendToNightscout = true
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val ours = insulin().single()
+        Thread.sleep(5)
+        editLikeTheirEditor(ours, 2.5f, "made-up own note")
+        write(bolus(10, 3.0, 3.0))
+        val row = insulin().single()
+        assertEquals(2.5f, row.amount!!, 1e-6f)
+        assertEquals("made-up own note", row.note)
+        assertNull("their editor took the key", row.sourceRecordId)
+        // nor is it removed when the pump cancels it
+        write(bolus(10, 3.0, 0.0, completed = true))
+        assertEquals(1, insulin().size)
+    }
+
+    @Test
+    fun theirEditorSavingUnchangedLeavesTheRowOursAndGetsSourceAndKeyBack() {
+        CareLinkSettings(app).sendToNightscout = true
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val ours = insulin().single()
+        Thread.sleep(5)
+        editLikeTheirEditor(ours, ours.amount!!, ours.note)
+        assertEquals(JournalEntrySource.MANUAL.storageValue, insulin().single().source)
+        write(bolus(10, 3.0, 3.0))
+        val row = insulin().single()
+        assertEquals(3.0f, row.amount!!, 1e-6f)
+        assertNull(row.note)
+        assertEquals(JournalEntrySource.HEALTH_CONNECT.storageValue, row.source)
+        assertEquals(ours.sourceRecordId, row.sourceRecordId)
+    }
+
+    @Test
+    fun cancelledBolusRemovesItsCarbsWhenTheMealMarkerIsGone() {
+        write(meal(8, 30.0), bolus(10, 3.0, 0.0, completed = false))
+        assertEquals(1, carbs().size)
+        write(bolus(10, 3.0, 0.0, completed = true))
+        assertTrue(carbs().isEmpty())
+        assertTrue(insulin().isEmpty())
+    }
+
+    @Test
+    fun theCarbsOfThePersonsBolusAreLeftAlone() {
+        // critic 4d, N3: the person deleted the bolus; the pump then cancels it - the carbs are not ours to remove
+        write(meal(8, 30.0), bolus(10, 3.0, 1.0, completed = false))
+        runBlocking { JournalRepository().deleteEntry(insulin().single().id) }
+        write(meal(8, 30.0), bolus(10, 3.0, 0.0, completed = true))
+        assertEquals(1, carbs().size)
+    }
+
+    @Test
+    fun secondBolusNearbyDoesNotTakeTheFirstOnesRow() {
+        // critic 4d, N4: a 1 U bolus a few seconds before the moved marker of a running 3 U one
+        write(bolus(10, 3.0, 1.0, completed = false))
+        val running = insulin().single()
+        write(bolus(5, 1.0, 1.0), bolus(30, 3.0, 3.0))
+        val byKey = insulin().associateBy { it.sourceRecordId }
+        assertEquals(2, byKey.size)
+        assertEquals(running.id, byKey["carelink:INSULIN:2027-01-15T06:00:30:0:insulin"]!!.id)
+        assertEquals(1.0f, byKey["carelink:INSULIN:2027-01-15T06:00:05:0:insulin"]!!.amount!!, 1e-6f)
     }
 }

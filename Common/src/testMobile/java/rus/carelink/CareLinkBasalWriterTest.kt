@@ -14,8 +14,10 @@ import org.robolectric.annotation.ConscryptMode
 import rus.carelink.CareLinkJournalTestEnv.app
 import rus.carelink.CareLinkJournalTestEnv.rows
 import tk.glucodata.data.journal.JournalEntryEntity
+import tk.glucodata.data.journal.JournalEntryInput
 import tk.glucodata.data.journal.JournalEntrySource
 import tk.glucodata.data.journal.JournalEntryType
+import tk.glucodata.data.journal.JournalRepository
 import tk.glucodata.drivers.api.ApiIobSnapshot
 import tk.glucodata.rus.carelink.CareLinkBasalWriter
 import tk.glucodata.rus.carelink.CareLinkIob
@@ -172,9 +174,102 @@ class CareLinkBasalWriterTest {
 
     @Test
     fun durationIsAtLeastOneMinute() {
+        // critic 4d, N8: a real 20-second segment (two snapshots 20 s apart with different rates), not the same key twice
         write(at(0))
-        write(at(0, rate = 1.2))
-        assertTrue(basal().all { (it.durationMinutes ?: 0) >= 1 })
+        write(PumpNow(t0 + 20_000L, basalRate = 1.2, suspended = false, basalKnown = true))
+        val b = basal()
+        assertEquals(2, b.size)
+        assertEquals("20 s - rounded up to 1 min", 1, b[0].durationMinutes)
+        assertEquals(30, b[1].durationMinutes)
+    }
+
+    @Test
+    fun temporaryBasalWithoutANumber() {
+        // critic 4d, C2: absolute without tempBasalRate - basalRate; type unknown and 0 - not believed; absolute 0 - 0
+        val base = PumpNow(t0, basalRate = 0.9, suspended = false, basalKnown = true)
+        assertEquals(0.9, CareLinkBasalWriter.rateOf(base.copy(tempBasal = TempBasal(null, null, 30, absolute = true)), null)!!, 1e-9)
+        assertEquals(0.9, CareLinkBasalWriter.rateOf(base.copy(tempBasal = TempBasal(0.0, null, 30)), null)!!, 1e-9)
+        assertEquals(0.4, CareLinkBasalWriter.rateOf(base.copy(tempBasal = TempBasal(0.4, null, 30)), null)!!, 1e-9)
+        assertEquals(0.0, CareLinkBasalWriter.rateOf(base.copy(tempBasal = TempBasal(0.0, null, 30, absolute = true)), null)!!, 1e-9)
+        // and in the journal: an absolute temporary basal without its number is no gap
+        write(at(0, rate = 0.9, temp = TempBasal(null, null, 30, absolute = true)))
+        assertEquals(0.9f, basal().single().amount!!, 1e-6f)
+    }
+
+    @Test
+    fun percentageTemporaryBasalAfterAGapInTheDataIsAGap() {
+        // critic 4d, C3: the normal rate of before a night without data is not the base of a percentage one
+        write(at(0, rate = 1.0))
+        write(at(10, rate = 1.0))
+        write(at(45, rate = 1.0, temp = TempBasal(0.0, 80, 60)))
+        assertEquals("only the first segment", 1, basal().size)
+        assertEquals("closed at its last data", 10, basal().single().durationMinutes)
+    }
+
+    @Test
+    fun percentageTemporaryBasalOfHoursKeepsItsBase() {
+        write(at(0, rate = 1.0))
+        for (m in 5L..180L step 5L) write(at(m, rate = 1.0, temp = TempBasal(0.0, 80, 600)))
+        val b = basal()
+        assertEquals(2, b.size)
+        assertEquals(0.8f, b[1].amount!!, 1e-6f)
+        assertTrue("runs on to the last data", b[1].durationMinutes!! >= 175)
+    }
+
+    @Test
+    fun signOutClosesTheSegmentAndTheStopNoteAtTheirLastData() {
+        // critic of the joints, C2; critic 4d, N5
+        write(at(0))
+        write(at(10, rate = null, suspended = true))
+        write(at(15, rate = null, suspended = true))
+        runBlocking { CareLinkBasalWriter.close(app, now) }
+        val b = basal()
+        assertEquals(2, b.size)
+        assertEquals(10, b[0].durationMinutes)
+        assertEquals("the stop segment ends at its last data, not 30 min ahead", 5, b[1].durationMinutes)
+        assertEquals("${hhmm(10)}–${hhmm(15)}", notes().single().note)
+        // the next sign-in: a new segment, the old note stays as it was
+        write(at(160))
+        assertEquals(3, basal().size)
+        assertEquals("${hhmm(10)}–${hhmm(15)}", notes().single().note)
+    }
+
+    @Test
+    fun stopNoteAfterAGapEndsAtTheLastStoppedSnapshot() {
+        write(at(0))
+        write(at(10, rate = null, suspended = true))
+        write(at(15, rate = null, suspended = true))
+        write(at(100, rate = 0.8, suspended = false))
+        assertEquals("not the time of the next data hours later", "${hhmm(10)}–${hhmm(15)}", notes().single().note)
+    }
+
+    @Test
+    fun stopNoteEndingOnAnotherDayHasTheDate() {
+        // t0 is 05:00 UTC: 23:55 to 00:05 of the next day
+        write(at(1135, rate = null, suspended = true))
+        write(at(1140, rate = null, suspended = true))
+        write(at(1145, rate = 0.8, suspended = false))
+        val end = DateTimeFormatter.ofPattern("dd.MM HH:mm").withZone(ZoneOffset.UTC).format(Instant.ofEpochMilli(t0 + 1145 * min))
+        assertEquals("${hhmm(1135)}–$end", notes().single().note)
+        assertTrue(end.endsWith("00:05"))
+    }
+
+    @Test
+    fun personsChangedStopNoteIsKept() {
+        write(at(0, rate = null, suspended = true))
+        val note = notes().single()
+        Thread.sleep(5)
+        runBlocking {
+            // upstream's editor: no source (MANUAL), no key
+            JournalRepository().upsertEntry(
+                JournalEntryInput(
+                    id = note.id, timestamp = note.timestamp, type = JournalEntryType.NOTE, title = note.title,
+                    note = "made-up own note",
+                )
+            )
+        }
+        write(at(10, rate = 0.8, suspended = false))
+        assertEquals("made-up own note", notes().single().note)
     }
 
     // ---------------------------------------------------------------- CareLinkIob

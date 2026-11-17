@@ -2,7 +2,6 @@ package tk.glucodata.rus.carelink
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.util.Log
 import java.io.File
 import java.io.FileOutputStream
 
@@ -126,7 +125,7 @@ class CareLinkStateStore(context: Context) {
             return try {
                 PumpNow.fromJson(CareLinkConfig.parse(f.readText(Charsets.UTF_8)))
             } catch (t: Throwable) {
-                Log.w(TAG, "pump snapshot not read (${t.javaClass.simpleName})")
+                CareLinkLog.w("pump snapshot not read (${t.javaClass.simpleName})")
                 null
             }
         }
@@ -149,10 +148,10 @@ class CareLinkStateStore(context: Context) {
             }
             if (!tmp.renameTo(f)) {
                 f.delete()
-                if (!tmp.renameTo(f)) Log.w(TAG, "pump snapshot not moved into place")
+                if (!tmp.renameTo(f)) CareLinkLog.w("pump snapshot not moved into place")
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "pump snapshot not written (${t.javaClass.simpleName})")
+            CareLinkLog.w("pump snapshot not written (${t.javaClass.simpleName})")
         }
     }
 
@@ -166,7 +165,6 @@ class CareLinkStateStore(context: Context) {
         const val PREFS = "rus_carelink_state"
         const val DIR = "rus-carelink"
         const val PUMP_FILE = "pump.json"
-        private const val TAG = "RusCareLink"
         private val LOCK = Any()
         private const val K_STATUS = "status"
         private const val K_POLL = "lastPollAtMs"
@@ -183,19 +181,39 @@ class CareLinkStateStore(context: Context) {
 
 /**
  * JugglucoNG-RUS, CareLink (stage 4c): settings of the CareLink window (SharedPreferences `rus_carelink_settings`, no
- * secrets). [enabled] - polling on (a sign-in turns it on, a sign-out off); [intervalMin] - 5/10/15 min, default 5;
- * [presetId] - insulin type of pump boluses, null - upstream's default for calculation (4d); [writeCarbs] - record
- * calculator carbs (on); [sendToNightscout] - pump records go to Nightscout (off; plan, decision 8).
+ * secrets). [enabled] - polling on (a sign-in turns it on, a sign-out off; a file, see there); [intervalMin] - 5/10/15
+ * min, default 5; [presetId] - insulin type of pump boluses, null - upstream's default for calculation (4d);
+ * [writeCarbs] - record calculator carbs (on); [sendToNightscout] - pump records go to Nightscout (off; plan, decision 8).
  */
 class CareLinkSettings(context: Context) {
 
-    private val prefs: SharedPreferences =
-        context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val app = context.applicationContext
 
+    private val prefs: SharedPreferences = app.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private val enabledFile: File get() = File(File(app.noBackupFilesDir, CareLinkStateStore.DIR), ENABLED_FILE)
+
+    /**
+     * Polling on. A file next to the session in noBackupFilesDir, not a preference (critic of the joints, B1):
+     * upstream's settings import clears every shared_prefs file its export does not carry, and an `apply()` is lost
+     * when the process dies right after a sign-in - either stopped polling silently while the session lived. Written at
+     * once: the work after it (arming, the first poll) reads it. A failed write is logged (the sign-in then shows no
+     * polling rather than throwing in the sign-in listener).
+     */
     var enabled: Boolean
-        get() = prefs.getBoolean(K_ENABLED, false)
+        get() = enabledFile.exists()
         set(v) {
-            prefs.edit().putBoolean(K_ENABLED, v).apply()
+            val f = enabledFile
+            try {
+                if (v) {
+                    f.parentFile?.mkdirs()
+                    if (!f.exists() && !f.createNewFile() && !f.exists()) CareLinkLog.w("polling flag not written")
+                } else if (f.exists() && !f.delete()) {
+                    CareLinkLog.w("polling flag not removed")
+                }
+            } catch (t: Throwable) {
+                CareLinkLog.w("polling flag not changed (${t.javaClass.simpleName})")
+            }
         }
 
     var intervalMin: Int
@@ -226,7 +244,8 @@ class CareLinkSettings(context: Context) {
         const val PREFS = "rus_carelink_settings"
         const val DEFAULT_INTERVAL_MIN = 5
         val INTERVALS_MIN = listOf(5, 10, 15)
-        private const val K_ENABLED = "enabled"
+        /** The polling flag in noBackupFilesDir/rus-carelink/ (the `enabled` preference of 4c builds is not read). */
+        const val ENABLED_FILE = "enabled"
         private const val K_INTERVAL = "intervalMin"
         private const val K_PRESET = "presetId"
         private const val K_CARBS = "writeCarbs"

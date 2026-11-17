@@ -362,7 +362,7 @@ class CareLinkParseTest {
             """"basalRate": 0.6000000238, "tempBasalRate": 0.6000000238, "tempBasalType": "ABSOLUTE", "tempBasalPercentage": 0},
                "pumpBannerState": [{"type": "TEMP_BASAL", "timeRemaining": 56}]""",
         )
-        assertEquals(TempBasal(0.6, null, 56), pump(abs)!!.tempBasal)
+        assertEquals(TempBasal(0.6, null, 56, absolute = true), pump(abs)!!.tempBasal)
         val pct = live.replace(
             """"basalRate": 0.7000000179}""",
             """"basalRate": 0.7, "tempBasalRate": 0, "tempBasalType": "PERCENTAGE", "tempBasalPercentage": "80"},
@@ -376,7 +376,7 @@ class CareLinkParseTest {
         val banner = live.replace("0.7000000179}", """0.7}, "pumpBannerState": [{"type": "DELIVERY_SUSPEND"}, {"type": "TEMP_BASAL", "timeRemaining": 30}]""")
         assertEquals(TempBasal(null, null, 30), pump(banner)!!.tempBasal)
         val fields = live.replace("0.7000000179}", """0.7, "tempBasalType": "ABSOLUTE", "tempBasalRate": 0.3}""")
-        assertEquals(TempBasal(0.3, null, null), pump(fields)!!.tempBasal)
+        assertEquals(TempBasal(0.3, null, null, absolute = true), pump(fields)!!.tempBasal)
         val other = live.replace("0.7000000179}", """0.7}, "pumpBannerState": [{"type": "DELIVERY_SUSPEND"}]""")
         assertNull(pump(other)!!.tempBasal)
         val emptyType = live.replace("0.7000000179}", """0.7, "tempBasalType": "", "tempBasalPercentage": 50}""")
@@ -417,7 +417,7 @@ class CareLinkParseTest {
         val t = pump(noRate)!!
         assertNull(t.basalRate)
         assertTrue(t.basalKnown)
-        assertEquals(TempBasal(0.4, null, null), t.tempBasal)
+        assertEquals(TempBasal(0.4, null, null, absolute = true), t.tempBasal)
         val stop = live.replace("\"basalRate\": 0.7000000179}", "\"basalRate\": null}")
             .replace("\"pumpSuspended\": false", "\"pumpSuspended\": true")
         val st = pump(stop)!!
@@ -459,6 +459,8 @@ class CareLinkParseTest {
     fun snapshotSurvivesTheStateStoreFormat() {
         val p = PumpNow(dataAt, 1.2, dataAt - 60_000L, 100.5, 40, 80, 0.75, TempBasal(0.0, 120, 30), true)
         assertEquals(p, PumpNow.fromJson(json(p.toJson().toString())))
+        val abs = p.copy(tempBasal = TempBasal(null, null, 30, absolute = true))
+        assertEquals("critic 4d, C2: the absolute mark survives", abs, PumpNow.fromJson(json(abs.toJson().toString())))
         val bare = PumpNow(dataAt)
         assertEquals(bare, PumpNow.fromJson(json(bare.toJson().toString())))
         val stop = PumpNow(dataAt, suspended = true, basalKnown = true)

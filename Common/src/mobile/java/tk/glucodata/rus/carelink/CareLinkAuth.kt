@@ -2,7 +2,6 @@ package tk.glucodata.rus.carelink
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -81,8 +80,6 @@ object CareLinkAuth {
     /** Outlives the sign-in window: the code exchange is not cut when the window goes away. */
     internal val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private const val TAG = "RusCareLink"
-
     /** Renew the key when under 10 min are left. */
     internal const val REFRESH_MARGIN_MS = 10 * 60_000L
 
@@ -99,6 +96,17 @@ object CareLinkAuth {
 
     /** Refusals after which only a new sign-in helps - these statuses with `invalid_grant` only. */
     private val DEAD_GRANT_STATUSES = setOf(400, 401, 403)
+
+    /**
+     * Why a session file does not open, when it never will: the tag does not match (another key), the key was
+     * invalidated, a file too short ([AesGcmSessionCipher.open]'s `require`), or it opened but did not parse
+     * ([CareLinkVault.StorageException] without a cause). A read error of the file or a Keystore hiccup is not here:
+     * the file is kept and the poll reports a storage error.
+     */
+    private val DEAD_SESSION_ERRORS = setOf(
+        "AEADBadTagException", "BadPaddingException", "KeyPermanentlyInvalidatedException", "IllegalArgumentException",
+        "StorageException",
+    )
 
     /** One sign-in or renewal at a time: two renewals with one rotating refresh key would kill the session. */
     private val mutex = Mutex()
@@ -139,7 +147,7 @@ object CareLinkAuth {
         try {
             Pending.write(app, pending)
         } catch (t: Throwable) {
-            Log.w(TAG, "sign-in not started: pending not written (${t.javaClass.simpleName})")
+            CareLinkLog.w("sign-in not started: pending not written (${t.javaClass.simpleName})")
             return@withContext LoginStart.Failed(LoginFail.STORAGE, 0)
         }
         LoginStart.Ready(Uri.parse(CareLinkConfig.authorizeUrl(sso, state)), sso.redirectUri)
@@ -156,7 +164,7 @@ object CareLinkAuth {
     suspend fun finishLogin(context: Context, redirectUrl: String): LoginFail? {
         val r = CareLinkConfig.redirect(redirectUrl)
         if (r.error != null || r.code == null) {
-            Log.i(TAG, "sign-in: page returned no code")
+            CareLinkLog.i("sign-in: page returned no code")
             return LoginFail.DENIED
         }
         return finishLogin(context, r.code, r.state)
@@ -174,7 +182,7 @@ object CareLinkAuth {
             try {
                 onLoginSuccess?.invoke(app)
             } catch (t: Throwable) {
-                Log.w(TAG, "after sign-in listener failed (${t.javaClass.simpleName})")
+                CareLinkLog.w("after sign-in listener failed (${t.javaClass.simpleName})")
             }
         }
         fail
@@ -187,13 +195,13 @@ object CareLinkAuth {
             Pending.read(app)
         } catch (_: Throwable) {
             null
-        } ?: return LoginFail.NO_PENDING.also { Log.w(TAG, "sign-in failed: no pending sign-in") }
+        } ?: return LoginFail.NO_PENDING.also { CareLinkLog.w("sign-in failed: no pending sign-in") }
         if (now - pending.startedAtMs !in 0..PENDING_TTL_MS) {
             Pending.clear(app)
-            Log.w(TAG, "sign-in failed: the waiting sign-in is too old")
+            CareLinkLog.w("sign-in failed: the waiting sign-in is too old")
             return LoginFail.NO_PENDING
         }
-        if (state != pending.state) return LoginFail.STATE_MISMATCH.also { Log.w(TAG, "sign-in failed: state mismatch") }
+        if (state != pending.state) return LoginFail.STATE_MISMATCH.also { CareLinkLog.w("sign-in failed: state mismatch") }
         val tokenHttp = http.postForm(pending.tokenUrl, CareLinkConfig.codeForm(pending.clientId, pending.redirectUri, code))
         if (!tokenHttp.ok) {
             logFail("finish", "token_code", tokenHttp)
@@ -225,16 +233,16 @@ object CareLinkAuth {
         val stored = try {
             CareLinkVault.saveNew(app, session, generation)
         } catch (t: Throwable) {
-            Log.w(TAG, "sign-in failed: session not stored (${t.javaClass.simpleName})")
+            CareLinkLog.w("sign-in failed: session not stored (${t.javaClass.simpleName})")
             return LoginFail.STORAGE
         }
         if (!stored) {
-            Log.w(TAG, "sign-in dropped: signed out meanwhile")
+            CareLinkLog.w("sign-in dropped: signed out meanwhile")
             return LoginFail.NO_PENDING
         }
         memory = Memory(session, generation, unsaved = false)
         Pending.clear(app)
-        Log.i(TAG, "sign-in ok: region=${session.region} role=${session.role}")
+        CareLinkLog.i("sign-in ok: region=${session.region} role=${session.role}")
         return null
     }
 
@@ -254,18 +262,18 @@ object CareLinkAuth {
         try {
             CareLinkVault.clear(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "sign-out: session file not removed (${t.javaClass.simpleName})")
+            CareLinkLog.w("sign-out: session file not removed (${t.javaClass.simpleName})")
         }
         memory = null
         try {
             Pending.clear(app)
         } catch (_: Throwable) {
         }
-        Log.i(TAG, "signed out")
+        CareLinkLog.i("signed out")
         try {
             onSignOut?.invoke(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "sign-out listener failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("sign-out listener failed (${t.javaClass.simpleName})")
         }
     }
 
@@ -315,14 +323,14 @@ object CareLinkAuth {
         }
         if (next != null) {
             if (!kept) {
-                Log.i(TAG, "key renewed after a sign-out: dropped")
+                CareLinkLog.i("key renewed after a sign-out: dropped")
                 return FreshResult.NeedLogin
             }
-            Log.i(TAG, "key renewed: force=$force inMin=${(next.expiresAtMs - clock()) / 60_000} rotated=${next.refreshToken != s.refreshToken}")
+            CareLinkLog.i("key renewed: force=$force inMin=${(next.expiresAtMs - clock()) / 60_000} rotated=${next.refreshToken != s.refreshToken}")
             return FreshResult.Ok(next)
         }
         if (result.ok) {
-            Log.w(TAG, "key renewal answer did not parse")
+            CareLinkLog.w("key renewal answer did not parse")
             return FreshResult.Failed(result.code, "bad_answer")
         }
         // The server refused this very refresh key (expired or revoked: invalid_grant) - only a new sign-in helps.
@@ -330,16 +338,16 @@ object CareLinkAuth {
         val grantDead = result.code in DEAD_GRANT_STATUSES &&
             CareLinkConfig.tokenError(CareLinkConfig.parse(result.body))?.startsWith("invalid_grant") == true
         if (grantDead) {
-            Log.w(TAG, "key renewal refused (${result.code} invalid_grant): sign-in needed, session wiped")
+            CareLinkLog.w("key renewal refused (${result.code} invalid_grant): sign-in needed, session wiped")
             try {
                 CareLinkVault.clear(app)
             } catch (t: Throwable) {
-                Log.w(TAG, "session file not removed (${t.javaClass.simpleName})")
+                CareLinkLog.w("session file not removed (${t.javaClass.simpleName})")
             }
             memory = null
             return FreshResult.NeedLogin
         }
-        Log.w(TAG, "key renewal failed: code=${result.code} error=${result.errorClass}")
+        CareLinkLog.w("key renewal failed: code=${result.code} error=${result.errorClass}")
         // No network or a server failure: the old key still lives - use it, renew next time. A forced renewal (the cloud
         // already refused this key) is not answered with the old key.
         if (!force && s.expiresAtMs - clock() > MIN_LEFT_MS) return FreshResult.Ok(s)
@@ -374,8 +382,8 @@ object CareLinkAuth {
 
     /**
      * The session: from memory first (one not yet stored is written again), else from the file. No file or a sign-out
-     * since (generation moved) - sign-in needed; a file that does not open - a storage failure, the file is kept
-     * (Keystore may be locked before unlock).
+     * since (generation moved) - sign-in needed; a file that will never open ([DEAD_SESSION_ERRORS]) - wiped, sign-in
+     * needed; any other failure to open - a storage failure, the file is kept.
      */
     private fun readSession(app: Context): SessionRead {
         memory?.let { m ->
@@ -391,8 +399,23 @@ object CareLinkAuth {
         val s = try {
             CareLinkVault.load(app)
         } catch (t: Throwable) {
-            Log.w(TAG, "session not readable (${(t.cause ?: t).javaClass.simpleName})")
-            return SessionRead.Broken((t.cause ?: t).javaClass.simpleName)
+            val why = (t.cause ?: t).javaClass.simpleName
+            if (why in DEAD_SESSION_ERRORS) {
+                // The file will never open again: the Keystore key no longer fits it (lock screen changed on some phones,
+                // Keystore reset) or the file is cut or garbled. Only a new sign-in helps - wipe it and say so, instead of
+                // "no data" forever (critic of the joints, C4). The app is not direct-boot aware, so "Keystore locked
+                // before unlock" does not happen here.
+                CareLinkLog.w("session file dead ($why): wiped, sign-in needed")
+                try {
+                    CareLinkVault.clear(app)
+                } catch (e: Throwable) {
+                    CareLinkLog.w("session file not removed (${e.javaClass.simpleName})")
+                }
+                memory = null
+                return SessionRead.None
+            }
+            CareLinkLog.w("session not readable ($why)")
+            return SessionRead.Broken(why)
         } ?: return SessionRead.None
         memory = Memory(s, generation, unsaved = false)
         return SessionRead.Found(s, generation)
@@ -416,7 +439,7 @@ object CareLinkAuth {
             false
         } else {
             memory = Memory(s, generation, unsaved = true)
-            Log.w(TAG, "renewed key not stored, kept in memory (${t.javaClass.simpleName})")
+            CareLinkLog.w("renewed key not stored, kept in memory (${t.javaClass.simpleName})")
             true
         }
     }
@@ -437,7 +460,7 @@ object CareLinkAuth {
     }
 
     private fun logFail(step: String, why: String, r: HttpResult?) {
-        Log.w(TAG, "sign-in $step failed: $why code=${r?.code} error=${r?.errorClass}")
+        CareLinkLog.w("sign-in $step failed: $why code=${r?.code} error=${r?.errorClass}")
     }
 
     private fun expOf(claims: CareLinkConfig.Claims, tokens: CareLinkConfig.Tokens, nowMs: Long): Long =

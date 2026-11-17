@@ -4,7 +4,6 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.util.Log
 import androidx.core.app.NotificationCompat
 import tk.glucodata.R
 
@@ -24,8 +23,6 @@ object CareLinkNotifier {
     /** Pump data older than this while signed in - the "no data" notification. */
     const val NO_DATA_MS = 30 * 60_000L
 
-    private const val TAG = "RusCareLink"
-
     /** The sign-in is gone: show "sign in again" once; "no data" is replaced by it. */
     fun needLogin(context: Context) {
         val app = context.applicationContext
@@ -40,7 +37,7 @@ object CareLinkNotifier {
                 store.needLoginShown = true
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "need-login notification failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("need-login notification failed (${t.javaClass.simpleName})")
         }
     }
 
@@ -57,7 +54,7 @@ object CareLinkNotifier {
             }
             checkNoData(app, state, nowMs)
         } catch (t: Throwable) {
-            Log.w(TAG, "notification check failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("notification check failed (${t.javaClass.simpleName})")
         }
     }
 
@@ -89,7 +86,7 @@ object CareLinkNotifier {
                 store.noDataShown = false
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "no-data check failed (${t.javaClass.simpleName})")
+            CareLinkLog.w("no-data check failed (${t.javaClass.simpleName})")
         }
     }
 
@@ -100,7 +97,7 @@ object CareLinkNotifier {
             cancel(app, ID_NEED_LOGIN)
             CareLinkStateStore(app).needLoginShown = false
         } catch (t: Throwable) {
-            Log.w(TAG, "notification not removed (${t.javaClass.simpleName})")
+            CareLinkLog.w("notification not removed (${t.javaClass.simpleName})")
         }
     }
 
@@ -115,7 +112,7 @@ object CareLinkNotifier {
                 noDataShown = false
             }
         } catch (t: Throwable) {
-            Log.w(TAG, "notifications not removed (${t.javaClass.simpleName})")
+            CareLinkLog.w("notifications not removed (${t.javaClass.simpleName})")
         }
     }
 
@@ -123,7 +120,7 @@ object CareLinkNotifier {
     private fun post(app: Context, id: Int, title: String, text: String): Boolean {
         val nm = app.getSystemService(NotificationManager::class.java) ?: return false
         if (!nm.areNotificationsEnabled()) {
-            Log.i(TAG, "notification not shown: notifications are off")
+            CareLinkLog.i("notification not shown: notifications are off")
             return false
         }
         ensureChannel(app)
@@ -145,7 +142,7 @@ object CareLinkNotifier {
             nm.notify(id, n)
             true
         } catch (e: SecurityException) {
-            Log.w(TAG, "notification refused (${e.javaClass.simpleName})")
+            CareLinkLog.w("notification refused (${e.javaClass.simpleName})")
             false
         }
     }
@@ -154,7 +151,12 @@ object CareLinkNotifier {
         app.getSystemService(NotificationManager::class.java)?.cancel(id)
     }
 
-    private fun ensureChannel(app: Context) {
+    /**
+     * Creates channel [CHANNEL] if it is not there. Internal for the CareLink window (4e): its "sound and vibration"
+     * button opens the channel's system screen, which needs the channel to exist first (critic of the joints, N4).
+     */
+    internal fun ensureChannel(context: Context) {
+        val app = context.applicationContext
         val nm = app.getSystemService(NotificationManager::class.java) ?: return
         if (nm.getNotificationChannel(CHANNEL) != null) return
         nm.createNotificationChannel(

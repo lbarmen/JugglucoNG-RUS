@@ -12,6 +12,10 @@ import tk.glucodata.drivers.api.ApiIobSnapshot
  */
 object CareLinkIob {
 
+    /** The snapshot we put there last: [clear] takes away only our own. */
+    @Volatile
+    private var published: ApiIobSnapshot.RemoteIob? = null
+
     /** [pumpNow] - the snapshot of this answer; null - the empty answer: nothing to publish. Not suspend. */
     fun publish(pumpNow: PumpNow?) {
         val p = pumpNow ?: return
@@ -20,6 +24,23 @@ object CareLinkIob {
         val at = p.iobAtMs ?: p.dataAtMs
         if (at > now + CareLinkPumpNow.IOB_FUTURE_MS) return
         val remote = ApiIobSnapshot.RemoteIob(units.toFloat(), Float.NaN, Float.NaN, minOf(at, now))
-        if (ApiIobSnapshot.update(remote)) JournalSnapshotAccess.invalidateBroadcastIobCache()
+        if (ApiIobSnapshot.update(remote)) {
+            published = remote
+            JournalSnapshotAccess.invalidateBroadcastIobCache()
+        }
+    }
+
+    /**
+     * Sign-out and "sign in again": the pump's number leaves the plate now, not after 30 min (critic of the joints,
+     * N2). Only while the slot still holds our snapshot: the same slot is upstream's API follower source, a newer
+     * number of theirs stays.
+     */
+    fun clear() {
+        val ours = published ?: return
+        published = null
+        if (ApiIobSnapshot.fresh(CareLinkAuth.clock()) === ours) {
+            ApiIobSnapshot.clear()
+            JournalSnapshotAccess.invalidateBroadcastIobCache()
+        }
     }
 }

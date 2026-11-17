@@ -1,13 +1,17 @@
 package tk.glucodata.rus.carelink
 
 import android.content.Context
-import android.util.Log
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 
-/** What became of a journal row our writer made: still ours, changed or deleted by the person, removed by us. */
-enum class SeenState { LIVE, EDITED, DELETED, REMOVED }
+/**
+ * What became of a journal row our writer made: still ours, changed or deleted by the person, removed by us (a
+ * cancelled bolus), or its key moved to a new one (a running bolus whose marker moved; the row now lives under the new
+ * key). Anything but LIVE is never written again - an older answer bringing the old key back must not make a second
+ * row (critic 4d, B1).
+ */
+enum class SeenState { LIVE, EDITED, DELETED, REMOVED, MOVED }
 
 /**
  * One journal row of ours (stage 4d, plan decision 5). [kind] - the journal type (`insulin`, `carbs`); [atMs] - the
@@ -37,13 +41,28 @@ data class SeenRecord(
  */
 data class BasalOpen(val key: String, val startMs: Long, val rate: Double, val endMs: Long, val lastDataAtMs: Long)
 
-/** The "pump stopped" note still waiting for its end: key, start, row and its `updatedAt` after our write. */
-data class StopOpen(val key: String, val startMs: Long, val rowId: Long?, val writtenAt: Long?)
+/**
+ * The "pump stopped" note still waiting for its end: key, start, row and its `updatedAt` after our write, [lastAtMs] -
+ * the data time of the last snapshot that still saw the pump stopped (the end when the data broke off: sign-out, "sign
+ * in again", a gap; critic of the joints, C2), [text] - the note as we wrote it (null in files of 4d builds).
+ */
+data class StopOpen(
+    val key: String,
+    val startMs: Long,
+    val rowId: Long?,
+    val writtenAt: Long?,
+    val lastAtMs: Long = startMs,
+    val text: String? = null,
+)
 
-/** All the writers remember: rows by journal key, the last normal basal rate, the open segment and stop note. */
+/**
+ * All the writers remember: rows by journal key, the last normal basal rate and [lastNormalAtMs] - the data time it is
+ * known for (carried along while the data runs without a gap; critic 4d, C3), the open segment and stop note.
+ */
 class SeenData(
     val records: MutableMap<String, SeenRecord> = LinkedHashMap(),
     var lastNormalRate: Double? = null,
+    var lastNormalAtMs: Long? = null,
     var basalOpen: BasalOpen? = null,
     var stopOpen: StopOpen? = null,
 )
@@ -61,7 +80,6 @@ object CareLinkSeenStore {
 
     const val WINDOW_MS = 48 * 3_600_000L
     const val FILE = "seen.json"
-    private const val TAG = "RusCareLink"
 
     private fun file(context: Context): File =
         File(File(context.applicationContext.noBackupFilesDir, CareLinkStateStore.DIR), FILE)
@@ -72,7 +90,7 @@ object CareLinkSeenStore {
         return try {
             fromJson(CareLinkConfig.parse(f.readText(Charsets.UTF_8)) ?: return SeenData(), nowMs)
         } catch (t: Throwable) {
-            Log.w(TAG, "seen file not read (${t.javaClass.simpleName})")
+            CareLinkLog.w("seen file not read (${t.javaClass.simpleName})")
             SeenData()
         }
     }
@@ -118,13 +136,14 @@ object CareLinkSeenStore {
             put("v", 1)
             put("rows", rows)
             putOpt("lastNormalRate", d.lastNormalRate)
+            putOpt("lastNormalAt", d.lastNormalAtMs)
             d.basalOpen?.let { b ->
                 put("basalOpen", JSONObject().put("key", b.key).put("start", b.startMs).put("rate", b.rate)
                     .put("end", b.endMs).put("lastData", b.lastDataAtMs))
             }
             d.stopOpen?.let { s ->
                 put("stopOpen", JSONObject().put("key", s.key).put("start", s.startMs).putOpt("row", s.rowId)
-                    .putOpt("written", s.writtenAt))
+                    .putOpt("written", s.writtenAt).put("last", s.lastAtMs).putOpt("text", s.text))
             }
         }
     }
@@ -154,6 +173,7 @@ object CareLinkSeenStore {
             }
         }
         d.lastNormalRate = o.clDouble("lastNormalRate")
+        d.lastNormalAtMs = o.clLong("lastNormalAt")
         d.basalOpen = o.clObj("basalOpen")?.let { b ->
             val key = b.clStr("key")
             val start = b.clLong("start")
@@ -166,7 +186,8 @@ object CareLinkSeenStore {
         d.stopOpen = o.clObj("stopOpen")?.let { s ->
             val key = s.clStr("key")
             val start = s.clLong("start")
-            if (key == null || start == null) null else StopOpen(key, start, s.clLong("row"), s.clLong("written"))
+            if (key == null || start == null) null
+            else StopOpen(key, start, s.clLong("row"), s.clLong("written"), s.clLong("last") ?: start, s.clStr("text"))
         }
         return d
     }
