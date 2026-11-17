@@ -12,6 +12,8 @@ import tk.glucodata.data.journal.JournalEntrySource
 import tk.glucodata.data.journal.JournalEntryType
 import tk.glucodata.data.journal.JournalRepository
 import java.text.DecimalFormat
+import java.time.LocalDateTime
+import java.time.ZoneOffset
 import kotlin.math.abs
 
 /**
@@ -33,8 +35,9 @@ import kotlin.math.abs
  *   upstream sends it nowhere). A row keeps the source it was made with.
  * - A running bolus whose marker time moved by up to 60 s (its old key gone from the answer, the same programmed dose)
  *   keeps its row under the new key (upstream's `retagSourceRecordId`), as Glucove's rekey.
- * - A row found by its key keeps its time (only a moved running bolus takes the new marker time): the moment of a
- *   marker is counted with the phone's offset of each answer, which a zone change moves (critic of the joints 4e, C2).
+ * - A row found by its key keeps its time (a moved running bolus moves it as far as its marker moved in pump time):
+ *   the moment of a marker is counted with the phone's offset of each answer, which a zone change moves (critic of the
+ *   joints 4e, C2); the move is measured by the pump times of the keys, which no offset changes (critic 4e, C1).
  *
  * The whole answer (24 h) is written every poll: the record of what was written makes it cheap, and no poll can lose
  * a bolus (critic 4c, C1). A row found by key but not in the record (the record file was lost, or the write ended
@@ -226,11 +229,14 @@ object CareLinkJournalWriter {
          * but its moment is counted with the phone's offset of this answer - after a zone change (a flight, summer
          * time) every marker of the 24 h would move, the rows would jump and go to Nightscout again.
          */
-        private val rekeyed = HashSet<String>()
+        private val rekeyed = HashMap<String, Long>()
 
-        /** The time to write for [key]: a row found by key keeps its own, else the marker's. */
+        /**
+         * The time to write for [key]: a moved running bolus - its row's time moved as far as the marker moved in pump
+         * time ([rekey]); a row found by key keeps its own; a new row - the marker's.
+         */
         private fun timeOf(key: String, row: JournalEntryEntity?, markerAtMs: Long): Long =
-            if (row != null && key !in rekeyed) row.timestamp else markerAtMs
+            rekeyed[key] ?: row?.timestamp ?: markerAtMs
 
         private fun same(a: Float?, b: Double?): Boolean = a != null && b != null && abs(a - b) <= CareLinkMarkers.EPS
 
@@ -371,16 +377,18 @@ object CareLinkJournalWriter {
          * bolus with a moved marker - its row takes the new key, edits and all. The dose must match: a second bolus a
          * few seconds away must not take the first one's row (critic 4d, N4). The old key keeps a trace (MOVED): an
          * older answer bringing it back finds it taken instead of writing a second bolus (critic 4d, B1).
+         * The distance is in pump time, read from the two keys: the record's time is its row's, counted with the offset
+         * of an earlier answer, and a zone change in between would put it hours from the marker (critic 4e, C1).
          */
         private suspend fun rekey(b: ClEvent, key: String, keysNow: Set<String>): SeenRecord? {
             val programmed = b.programmedUnits ?: b.dose ?: return null
             val old = seen.records.entries
                 .filter { (k, r) ->
                     k != key && k !in keysNow && r.kind == CareLinkJournalWriter.KIND_INSULIN && r.completed == false &&
-                        r.state != SeenState.MOVED && abs(r.atMs - b.atMs) <= CareLinkJournalWriter.REKEY_MS &&
+                        r.state != SeenState.MOVED && abs(moveMs(k, r, key, b)) <= CareLinkJournalWriter.REKEY_MS &&
                         r.dose?.let { abs(it - programmed) <= CareLinkMarkers.EPS } == true
                 }
-                .minByOrNull { abs(it.value.atMs - b.atMs) } ?: return null
+                .minByOrNull { abs(moveMs(it.key, it.value, key, b)) } ?: return null
             if (j.byKey(key) != null) return null
             val rec = old.value
             // the old key becomes a trace (MOVED) only once the row has moved: a database failure before that leaves the
@@ -395,7 +403,9 @@ object CareLinkJournalWriter {
                         !bolusLooksOurs(row, rec, b.dose, note(b))
                     if (!j.retag(row.id, key)) return null
                     seen.records[old.key] = trace
-                    rekeyed += key
+                    // the row moves as far as the marker did: with no zone change - to the new marker's time; after
+                    // one - its own time stays in the old offset, as all rows written before (critic 4e, C1)
+                    rekeyed[key] = row.timestamp + moveMs(old.key, rec, key, b)
                     val after = j.byId(row.id)
                     if (edited) rec.copy(state = SeenState.EDITED) else rec.copy(writtenAt = after?.updatedAt ?: rec.writtenAt)
                 }
@@ -403,6 +413,16 @@ object CareLinkJournalWriter {
             seen.records[old.key] = trace
             seen.records[key] = moved
             return moved
+        }
+
+        /**
+         * How far the marker moved from the record [oldKey]/[rec] to [newKey]/[b], ms: by the pump times in the keys
+         * (no offset in them); a key without a readable time - by the moments.
+         */
+        private fun moveMs(oldKey: String, rec: SeenRecord, newKey: String, b: ClEvent): Long {
+            val from = CareLinkJournalWriter.pumpSec(oldKey)
+            val to = CareLinkJournalWriter.pumpSec(newKey)
+            return if (from != null && to != null) (to - from) * 1_000L else b.atMs - rec.atMs
         }
 
         private fun note(b: ClEvent): String? {
@@ -421,6 +441,15 @@ object CareLinkJournalWriter {
     }
 
     internal fun units(v: Double): String = DecimalFormat("0.###").format(v)
+
+    private val PUMP_TIME = Regex("""\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}""")
+
+    /** The pump's local time in a journal key, seconds on its own scale (no zone); none - null. */
+    internal fun pumpSec(key: String): Long? = try {
+        PUMP_TIME.find(key)?.value?.let { LocalDateTime.parse(it).toEpochSecond(ZoneOffset.UTC) }
+    } catch (_: Exception) {
+        null
+    }
 }
 
 /**

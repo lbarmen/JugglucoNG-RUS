@@ -165,13 +165,16 @@ object CareLinkPoller {
         // signed out while this poll ran: nothing more is written (critic 4c, N2)
         if (!CareLinkSettings(app).enabled) return store.read()
         val writeError = if (stale) null else write(app, events, pump, now, firstPoll)
+        // an empty answer (no pump data, no boluses) gives the journal nothing to write: a clean run proves nothing
+        // about it either (critic 4e, N5)
+        val nothingToWrite = stale || (pump == null && events.none { it.kind == ClKind.BOLUS && it.dose != null })
 
         // checked under the lock of the sign-out's clear(): its result must not bring the state back
         val after = store.updateIf({ CareLinkSettings(app).enabled }) { cur ->
-            // an older answer writes nothing, so it says nothing of the writes: a write failure stands, with its clock
-            // and its notification (critic 4d, N1) - also when a network or cloud failure came in between and took its
-            // place in the state, while its clock still runs (critic 4d2, N1)
-            val keptWriteError = if (!stale) null else
+            // an older or an empty answer writes nothing, so it says nothing of the writes: a write failure stands, with
+            // its clock and its notification (critic 4d, N1; 4e, N5) - also when a network or cloud failure came in
+            // between and took its place in the state, while its clock still runs (critic 4d2, N1)
+            val keptWriteError = if (!nothingToWrite) null else
                 cur.lastError?.takeIf { cur.status == CareLinkStatus.ERROR && it.kind == CareLinkErrorKind.WRITE }
                     ?: CareLinkError(CareLinkErrorKind.WRITE).takeIf { store.writeFailSinceMs != null }
             val error = writeError ?: keptWriteError

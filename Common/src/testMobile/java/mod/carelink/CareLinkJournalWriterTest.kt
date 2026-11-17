@@ -253,6 +253,25 @@ class CareLinkJournalWriterTest {
     }
 
     @Test
+    fun aRunningBolusWhoseMarkerMovesAfterAZoneChangeKeepsItsRow() {
+        // critic 4e, C1: running at +03:00 -> the same history at +06:00 -> its marker moves 30 s, still at +06:00;
+        // the move is counted in pump time (the keys), so it is the same bolus: one row, under the new key
+        val shift = -3 * 3_600_000L
+        fun moved(e: ClEvent) = e.copy(atMs = e.atMs + shift)
+        write(bolus(20, 2.0, 1.0, completed = false))
+        val running = insulin().single()
+        write(moved(bolus(20, 2.0, 1.0, completed = false)))
+        write(moved(bolus(50, 2.0, 2.0)))
+        val row = insulin().single()
+        assertEquals(running.id, row.id)
+        assertEquals("carelink:INSULIN:2027-01-15T06:00:50:0:insulin", row.sourceRecordId)
+        assertEquals(2.0f, row.amount!!, 1e-6f)
+        assertNull(row.note)
+        assertEquals("moved 30 s from its own time, not to the new offset", t0 + 50_000L, row.timestamp)
+        assertEquals(SeenState.MOVED, state("carelink:INSULIN:2027-01-15T06:00:20:0:insulin"))
+    }
+
+    @Test
     fun finishedBolusWithTheSameDoseIsNotRewritten() {
         write(bolus(10, 2.0, 2.0))
         val first = insulin().single()

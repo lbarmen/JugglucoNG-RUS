@@ -252,7 +252,9 @@ private fun statusText(state: CareLinkUiState): String? = when (state.view) {
     CareLinkView.POLLING_OFF -> stringResource(R.string.mod_carelink_status_polling_off_text)
     CareLinkView.WAITING -> stringResource(R.string.mod_carelink_status_waiting_text)
     CareLinkView.OK -> null
-    CareLinkView.STALE -> stringResource(R.string.mod_carelink_status_stale_text, age(state.nowMs, state.lastDataAtMs ?: state.nowMs))
+    // no data ever since polling was turned on - the words of the "no data" notification (critic 4e, N2)
+    CareLinkView.STALE -> state.lastDataAtMs?.let { stringResource(R.string.mod_carelink_status_stale_text, age(state.nowMs, it)) }
+        ?: stringResource(R.string.mod_carelink_no_data_text)
     CareLinkView.ERROR -> errorText(state.error)
 }
 

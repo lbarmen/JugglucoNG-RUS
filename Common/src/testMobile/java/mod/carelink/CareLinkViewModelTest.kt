@@ -166,6 +166,23 @@ class CareLinkViewModelTest {
     }
 
     @Test
+    fun noDataEverSinceTheSignInIsOutOfDateWhenTheNotificationComes() {
+        // critic 4e, N2: the window counts as the notification does - polling flag + 10 min + the threshold
+        val ok = CareLinkState(CareLinkStatus.OK, now, null)
+        val warn = 5 * 60_000L
+        val since = now - 16 * 60_000L
+        assertEquals(CareLinkView.STALE, CareLinkViewModel.viewOf(true, true, ok, now, warn, since))
+        assertEquals(CareLinkView.WAITING, CareLinkViewModel.viewOf(true, true, ok, now - 2 * 60_000L, warn, since))
+        assertEquals("flag time unknown - waiting as before", CareLinkView.WAITING,
+            CareLinkViewModel.viewOf(true, true, ok, now, warn, null))
+        // through the model: the flag file carries the sign-in time
+        signIn()
+        CareLinkSettings(app).warnAfterMin = 5
+        CareLinkStateStore(app).write(ok)
+        assertEquals(CareLinkView.WAITING, load().view)
+    }
+
+    @Test
     fun aThresholdBelowTheIntervalPlusFiveIsSaidNotForbidden() {
         // critic 4d, C1 and critic of the texts 4d, C4; the person wants 5 min to test it (17.11)
         model.setWarnAfter(5)

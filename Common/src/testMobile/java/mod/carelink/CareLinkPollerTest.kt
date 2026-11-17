@@ -6,6 +6,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -760,6 +761,38 @@ class CareLinkPollerTest {
         assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
         assertEquals("the clock goes on", since, store.writeFailSinceMs)
         assertNotNull("not taken away", shown(CareLinkNotifier.ID_WRITE_FAIL))
+    }
+
+    @Test
+    fun anEmptyAnswerKeepsTheWriteFailure() {
+        // critic 4e, N5: write failure -> an empty answer (no pump data, no boluses): the journal had nothing to write,
+        // so the clock and the notification stand
+        CareLinkSettings(app).warnAfterMin = 5
+        CareLinkPoller.writeJournal = { _, _, _ -> throw IllegalStateException("made-up") }
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        val since = store.writeFailSinceMs
+        assertEquals(now, since)
+        now += 6 * 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        assertNotNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        // the real journal writer returns at once with no boluses: no failure from it
+        CareLinkPoller.writeJournal = { _, e, first -> journal += e to first }
+        now += 60_000L
+        val empty = answer(lagMin = 1, reservoir = "-1", battery = "-1")
+        net.on(dm, ok(JSONObject(empty).apply { getJSONObject("patientData").put("markers", JSONArray()) }.toString()))
+        val s = poll()
+        assertEquals(CareLinkStatus.ERROR, s.status)
+        assertEquals(CareLinkErrorKind.WRITE, s.lastError!!.kind)
+        assertEquals("the clock goes on", since, store.writeFailSinceMs)
+        assertNotNull("not taken away", shown(CareLinkNotifier.ID_WRITE_FAIL))
+        // a fresh answer written fine takes it away
+        now += 60_000L
+        net.on(dm, ok(answer(lagMin = 1)))
+        poll()
+        assertNull(shown(CareLinkNotifier.ID_WRITE_FAIL))
+        assertNull(store.writeFailSinceMs)
     }
 
     @Test

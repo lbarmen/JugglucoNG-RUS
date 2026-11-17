@@ -145,7 +145,7 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
         val s = CareLinkStateStore(app).read()
         val hasSession = CareLinkAuth.hasSession(app)
         val now = CareLinkAuth.clock()
-        val view = viewOf(hasSession, settings.enabled, s, now, settings.warnAfterMs)
+        val view = viewOf(hasSession, settings.enabled, s, now, settings.warnAfterMs, settings.enabledSinceMs)
         val choices = try {
             CareLinkInsulin.choices(app).map { CareLinkInsulinChoice(it.id, it.displayName) }
         } catch (e: CancellationException) {
@@ -294,15 +294,20 @@ class CareLinkViewModel(application: Application) : AndroidViewModel(application
         /**
          * What the window shows for this session, polling flag and stored state at [nowMs]; data as old as
          * [warnAfterMs] (the "no data" threshold) or older is [CareLinkView.STALE] - the same moment the notification
-         * comes.
+         * comes. No data ever since polling was turned on ([enabledSinceMs]) - counted as the notification counts it,
+         * from then plus [CareLinkNotifier.FIRST_DATA_MARGIN_MS] (critic 4e, N2): "waiting" before, out of date after.
          */
-        internal fun viewOf(hasSession: Boolean, enabled: Boolean, s: CareLinkState, nowMs: Long, warnAfterMs: Long): CareLinkView {
+        internal fun viewOf(
+            hasSession: Boolean, enabled: Boolean, s: CareLinkState, nowMs: Long, warnAfterMs: Long,
+            enabledSinceMs: Long? = null,
+        ): CareLinkView {
             val data = s.lastDataAtMs
+            val firstDue = enabledSinceMs?.plus(CareLinkNotifier.FIRST_DATA_MARGIN_MS)
             return when {
                 !hasSession -> if (s.status == CareLinkStatus.NEED_LOGIN) CareLinkView.NEED_LOGIN else CareLinkView.SIGNED_OUT
                 !enabled -> CareLinkView.POLLING_OFF
                 s.status == CareLinkStatus.ERROR -> CareLinkView.ERROR
-                data == null -> CareLinkView.WAITING
+                data == null -> if (firstDue != null && nowMs - firstDue >= warnAfterMs) CareLinkView.STALE else CareLinkView.WAITING
                 nowMs - data >= warnAfterMs -> CareLinkView.STALE
                 else -> CareLinkView.OK
             }
