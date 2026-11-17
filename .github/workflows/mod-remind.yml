@@ -1,7 +1,7 @@
-# JugglucoNGmod: reminder about block branches on test for more than 7 days (plan of stage 2, E3; ТЗ 3.6).
+# JugglucoNGmod: reminder about block branches on test for more than 7 days (stage 2 plan, E3; spec 3.6).
 # A candidate run of mod-build.yml is named "MOD candidate N blocks: b1 b2" (its run-name). Every block branch
 # from a successful candidate that is still not merged into main 7+ days after its first candidate -> this run is
-# red, and GitHub sends the e-mail. The owner decides: merge the block, keep testing, or drop it (СТАТУС.md, «На тесте»).
+# red, and GitHub sends the e-mail. The owner decides: merge the block, keep testing, or drop it (the owner status file, section "On test").
 # Read only, no secrets. Manual run for the check: pretend_days adds days to "now"; probe adds one synthetic
 # candidate "N branch ISO-date" to the list.
 name: MOD remind
@@ -72,15 +72,15 @@ jobs:
             fi
             days=$(( (now - t) / 86400 ))
             if [ "$days" -ge 7 ]; then
-              stale="$stale"$'\n'"- \`$b\` — на тесте $days дн. (первый кандидат $n, $(date -u -d "@$t" +%Y-%m-%d))"
+              stale="$stale"$'\n'"- \`$b\` — on test for $days days (first candidate $n, $(date -u -d "@$t" +%Y-%m-%d))"
             else
               echo "test   $b: $days day(s) (candidate $n)"; ok=$((ok + 1))
             fi
           done
           if [ -n "$stale" ]; then
-            { echo "### Блоки на тесте дольше 7 дней"; echo "$stale"; echo
-              echo "Решение владельца: влить в \`main\`, тестировать дальше или отказаться (СТАТУС.md, «На тесте»)."; } | tee -a "$GITHUB_STEP_SUMMARY"
+            { echo "### Blocks on test for more than 7 days"; echo "$stale"; echo
+              echo "The owner decides: merge into \`main\`, keep testing, or drop (the owner status file, section \"On test\")."; } | tee -a "$GITHUB_STEP_SUMMARY"
             echo "::error::block branch(es) on test for 7+ days:$(echo "$stale" | tr '\n' ' ')"
             exit 1
           fi
-          echo "Блоков на тесте дольше 7 дней нет (на тесте сейчас: $ok)." | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "No blocks on test for more than 7 days (on test now: $ok)." | tee -a "$GITHUB_STEP_SUMMARY"

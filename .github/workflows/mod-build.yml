@@ -15,7 +15,7 @@
 #                       they merge into main cleanly and bring no upstream commit that main does not
 #                       have (sync/... branches with fresh upstream code never get the key);
 #                       their code in main is exactly one of their releases without the pre-release
-#                       mark, published at least 7 days ago (ТЗ 3.6; hold=0 skips both, urgent
+#                       mark, published at least 7 days ago (spec 3.6; hold=0 skips both, urgent
 #                       candidate only by the owner's word);
 #   candidate-build     environment mod-signing (manual approval, branch main only): our key from the
 #                       environment secrets, in a temp dir outside the repo, deleted; no Gradle cache,
@@ -194,7 +194,7 @@ jobs:
           ours=$(git rev-list --count HEAD "^$GITHUB_SHA" ^upstream/main)
           [ "$all" = "$ours" ] || {
             echo "::error::the block branches bring $((all - ours)) upstream commit(s) that main does not have"; exit 1; }
-          # ТЗ 3.6: their code in main = one of their releases (no pre-release mark), 7+ days old
+          # spec 3.6: their code in main = one of their releases (no pre-release mark), 7+ days old
           case "${HOLD:-1}" in
             0) echo "::warning::hold=0: release and 7-day checks skipped (urgent candidate, owner's word)" ;;
             1)
@@ -212,7 +212,7 @@ jobs:
               t_pub=$(date -d "${match#* }" +%s); t_commit=$(git show -s --format=%ct "$theirs")
               age=$(( ( $(date +%s) - (t_pub > t_commit ? t_pub : t_commit) ) / 86400 ))
               [ "$age" -ge 7 ] || {
-                echo "::error::their release ${match%% *} is $age day(s) old; a candidate for the phone waits 7 days (ТЗ 3.6) or hold=0 by the owner's word"; exit 1; }
+                echo "::error::their release ${match%% *} is $age day(s) old; a candidate for the phone waits 7 days (spec 3.6) or hold=0 by the owner's word"; exit 1; }
               echo "OK: their code in main = their release ${match%% *}, $age days old" ;;
             *) echo "::error::hold '$HOLD' is not 0 or 1"; exit 1 ;;
           esac

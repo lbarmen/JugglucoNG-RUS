@@ -1,97 +1,87 @@
-# Изменения JugglucoNGmod
+# Changes in JugglucoNGmod
 
-Что изменено по сравнению с JugglucoNG, по версиям (GPL-3.0 требует отмечать изменения с датой).
-Изменения в коде автора JugglucoNG — 0 файлов, пока не сказано иное (см. HOOKS.md).
-Коротко, чем MOD отличается для пользователя, — таблица на [главной странице](/.github/README.md).
+What differs from JugglucoNG, by version (GPL-3.0 requires marking changes with a date).
+Changes in the JugglucoNG author's code: 0 files, unless stated otherwise (see HOOKS.md).
+In short, how MOD differs for the user: the table on the [front page](/.github/README.md).
 
-Версия — тег `mod-<версия JugglucoNG>-<наш номер>` на `main`; ставится после проверки на телефоне или часах.
-В каждой версии два списка: «Для пользователя» — что видно в приложении, «Сборка и проверки» — остальное.
-Новая строка пишется в раздел «После …» в том же запросе на слияние (PR), что и само изменение.
+A version is a tag `mod-<JugglucoNG version>-<our number>` on `main`; it is set after a check on a phone or a watch.
+Each version has two lists: "For the user" - what is visible in the app, "Build and checks" - everything else.
+A new line goes into the "After …" section, in the same pull request (PR) as the change itself.
 
-## После rus-1.3.2-2 (в `main`, тега ещё нет)
-Для пользователя:
+## After rus-1.3.2-2 (in `main`, no tag yet)
+For the user:
 - 2026-11-17 — renamed to JugglucoNGmod (formerly JugglucoNG-RUS, package tk.glucodata.ng.rus): app name
   "JugglucoNGmod" (watch face too), package `tk.glucodata.ng.mod` (installs as a new app), repository
   `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. Versions
   below are the old-name tags `rus-…`.
-- 2026-11-16 — код автора — ровно его выпуск JugglucoNG 1.3.2-Alpha: 47 его невыпущенных изменений (тревоги,
-  Nightscout, часы), которые были в rus-1.3.2-2, убраны; вернутся с его следующим выпуском.
+- 2026-11-16 — the author's code is exactly his JugglucoNG 1.3.2-Alpha release: 47 of his unreleased changes (alarms,
+  Nightscout, watch) that were in rus-1.3.2-2 are removed; they will return with his next release.
 
-Сборка и проверки:
-- 2026-11-16 — `main` один раз перестроен на выпуск 1.3.2-Alpha (6d8bb06f6): наши коммиты перенесены поверх, наши
-  файлы не изменились, тексты коммитов — без служебных пометок. Прежняя история (и исходники rus-1.3.2-2) — тег
-  `rus-old-main-2026-11-16`.
-- 2026-11-16 — `mod-sync.yml`: тест автора, которого ещё нет в его коде проверяемой версии, пропускается с пометкой
-  в таблице, а не делает проверку красной (`tools/test-nightscout-backlog.py` появился после 1.3.2-Alpha).
-- 2026-11-16 — `mod/check-hooks.py`: каждая правка файла автора — не дальше 3 строк от пометки `MOD-HOOK`; удалённый
-  файл автора, новый файл вне наших путей, двоичный файл, права файла — красная. `check-apk.py` вместо «0 правок в
-  файлах автора» запускает эту проверку: первая врезка не сделает каждую сборку красной.
-- 2026-11-15 — личный список запретов для `mod/check-secrets.sh` (свой адрес Nightscout, серийные номера): файл
-  вне репозитория, читает только проверка на компьютере владельца, значения не показываются; записи —
-  `mod/secrets-deny.py`. С ним проверяются и тексты наших коммитов и двоичные файлы; найденное по общим шаблонам
-  тоже выводится с маской.
-- 2026-11-15 — номер кандидата N выше не только тегов, но и всех прошлых кандидатов той же версии (собранных и
-  незаконченных) и не повторяется при перезапуске сборки: иначе два разных APK с одной версией
-  (`mod/candidate-number.sh`, проверка и перед сборкой с ключом). `mod/apk-keep.py` находит кандидатов по их
-  файлам на странице сборки, а о повторе номера пишет FAIL.
-- 2026-11-15 — `mod/apk-keep.py`: 5 последних APK-кандидатов на компьютере владельца (скачивает, сверяет подпись,
-  номер версии и хеши).
-- 2026-11-15 — инструменты вливания обновлений JugglucoNG: списки `mod/our-paths.txt` и `mod/risk-areas.txt`,
-  отчёт о новом коде автора (`mod/sync-report.py`), сверка врезок и бюджет правок в файлах автора — не больше
-  15 файлов и 60 строк (`mod/check-hooks.py`), проверка секретов только в наших коммитах (`check-secrets.sh --ours`).
-- 2026-11-15 — эталонные прогоны: 13 синтетических серий сахара через код тревог и прогноза автора
-  (`Common/src/testMobile/java/mod/`, ожидаемые решения — `mod/golden/`).
-- 2026-11-15 — ежедневная проверка последнего выпуска JugglucoNG (`.github/workflows/mod-sync.yml`): слияние внутри
-  задачи, отчёт, врезки, бюджет, секреты, сборка, тесты автора и наши эталоны; секретов нет, ничего не отправляет.
-- 2026-11-15 — главная страница репозитория `.github/README.md` с таблицей отличий (README автора не тронут);
-  этот список разбит по версиям.
-- 2026-11-15 — вливание выпуска через PR `sync/<выпуск>` (`mod/sync-merge.sh`, порядок — `mod/SYNC.md`, журнал —
-  `mod/SYNC-LOG.md`), сводка Juggluco раз в месяц (`mod/juggluco-summary.py`); кандидат на телефон — только когда
-  код автора в `main` ровно его выпуск старше 7 дней; напоминание о блоках на тесте дольше 7 дней
-  (`mod-remind.yml`); `main` защищён набором правил (`mod/ruleset-main.json`).
-- 2026-11-15 — облегчённая проверка PR только из наших `.md` (кроме `mod/HOOKS.md` и `Common/`): врезки, бюджет
-  и секреты — да, сборка и тесты — нет, примерно минута; пробная сборка на такие ветки не запускается.
-- 2026-11-15 — правки после проверки критиками: упавший скрипт проверки врезок или секретов больше не даёт
-  зелёный `report`; сборка с ключом берёт ровно те коммиты блоков, что видела предпроверка; возраст их выпуска
-  считается и от коммита (перенесённый тег); проверка секретов шире (пароли без `=`, решения конфликтов);
-  `sync-merge.sh`: `continue` после исправлений, `finish` сверяет `report` и выключает новые задачи автора до
-  и после слияния; напоминания честнее (красная проверка, недоступный GitHub).
-- 2026-11-15 — `mod/SYNC.md`: что делать при каждом красном случае (до и после отправки PR), `continue`, эталоны
-  до конца, команда сводки Juggluco для Windows.
+Build and checks:
+- 2026-11-16 — `main` rebuilt once on the 1.3.2-Alpha release (6d8bb06f6): our commits are carried over on top, our
+  files did not change, commit messages have no service marks. The former history (and the sources of rus-1.3.2-2) is
+  the tag `rus-old-main-2026-11-16`.
+- 2026-11-16 — `mod-sync.yml`: the author's test that is not yet in his code of the checked version is skipped with a
+  note in the table instead of turning the check red (`tools/test-nightscout-backlog.py` appeared after 1.3.2-Alpha).
+- 2026-11-16 — `mod/check-hooks.py`: every change in an author's file must be within 3 lines of a `MOD-HOOK` mark; a
+  deleted author's file, a new file outside our paths, a binary file, a file mode change - red. Instead of "0 changes
+  in the author's files", `check-apk.py` runs this check: the first hook will not turn every build red.
+- 2026-11-15 — personal deny list for `mod/check-secrets.sh` (own Nightscout address, serial numbers): a file outside
+  the repository, read only by the check on the owner's computer, values are not shown; entries are added with
+  `mod/secrets-deny.py`. It also checks the texts of our commits and binary files; what is found by the general
+  patterns is also printed masked.
+- 2026-11-15 — the candidate number N is higher not only than the tags but than all earlier candidates of the same
+  version (built and unfinished) and does not repeat when a build is restarted: otherwise two different APKs would
+  have one version (`mod/candidate-number.sh`, checked also before the build with the key). `mod/apk-keep.py` finds
+  candidates by their files on the build page and reports a repeated number as FAIL.
+- 2026-11-15 — `mod/apk-keep.py`: the 5 latest candidate APKs on the owner's computer (downloads, checks the
+  signature, version code and hashes).
+- 2026-11-15 — tools for merging JugglucoNG updates: lists `mod/our-paths.txt` and `mod/risk-areas.txt`, a report on
+  the author's new code (`mod/sync-report.py`), a hook check and a budget of changes in the author's files - at most
+  15 files and 60 lines (`mod/check-hooks.py`), a secrets check only in our commits (`check-secrets.sh --ours`).
+- 2026-11-15 — golden runs: 13 synthetic glucose series through the author's alarm and forecast code
+  (`Common/src/testMobile/java/mod/`, expected decisions in `mod/golden/`).
+- 2026-11-15 — daily check of the latest JugglucoNG release (`.github/workflows/mod-sync.yml`): merge inside the job,
+  report, hooks, budget, secrets, build, the author's tests and our golden runs; no secrets, sends nothing.
+- 2026-11-15 — repository front page `.github/README.md` with the table of differences (the author's README is not
+  touched); this list is split by version.
+- 2026-11-15 — merging a release through the PR `sync/<release>` (`mod/sync-merge.sh`, procedure in `mod/SYNC.md`, log
+  in `mod/SYNC-LOG.md`), a Juggluco summary once a month (`mod/juggluco-summary.py`); a candidate for the phone only
+  when the author's code in `main` is exactly his release older than 7 days; a reminder about blocks on test for
+  longer than 7 days (`mod-remind.yml`); `main` is protected by a ruleset (`mod/ruleset-main.json`).
+- 2026-11-15 — a light check of a PR made only of our `.md` files (except `mod/HOOKS.md` and `Common/`): hooks,
+  budget and secrets - yes, build and tests - no, about a minute; a test build is not started for such branches.
+- 2026-11-15 — fixes after the critics' review: a crashed hook or secrets check script no longer gives a green
+  `report`; the build with the key takes exactly the block commits that the pre-check saw; the age of their release
+  is also counted from the commit (a moved tag); the secrets check is wider (passwords without `=`, conflict
+  resolutions); `sync-merge.sh`: `continue` after fixes, `finish` checks `report` and switches off the author's new
+  jobs before and after the merge; reminders are more honest (red check, GitHub unavailable).
+- 2026-11-15 — `mod/SYNC.md`: what to do in every red case (before and after sending the PR), `continue`, golden
+  runs to the end, the Juggluco summary command for Windows.
 
-## rus-1.3.2-2 — 2026-11-15 (на основе JugglucoNG 1.3.2-Alpha и 47 его невыпущенных изменений от 14.11)
-Первая версия с тегом. Кандидат 1 тега не получил: циферблат на часах падал (вторая ошибка ниже).
+## rus-1.3.2-2 — 2026-11-15 (based on JugglucoNG 1.3.2-Alpha and 47 of his unreleased changes from 14.11)
+The first version with a tag. Candidate 1 did not get the tag: the watch face crashed on the watch (the second error
+below).
 
-Для пользователя:
-- 2026-11-14 — тип сборки `mod`: пакет `tk.glucodata.ng.mod`, название «JugglucoNGmod» на 16 языках, значок
-  с другим фоном, циферблат «JugglucoNGmod», свой номер версии (103201, часы 1103201), обновления из этого репозитория,
-  запасной источник обновлений выключен.
-- 2026-11-14 — циферблат часов: в официальном 1.3.2 он падает с «String resource ID #0x0» — названия и значки
-  цветов попадают в код как 0 и выбрасываются при сжатии. Часы собираются с настоящими номерами ресурсов
-  и прежним способом сжатия ресурсов (`mod/gradlew-mod.sh`: `-Pandroid.nonFinalResIds=false`,
-  `-Pandroid.r8.optimizedResourceShrinking=false`), сами ресурсы на всякий случай сохраняет
+For the user:
+- 2026-11-14 — build type `mod`: package `tk.glucodata.ng.mod`, name "JugglucoNGmod" in 16 languages, an icon with
+  another background, watch face "JugglucoNGmod", own version code (103201, watch 1103201), updates from this
+  repository, the fallback update source is switched off.
+- 2026-11-14 — watch face: in the official 1.3.2 it crashes with "String resource ID #0x0" - the names and icons of
+  the colors get into the code as 0 and are thrown out by shrinking. The watch is built with real resource numbers
+  and the former way of resource shrinking (`mod/gradlew-mod.sh`: `-Pandroid.nonFinalResIds=false`,
+  `-Pandroid.r8.optimizedResourceShrinking=false`); the resources themselves are kept just in case by
   `Common/src/wearMod/res/raw/mod_keep.xml`.
-- 2026-11-15 — циферблат часов, вторая ошибка (на часах после починки «#0x0»): цвета `complication_*_style.xml`
-  создаются по имени класса `ComplicationDrawable`, а прежний способ сжатия ресурсов не сохраняет его конструктор —
-  чёрный экран, `NoSuchMethodException`. Своё правило `mod/proguard-mod.pro` и проверка конструкторов в сборке.
-  Проверено на часах 15.11.2026.
+- 2026-11-15 — watch face, the second error ("#0x0" on the watch after the fix): the `complication_*_style.xml` colors
+  are created by the class name `ComplicationDrawable`, and the former way of resource shrinking does not keep its
+  constructor - black screen, `NoSuchMethodException`. Our own rule `mod/proguard-mod.pro` and a check of constructors
+  in the build. Checked on a watch on 15.11.2026.
 
-Сборка и проверки:
-- 2026-11-14 — сборка и проверки APK в GitHub Actions (`mod-build.yml`, `mod/check-apk.py`), проверка секретов
-  перед коммитом (`mod/check-secrets.sh`).
-- 2026-11-15 — сборка-кандидат: `main` + ветки блоков, подпись своим ключом (окружение `mod-signing` с ручным
-  подтверждением, только `main`), проверка «ветки не приносят нового кода автора», отпечаток сертификата сверяется
-  с `mod/mod-cert.sha256`, `update-manifest.json` (`mod/make-update-manifest.py`). APK — на странице сборки;
-  выпуски на GitHub пока не делаются (задание `publish` выключено переменной `MOD_PUBLISH_RELEASES`).
-
----
-English: per-version list of our changes against JugglucoNG; a version is a tag `mod-<JugglucoNG version>-<our number>`.
-After rus-1.3.2-2 (in main, not tagged): nothing user-visible; tooling only — keeping the last 5 candidate APKs,
-upstream sync tools and daily sync check workflow, release merge through a sync PR, candidate only on an upstream
-release 7+ days old, candidate number above every earlier candidate too, every change in upstream files next to a
-MOD-HOOK mark (checked on every build), personal deny list for the secrets check
-(kept outside the repository), reminder for blocks on test, main protected by a ruleset, golden runs of upstream alarm/forecast code, repository front page
-`.github/README.md` with the table of differences. rus-1.3.2-2 (2026-11-15, first tagged version): build type `mod`
-(package, name, icon background, version code, update source), wear watch face fixes (resource ids and names kept,
-no-arg constructor of ComplicationDrawable kept; checked on a watch), CI build with APK checks, signed candidate
-build (main + block branches) with certificate check and update-manifest.json; GitHub releases switched off for now.
+Build and checks:
+- 2026-11-14 — build and APK checks in GitHub Actions (`mod-build.yml`, `mod/check-apk.py`), a secrets check before
+  a commit (`mod/check-secrets.sh`).
+- 2026-11-15 — candidate build: `main` + block branches, signed with our own key (environment `mod-signing` with
+  manual confirmation, `main` only), a check that "the branches bring no new code of the author", the certificate
+  fingerprint is compared with `mod/mod-cert.sha256`, `update-manifest.json` (`mod/make-update-manifest.py`). APKs are
+  on the build page; GitHub releases are not made yet (the `publish` job is switched off by the variable
+  `MOD_PUBLISH_RELEASES`).

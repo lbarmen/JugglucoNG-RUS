@@ -1,55 +1,58 @@
-# Вливание выпусков JugglucoNG — порядок для чата
+# Merging JugglucoNG releases — procedure for the chat
 
-**Когда.** Письмо GitHub о красном запуске `MOD sync`: задание «Выпуск X ждёт вливания» — это напоминание
-(«проверен и ждёт вливания» — проверка зелёная; «…но проверка красная» — сначала разбор, ниже) или что-то красное
-(сбой). Берём только их выпуски без пометки «пред-выпуск»; другую точку (`--point`) — только по слову владельца.
+**When.** A GitHub e-mail about a red run of `MOD sync`: the job "Release X waits for merge" is a reminder
+("is checked and waits for the merge into main" - the check is green; "waits for the merge, but the check is red" - read the report first, see
+below) or something is red (a failure). We take only their releases without the "pre-release" mark; another point
+(`--point`) only by the owner's word.
 
-**1. Прочитать отчёт** — страница утреннего запуска (`gh run list -w mod-sync.yml`, итог `report`, файл
-`sync-report`): сводка, флаги риска (датчик и тревоги — первыми), эталоны, их CI, их Issues за 7 дней, их новые
-функции против `mod/CHANGES.md` и открытых строк `неудобства-jugglucong.md` (ТЗ 3.4).
+**1. Read the report** — the page of the morning run (`gh run list -w mod-sync.yml`, the `report` result, the
+`sync-report` file): summary, risk flags (sensor and alarms first), golden runs, their CI, their Issues of the last
+7 days, their new features against `mod/CHANGES.md` and the open lines of the owner's private list of upstream inconveniences (spec 3.4).
 
-**2. Влить** (Git Bash, из `code\`, дерево без незакоммиченных правок):
+**2. Merge** (Git Bash, from `code\`, a tree without uncommitted changes):
 ```
-bash mod/sync-merge.sh prepare --decision "влить: <почему>" --minutes <сколько разбирал>
-bash mod/sync-merge.sh finish <номер PR>
+bash mod/sync-merge.sh prepare --decision "merge: <why>" --minutes <how long you spent reading>
+bash mod/sync-merge.sh finish <PR number>
 ```
-`prepare`: ветка `sync/<выпуск>`, слияние, проверки, строка в `mod/SYNC-LOG.md` (журнал заводит первый `prepare`),
-PR с отчётом. Ветка уже есть — `prepare` её не трогает: продолжать на ней (`continue`) или удалить по слову
-владельца. Проба без отправки — `MOD_SYNC_DRY=1 bash mod/sync-merge.sh prepare …`, потом удалить пробную ветку.
-`finish`: ждёт проверки PR и зелёный `report`, выключает их новые задачи из ветки до и после слияния (и отменяет
-их запуски), вливает слиянием (без squash и rebase). Нужный коммит libjuice не в нашей копии (раздел 11) — сначала
-`gh repo sync lbarmen/libjuice`.
+`prepare`: branch `sync/<release>`, merge, checks, a line in `mod/SYNC-LOG.md` (the first `prepare` creates the log),
+a PR with the report. If the branch already exists, `prepare` does not touch it: continue on it (`continue`) or delete
+it by the owner's word. A trial without sending - `MOD_SYNC_DRY=1 bash mod/sync-merge.sh prepare …`, then delete the
+trial branch.
+`finish`: waits for the PR checks and a green `report`, switches off their new jobs in the branch before and after
+the merge (and cancels their runs), merges with a merge commit (no squash and no rebase). The needed libjuice commit is
+not in our copy (section 11) - first `gh repo sync lbarmen/libjuice`.
 
-**3. Владельцу — 3–5 строк** «что поменялось для тебя»: датчик, тревоги, часы, Nightscout, что заметно в
-приложении; что проверить на телефоне до установки (флаги риска, ТЗ 3.6). Кандидат на телефон — не раньше 7 дней
-от выпуска.
+**3. To the owner — 3–5 lines** "what changes for you": sensor, alarms, watch, Nightscout, what is noticeable in the
+app; what to check on the phone before installing (risk flags, spec 3.6). A candidate for the phone - not earlier than
+7 days after the release.
 
-**Красное — что делать.** Чинить всегда на ветке `sync/<выпуск>` новым коммитом. До отправки (`prepare` сказал
-«checks are red» или «CONFLICT») — коммит, затем `continue --decision … --minutes … [--conflicts N]`. После
-отправки (красный PR) — коммит, `git push`, дождаться зелёного `report`, затем `finish`. `prepare` заново не
-запускать.
-- конфликт — решить файлы руками (врезки — по `mod/HOOKS.md`), `git add`, `git commit --no-edit`, затем
-  `continue … --conflicts N`; `rerere` запомнит решение;
-- врезки и бюджет (`check-hooks`: больше 15 файлов или 60 строк в их файлах, врезка без строки в HOOKS, правка их
-  файла дальше 3 строк от пометки — часто след ручного решения конфликта) — вернуть
-  их файлы к их виду, наше — в наши файлы; бюджет мал по делу — владельцу;
-- секреты (`check-secrets`) — убрать строку и переписать коммит до отправки; уже на GitHub — сказать владельцу
-  (ключ или токен менять); `personal deny list entry N` — запись N личного списка владельца, значение не
-  показывается и в чат не просить: файл назван в строке, остальное — владельцу;
-- наша сборка (`check-apk`, наследование `mod` от их `release`) — автор поменял сборку: чинить в наших файлах;
-  `Common/schemas changed` — автор не закоммитил экспорт схемы БД: проверить, так ли у него, решает владелец;
-- их тесты — красные ли они и у автора (раздел 13)? Да — не наша вина, решает владелец; нет — разбирать;
-- эталоны тревог — таблица разницы в отчёте. Решения поменялись по их задумке (PR в разделе 3) — принять:
-  `gh run download <запуск> -n sync-tests`, скопировать `Common/build/mod-golden/actual/*.csv` в
-  `mod/golden/expected/` на ветке `sync/…`, коммит, в строке SYNC-LOG — «эталоны обновлены: <почему>», дальше —
-  как выше (до или после отправки); не ясно — владельцу;
-- задание `check` красное (`no upstream release found`, сбой API) или «tree differs» — перезапустить запуск позже;
-  повторилось — разбирать;
-- «Проба письма» красная каждое утро — переменная `MOD_SYNC_TEST_FAIL` не убрана (`gh variable delete`);
-- выпуск сломан у автора и его пропускаем — только по слову владельца: переменная `MOD_SYNC_SKIP=<метка>`
-  (`gh variable set`), напоминание молчит до следующего выпуска.
+**Red - what to do.** Always fix on the branch `sync/<release>` with a new commit. Before sending (`prepare` said
+"checks are red" or "CONFLICT") - commit, then `continue --decision … --minutes … [--conflicts N]`. After sending
+(a red PR) - commit, `git push`, wait for a green `report`, then `finish`. Do not run `prepare` again.
+- conflict — resolve the files by hand (hooks - by `mod/HOOKS.md`), `git add`, `git commit --no-edit`, then
+  `continue … --conflicts N`; `rerere` will remember the resolution;
+- hooks and budget (`check-hooks`: more than 15 files or 60 lines in their files, a hook without a row in HOOKS, a
+  change in their file farther than 3 lines from a mark - often a trace of a manual conflict resolution) - return
+  their files to their form, put ours into our files; the budget is too small for the job - ask the owner;
+- secrets (`check-secrets`) — remove the line and rewrite the commit before sending; already on GitHub - tell the
+  owner (a key or token must be changed); `personal deny list entry N` - entry N of the owner's personal list, the
+  value is not shown and must not be requested in the chat: the file is named in the line, the rest is for the owner;
+- our build (`check-apk`, inheritance of `mod` from their `release`) — the author changed the build: fix in our
+  files; `Common/schemas changed` - the author did not commit the export of the DB schema: check whether it is the
+  same on his side, the owner decides;
+- their tests — are they red at the author's too (section 13)? Yes - not our fault, the owner decides; no - investigate;
+- golden alarm runs — the difference table in the report. The decisions changed by their intent (PR in section 3) -
+  accept: `gh run download <run> -n sync-tests`, copy `Common/build/mod-golden/actual/*.csv` to
+  `mod/golden/expected/` on the branch `sync/…`, commit, in the SYNC-LOG line - "golden runs updated: <why>", then as
+  above (before or after sending); unclear - ask the owner;
+- the job `check` is red (`no upstream release found`, an API failure) or "tree differs" - restart the run later;
+  if it repeats - investigate;
+- "Mail probe" is red every morning - the variable `MOD_SYNC_TEST_FAIL` was not removed (`gh variable delete`);
+- the release is broken at the author's and we skip it - only by the owner's word: the variable
+  `MOD_SYNC_SKIP=<mark>` (`gh variable set`), the reminder stays quiet until the next release.
 
-**Раз в месяц** — `python -X utf8 mod/juggluco-summary.py` (сводка Juggluco; в Git Bash этой машины `python3` нет):
-перенос — только правка датчика, тревог или часов, которой нет в JugglucoNG, и по слову владельца.
+**Once a month** — `python -X utf8 mod/juggluco-summary.py` (the Juggluco summary; there is no `python3` in Git Bash
+on this machine): carry over only a fix of the sensor, alarms or watch that JugglucoNG does not have, and by the
+owner's word.
 
-Красный PR можно влить только через обход набора правил «только через PR» и только по слову владельца.
+A red PR can be merged only by bypassing the "only through a PR" ruleset, and only by the owner's word.

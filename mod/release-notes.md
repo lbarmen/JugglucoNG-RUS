@@ -1,13 +1,9 @@
-**Неофициальная версия JugglucoNG** (на основе JugglucoNG @UPSTREAM@). Не медицинское изделие: решения о лечении —
-по глюкометру и врачу. Что изменено — [mod/CHANGES.md](https://github.com/lbarmen/JugglucoNGmod/blob/@SHA@/mod/CHANGES.md),
-подробнее — [mod/README.md](https://github.com/lbarmen/JugglucoNGmod/blob/@SHA@/mod/README.md).
+**Unofficial build of JugglucoNG** (based on JugglucoNG @UPSTREAM@). Not a medical device: base treatment decisions
+on a glucose meter and a doctor. What is changed — [mod/CHANGES.md](https://github.com/lbarmen/JugglucoNGmod/blob/@SHA@/mod/CHANGES.md),
+details — [mod/README.md](https://github.com/lbarmen/JugglucoNGmod/blob/@SHA@/mod/README.md).
 
-- `@PHONE@` — телефон (пакет `tk.glucodata.ng.mod`, ставится рядом с официальным JugglucoNG).
-- `@WEAR@` — часы Wear OS (ставить файлом или по adb, не из магазина).
-- `update-manifest.json` — для встроенного обновления.
+- `@PHONE@` — phone (package `tk.glucodata.ng.mod`, installs next to the official JugglucoNG).
+- `@WEAR@` — Wear OS watch (install as a file or via adb, not from a store).
+- `update-manifest.json` — for the in-app update.
 
-Подпись (SHA-256 сертификата): `@CERT@`. Собрано в GitHub Actions из коммита `@SHA@`.
-
----
-**Unofficial build of JugglucoNG** @UPSTREAM@. Not a medical device. Phone and Wear OS APKs, package
-`tk.glucodata.ng.mod`, signed with the certificate above; changes are listed in mod/CHANGES.md.
+Signature (SHA-256 of the certificate): `@CERT@`. Built in GitHub Actions from commit `@SHA@`.

@@ -15,7 +15,7 @@ import java.io.File
 import java.util.Locale
 
 /**
- * JugglucoNGmod golden runs of upstream's alarm and forecast decisions (plan of stage 2, B3; ТЗ 3.5).
+ * JugglucoNGmod golden runs of upstream's alarm and forecast decisions (stage 2 plan, B3; spec 3.5).
  *
  * Each synthetic series of mod/golden/scenarios/ (mod/golden/scenarios.py, no real readings) is fed minute by
  * minute through upstream's own code, the way their tests do it: rate from TrendEngine, alarm conditions from
@@ -122,15 +122,15 @@ class GoldenAlarmRunTest {
             val e = exp[minute]?.split(",")
             val a = act[minute]?.split(",")
             for (i in cols.indices.drop(1)) {
-                val ev = e?.getOrNull(i) ?: "(нет)"
-                val av = a?.getOrNull(i) ?: "(нет)"
+                val ev = e?.getOrNull(i) ?: "(none)"
+                val av = a?.getOrNull(i) ?: "(none)"
                 if (ev != av) {
                     count++
                     if (out.size < 25) out += "| $name | $minute | ${cols[i]} | $ev | $av |"
                 }
             }
         }
-        if (count > out.size) out += "| $name | … | ещё ${count - out.size} | | |"
+        if (count > out.size) out += "| $name | … | ${count - out.size} more | | |"
         return out
     }
 
@@ -155,29 +155,29 @@ class GoldenAlarmRunTest {
                 continue
             }
             if (!exp.isFile) {
-                problems += "$name: эталона нет (mod/golden/expected/${f.name})"
+                problems += "$name: no expected file (mod/golden/expected/${f.name})"
                 continue
             }
             val expected = exp.readLines().filter { it.isNotBlank() }
             if (expected != actual) {
-                problems += "$name: решения изменились"
+                problems += "$name: decisions changed"
                 table += diffTable(name, expected, actual)
             }
         }
         if (!update) {
             val names = scenarios.map { it.name }.toSet()
             expectedDir.listFiles { f -> f.name.endsWith(".csv") && f.name !in names }?.forEach {
-                problems += "${it.name}: эталон без серии"
+                problems += "${it.name}: expected file without a series"
             }
         }
         val report = buildList {
-            add("# Эталоны тревог и прогноза")
+            add("# Golden runs of alarms and forecast")
             add("")
-            add(if (problems.isEmpty()) "Совпали: ${scenarios.size} серий." else "**Расхождения:**")
+            add(if (problems.isEmpty()) "Matched: ${scenarios.size} series." else "**Differences:**")
             problems.forEach { add("- $it") }
             if (table.isNotEmpty()) {
                 add("")
-                add("| серия | минута | столбец | эталон | сейчас |")
+                add("| series | minute | column | expected | actual |")
                 add("|---|---|---|---|---|")
                 addAll(table)
             }
