@@ -14,6 +14,8 @@ For the user:
   "JugglucoNGmod" (watch face too), package `tk.glucodata.ng.mod` (installs as a new app), repository
   `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. Versions
   below are the old-name tags `rus-…`.
+- 2026-11-17 — new signing key (certificate CN=JugglucoNGmod), fingerprint in `mod/mod-cert.sha256`. Builds
+  signed with the former key (rus-1.3.2-1, rus-1.3.2-2) cannot be updated in place: install as a new app.
 - 2026-11-16 — the author's code is exactly his JugglucoNG 1.3.2-Alpha release: 47 of his unreleased changes (alarms,
   Nightscout, watch) that were in rus-1.3.2-2 are removed; they will return with his next release.
 
