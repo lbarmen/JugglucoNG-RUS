@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- JugglucoNGmod, phone only: orange "M" badge for the launcher icon (layered over upstream's foreground in
+<!-- JugglucoNGmod, phone and watch (build type mod): orange "M" badge for the launcher icon (layered over upstream's foreground in
      mod_launcher_foreground.xml). Transparent except the bottom-right corner; the badge stays inside the adaptive icon
      safe zone (circle of 66dp around 54,54), so no launcher mask cuts it. "M" is a path: vectors have no text. -->
 <vector

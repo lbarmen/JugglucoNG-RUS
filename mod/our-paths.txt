@@ -4,7 +4,6 @@
 mod/
 Common/src/mod/
 Common/src/wearMod/
-Common/src/mobileMod/
 Common/src/testMobile/java/mod/
 .github/workflows/mod-*.yml
 .github/README.md
