@@ -25,6 +25,12 @@ data class FaceReading(
     val rate: Float,
     /** Upstream's range colour for [value] (ARGB). */
     val color: Int,
+    /**
+     * The newer side of the change pair: the reading on the lane of the view mode without calibration, as upstream's
+     * notification pairs it with history (`DisplayTrendSource.augmentHistory` takes `autoValue`/`rawValue`); history
+     * is never calibrated, so a calibrated [value] would show a change that is not there.
+     */
+    val deltaValue: Float = value,
 )
 
 /** One point of history in display units, already on the lane the user looks at (auto or raw). */
@@ -70,7 +76,13 @@ object FaceSources {
     /** An instance of [className] when it exists and is a [FaceSource], else [ModFaceSource]. */
     internal fun find(className: String): FaceSource = try {
         Class.forName(className).getDeclaredConstructor().newInstance() as FaceSource
-    } catch (_: Throwable) {
+    } catch (_: ClassNotFoundException) {
+        ModFaceSource
+    } catch (e: Throwable) {
+        // The class is there but unusable (shrunk, wrong type, its constructor threw): say so, without values.
+        runCatching { android.util.Log.w(LOG_TAG, "face source $className unusable: ${e.javaClass.name}") }
         ModFaceSource
     }
+
+    private const val LOG_TAG = "ModWatchFace"
 }

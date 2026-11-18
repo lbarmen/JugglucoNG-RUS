@@ -69,13 +69,15 @@ class FaceSourceContractTest {
         }
     }
 
-    /** Upstream's history store: nothing, so only the live store can give the value. */
+    /** Upstream's history store: [points] (empty by default, so only the live store can give the value). */
     @Implements(NotificationHistorySource::class)
     class HistoryStore {
         companion object {
+            var points: List<GlucosePoint> = emptyList()
+
             @JvmStatic @Implementation
             fun getDisplayHistory(startTimeMs: Long, isMmol: Boolean, sensorSerial: String?): List<GlucosePoint> =
-                emptyList()
+                points
         }
     }
 
@@ -97,6 +99,23 @@ class FaceSourceContractTest {
         LiveStore.ageMs = 15 * 60_000L
         LiveStore.present = true
         LiveStore.askedMaxAges.clear()
+        HistoryStore.points = emptyList()
+    }
+
+    @Test
+    fun aLiveValueBehindANewerSyncedReadingGivesWayToIt() {
+        LiveStore.ageMs = 15 * 60_000L + 30_000L
+        val now = System.currentTimeMillis()
+        // synced history up to 2 minutes ago, every 5 minutes, a little below the stale live 7.2
+        val newest = now - 2 * 60_000L
+        HistoryStore.points = (0..6).map { GlucosePoint(newest - it * 5 * 60_000L, 6.1f, 6.1f) }.reversed()
+        val snapshot = FaceSources.find("tk.glucodata.mod.watch.trial.NoSuchClass").snapshot(context, now, 3)
+        assertNotNull(snapshot.current)
+        assertEquals(newest, snapshot.current!!.timeMs)
+        assertEquals(6.1f, snapshot.current!!.value, 0.001f)
+        val model = FaceModel.build(snapshot, ZoneId.of("UTC"), FaceLabels.from(context))
+        assertTrue(model.hasValue)
+        assertEquals(2, model.ageMinutes)
     }
 
     @Test

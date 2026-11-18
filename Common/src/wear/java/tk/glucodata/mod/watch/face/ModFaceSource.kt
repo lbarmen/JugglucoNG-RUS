@@ -20,8 +20,10 @@ import tk.glucodata.ui.WearSensorSelection
  * complications read, with our age limit. Thin on purpose: every rule is in [FaceValues], [FaceGraph] and [FaceModel].
  *
  * - current value: `CurrentDisplaySource.resolveCurrent(maxAgeMillis, sensor)` with [FaceValues.SOURCE_MAX_AGE_MS],
- *   not `GlucoseComplicationData.currentReading()` (drops everything older than 330 s); without a live value, the
- *   newest synced point resolved as their complications do (`GlucoseComplicationData.syncedReading`);
+ *   not `GlucoseComplicationData.currentReading()` (drops everything older than 330 s); without a live value, or
+ *   when history is newer than it by more than [FaceValues.LIVE_BEHIND_MS], the newest synced point resolved as
+ *   their complications do (`GlucoseComplicationData.syncedReading`);
+ * - the change: the uncalibrated lane value of that reading against history ([FaceReading.deltaValue]);
  * - history: `NotificationHistorySource.getDisplayHistory` for our window (their sparkline is fixed at 90 minutes),
  *   on the lane of the sensor's view mode, smoothed for the graph as their sparkline is;
  * - sensor `WearSensorSelection.resolve()`, units `ComplicationRenderer.isMmol()`, colour
@@ -39,7 +41,8 @@ internal object ModFaceSource : FaceSource {
         val sensor = guard { WearSensorSelection.resolve() }
         val viewMode = guard { CurrentDisplaySource.resolveViewModeForSensor(sensor) } ?: 0
         val from = nowMs - maxOf(FaceGraph.windowMs(hours), FaceValues.HISTORY_MIN_MS)
-        val lane = guard { NotificationHistorySource.getDisplayHistory(from, isMmol, sensor) }.orEmpty()
+        val points = guard { NotificationHistorySource.getDisplayHistory(from, isMmol, sensor) }.orEmpty()
+        val lane = points
             .map { GlucosePoint(it.timestamp, FaceValues.laneValue(it.value, it.rawValue, viewMode), it.rawValue) }
         val history = lane.map { FacePoint(it.timestamp, it.value) }
         val graph = smoothed(context, lane, nowMs).map { FacePoint(it.timestamp, it.value) }
@@ -50,7 +53,7 @@ internal object ModFaceSource : FaceSource {
             isMmol = isMmol,
             hour24 = guard { Applic.hour24 } ?: true,
             graphHours = hours,
-            current = current(sensor, isMmol, nowMs, lane),
+            current = current(sensor, isMmol, nowMs, points, lane),
             history = history,
             graphPoints = graph,
             low = low,
@@ -60,19 +63,38 @@ internal object ModFaceSource : FaceSource {
         )
     }
 
-    private fun current(sensor: String?, isMmol: Boolean, nowMs: Long, lane: List<GlucosePoint>): FaceReading? {
+    /**
+     * The live value, unless history already holds a newer reading (the live source lagging the sync): then the
+     * newest synced point, so the number, its colour and its age are of the same, newest reading.
+     */
+    private fun current(
+        sensor: String?,
+        isMmol: Boolean,
+        nowMs: Long,
+        points: List<GlucosePoint>,
+        lane: List<GlucosePoint>,
+    ): FaceReading? {
+        val newest = newestIndex(lane)
         val live = guard { CurrentDisplaySource.resolveCurrent(FaceValues.SOURCE_MAX_AGE_MS, sensor) }
             ?.takeIf { FaceValues.usable(it.primaryValue) && it.primaryStr.isNotBlank() && it.timeMillis > 0L }
-            ?: synced(sensor, nowMs, lane)
-            ?: return null
-        return FaceReading(live.timeMillis, live.primaryValue, live.primaryStr, live.rate,
-            guard { ComplicationRenderer.valueColor(live.primaryValue, isMmol) } ?: NEUTRAL)
+            ?.takeIf { !FaceValues.liveIsBehind(it.timeMillis, newest?.let { i -> lane[i].timestamp }) }
+        val shown = live ?: synced(sensor, nowMs, newest?.let { points[it] }) ?: return null
+        return FaceReading(shown.timeMillis, shown.primaryValue, shown.primaryStr, shown.rate,
+            guard { ComplicationRenderer.valueColor(shown.primaryValue, isMmol) } ?: NEUTRAL,
+            deltaValue = FaceValues.laneValue(shown.autoValue, shown.rawValue, shown.viewMode))
     }
 
-    /** The newest synced point, young enough, through upstream's resolver (calibration, view mode). */
-    private fun synced(sensor: String?, nowMs: Long, lane: List<GlucosePoint>): CurrentDisplaySource.Snapshot? {
-        val newest = lane.filter { FaceValues.usable(it.value) }.maxByOrNull { it.timestamp } ?: return null
-        if (nowMs - newest.timestamp > FaceValues.SOURCE_MAX_AGE_MS) return null
+    /** Index of the newest usable point of the [lane]. */
+    private fun newestIndex(lane: List<GlucosePoint>): Int? =
+        lane.indices.filter { FaceValues.usable(lane[it].value) && lane[it].timestamp > 0L }
+            .maxByOrNull { lane[it].timestamp }
+
+    /**
+     * The [newest] synced point, young enough, through upstream's resolver (calibration, view mode). It goes in with
+     * its own auto value, not the lane's (upstream: "raw-primary peers must not become auto").
+     */
+    private fun synced(sensor: String?, nowMs: Long, newest: GlucosePoint?): CurrentDisplaySource.Snapshot? {
+        if (newest == null || nowMs - newest.timestamp > FaceValues.SOURCE_MAX_AGE_MS) return null
         return guard {
             CurrentDisplaySource.resolveIncomingReading(
                 reading = LiveReadingLanes.stock(newest.value, newest.rawValue),

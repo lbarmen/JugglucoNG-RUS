@@ -122,6 +122,31 @@ class FaceModelTest {
     }
 
     @Test
+    fun aCalibratedValueChangesOnlyByItsUncalibratedLane() {
+        // calibration lifts the sensor's 6.0 to 6.8 on the screen; history (never calibrated) is a flat 6.0
+        val flat = (2..60).map { FacePoint(now - it * minute, 6.0f) }.reversed()
+        val calibrated = FaceReading(now - 2 * minute, 6.8f, "6.8", 0f, color, deltaValue = 6.0f)
+        val snapshot = snapshot(2).copy(current = calibrated, history = flat, graphPoints = flat)
+        val model = FaceModel.build(snapshot, zone, labels)
+        assertEquals("6.8", model.valueText)
+        assertEquals("0.0", model.deltaText)
+        // without the lane value it would read as a rise that is not there
+        val naive = snapshot.copy(current = calibrated.copy(deltaValue = 6.8f))
+        assertEquals("+0.8", FaceModel.build(naive, zone, labels).deltaText)
+    }
+
+    @Test
+    fun theAgeIsOfTheShownValueNotOfANewerPointOfHistory() {
+        // a live value 15 minutes old next to history that already has a reading 2 minutes old
+        val snapshot = snapshot(15, historyFrom = 2)
+        val model = FaceModel.build(snapshot, zone, labels)
+        assertTrue(model.hasValue)
+        assertEquals(15, model.ageMinutes)
+        assertEquals("15 min", model.ageText)
+        assertTrue(model.ageAlarm)
+    }
+
+    @Test
     fun clockAndDate() {
         val model = FaceModel.build(snapshot(2), zone, labels)
         // 1_800_000_000_000 ms is Fri 15 Jan 2027 08:00 UTC

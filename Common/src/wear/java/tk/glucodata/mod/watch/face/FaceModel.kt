@@ -6,8 +6,9 @@ import java.time.ZoneId
  * JugglucoNGmod, watch block (part 3a): what the face draws, made from a [FaceSnapshot] by pure rules - the renderer
  * (part 3b) only places it with [FaceLayout] and paints it.
  *
- * [hasValue] false - [valueText] is [FaceValues.NONE], no arrow ([rate] NaN), no change, no colour; [ageText] still
- * says how old the last reading is (`null` when there has been none in the loaded history).
+ * [hasValue] true - [ageText] is the age of that value (never of another, newer point); false - [valueText] is
+ * [FaceValues.NONE], no arrow ([rate] NaN), no change, no colour; [ageText] still says how old the last reading is
+ * (`null` when there has been none in the loaded history).
  */
 data class FaceModel(
     val clock: FaceText.Clock,
@@ -30,14 +31,15 @@ data class FaceModel(
     companion object {
         fun build(snapshot: FaceSnapshot, zone: ZoneId, labels: FaceLabels): FaceModel {
             val now = snapshot.nowMs
-            val lastTime = FaceValues.lastReadingTime(snapshot.current, snapshot.history)
-            val age = lastTime?.let { FaceValues.ageMinutes(now, it) }
             // The value itself must be young enough, not only the newest point of history.
             val shown = snapshot.current?.takeIf {
                 FaceValues.usable(it.value) && it.text.isNotBlank() &&
                     !FaceValues.isNoValue(FaceValues.ageMinutes(now, it.timeMs))
             }
             val hasValue = shown != null
+            // The age belongs to the number on the screen; only without one it is the newest reading known.
+            val lastTime = shown?.timeMs ?: FaceValues.lastReadingTime(snapshot.current, snapshot.history)
+            val age = lastTime?.let { FaceValues.ageMinutes(now, it) }
             val previous = shown?.let { FaceValues.previousFor(snapshot.history, it.timeMs) }
             return FaceModel(
                 clock = FaceText.clock(now, zone, snapshot.hour24),

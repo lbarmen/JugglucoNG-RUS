@@ -93,6 +93,23 @@ class FaceValuesTest {
     }
 
     @Test
+    fun theChangeUsesTheLaneValueNotTheShownOne() {
+        val history = listOf(FacePoint(now - 5 * minute, 6.0f))
+        val calibrated = FaceReading(now, 6.8f, "6.8", 0f, 0, deltaValue = 6.0f)
+        assertEquals("0,0", FaceValues.deltaText(calibrated, FaceValues.previousFor(history, now), true))
+        assertNull(FaceValues.deltaText(calibrated.copy(deltaValue = Float.NaN), history[0], true))
+    }
+
+    @Test
+    fun aLiveValueMoreThanAMinuteBehindHistoryIsLeftBehind() {
+        val live = now - 15 * minute
+        assertTrue(FaceValues.liveIsBehind(live, now - 2 * minute))
+        assertFalse(FaceValues.liveIsBehind(live, live + minute))
+        assertFalse(FaceValues.liveIsBehind(live, live - 5 * minute))
+        assertFalse(FaceValues.liveIsBehind(live, null))
+    }
+
+    @Test
     fun aReadingFromTheFutureCountsAsFresh() {
         assertEquals(0, FaceValues.ageMinutes(now, now + 3 * minute))
         assertEquals(0, FaceValues.ageMinutes(now, Long.MAX_VALUE))

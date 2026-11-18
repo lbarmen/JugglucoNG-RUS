@@ -40,6 +40,17 @@ object FaceValues {
         return if (age <= 0L) 0 else (age / 60_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
     }
 
+    /**
+     * How far history may be ahead of the live value before the live value counts as left behind: on the watch the
+     * live source can lag the synced history (upstream, `GlucoseComplicationData.kt`), and an old live value must not
+     * hide a newer reading.
+     */
+    const val LIVE_BEHIND_MS = 60_000L
+
+    /** The live value at [liveMs] is behind history whose newest reading is at [newestHistoryMs]. */
+    fun liveIsBehind(liveMs: Long, newestHistoryMs: Long?): Boolean =
+        newestHistoryMs != null && newestHistoryMs - liveMs > LIVE_BEHIND_MS
+
     fun isAgeAlarm(ageMinutes: Int): Boolean = ageMinutes > AGE_ALARM_MINUTES
 
     fun isNoValue(ageMinutes: Int): Boolean = ageMinutes > NO_VALUE_MINUTES
@@ -72,7 +83,8 @@ object FaceValues {
     /**
      * The signed change of [current] against [previous], formatted by upstream (`GlucoseDelta.format`: "+0,3",
      * "−1", "0"; mmol always one decimal, the locale's separator, a real minus sign); `null` when there is no
-     * earlier reading or the pair is too close or too far apart for upstream's rule.
+     * earlier reading or the pair is too close or too far apart for upstream's rule. Both sides uncalibrated:
+     * [FaceReading.deltaValue] against history.
      */
     fun deltaText(
         current: FaceReading?,
@@ -80,8 +92,9 @@ object FaceValues {
         isMmol: Boolean,
         intervalMinutes: Int = DELTA_INTERVAL_MINUTES,
     ): String? {
-        if (current == null || previous == null || !usable(current.value)) return null
-        val delta = GlucoseDelta.delta(current.timeMs, current.value, previous.timeMs, previous.value, intervalMinutes)
+        if (current == null || previous == null || !usable(current.deltaValue)) return null
+        val delta = GlucoseDelta.delta(current.timeMs, current.deltaValue, previous.timeMs, previous.value,
+            intervalMinutes)
         return GlucoseDelta.format(delta, isMmol).takeIf { it.isNotEmpty() }
     }
 
