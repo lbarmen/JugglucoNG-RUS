@@ -331,6 +331,12 @@ class ModAlertSettingsTest {
             entry(AlertType.PRE_LOW.id, threshold = 360),
         ))!!
         assertEquals(listOf(null, null, 360), decoded.map { it.thresholdMgPerL })
+        // ... and names their kinds for the watch's log (no level sent is not out of range)
+        val named = ModAlertSettings.decodeMessage(message(
+            entry(AlertType.LOW.id, threshold = 359), entry(AlertType.HIGH.id, threshold = 3601),
+            entry(AlertType.PRE_LOW.id, threshold = 360), entry(AlertType.VERY_LOW.id, threshold = 0xffff),
+        ))!!
+        assertEquals(listOf(AlertType.LOW.id, AlertType.HIGH.id), named.outOfRangeKinds)
     }
 
     @Test

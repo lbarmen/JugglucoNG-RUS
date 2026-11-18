@@ -22,9 +22,10 @@ import tk.glucodata.mod.watch.PhoneBatteryStore
 import tk.glucodata.mod.watch.WatchAlertStore
 
 /**
- * JugglucoNGmod, watch block (parts 7b, 7d): `/mod/alerts` arriving on the watch - written into upstream's alert file,
- * or not at all; never an alert's on/off; an overtaken message dropped; the kept message written again after
- * upstream's toggle sync. Made-up values.
+ * JugglucoNGmod, watch block (parts 7b, 7d, 7f): `/mod/alerts` arriving on the watch - written into upstream's alert
+ * file, or not at all; never an alert's on/off; an overtaken message dropped, a change after a phone clock set back
+ * not; the kept message written again after upstream's toggle sync; after a native write the on/off checked against
+ * the phone's. Made-up values.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -110,8 +111,10 @@ class WatchAlertSettingsTest {
     fun anOvertakenMessageIsDroppedAClockSetBackIsNot() {
         val t = 1_800_000_000_000L
         val key = "alert_${AlertType.HIGH.id}_alarmDur"
-        fun send(seconds: Int, at: Long?) =
-            WatchAlertStore.onMessage(context, ModAlertSettings.encode(listOf(settings(AlertType.HIGH.id, seconds)), at), Levels())
+        // all within seconds of each other on the watch
+        fun send(seconds: Int, at: Long?) = WatchAlertStore.onMessage(
+            context, ModAlertSettings.encode(listOf(settings(AlertType.HIGH.id, seconds)), at), Levels(), NoToggles, 5_000L,
+        )
         assertTrue(send(40, t))
         // the tick read the settings before the change went, and arrived after it
         assertTrue(send(20, t - 5_000))
@@ -130,15 +133,112 @@ class WatchAlertSettingsTest {
     }
 
     @Test
-    fun staleIsOnlyAShortStepBack() {
-        assertFalse(WatchAlertStore.isStale(null, 100L))
-        assertFalse(WatchAlertStore.isStale(100L, null))
-        assertFalse(WatchAlertStore.isStale(100L, 100L))
-        assertFalse(WatchAlertStore.isStale(101L, 100L))
+    fun staleIsOnlyAShortStepBackArrivingSoon() {
+        val soon = 1_000L
+        assertFalse(WatchAlertStore.isStale(null, 100L, soon))
+        assertFalse(WatchAlertStore.isStale(100L, null, soon))
+        assertFalse(WatchAlertStore.isStale(100L, 100L, soon))
+        assertFalse(WatchAlertStore.isStale(101L, 100L, soon))
         val last = 10 * WatchAlertStore.STALE_WINDOW_MS
-        assertTrue(WatchAlertStore.isStale(last - 1, last))
-        assertTrue(WatchAlertStore.isStale(last - WatchAlertStore.STALE_WINDOW_MS + 1, last))
-        assertFalse(WatchAlertStore.isStale(last - WatchAlertStore.STALE_WINDOW_MS, last))
+        assertTrue(WatchAlertStore.isStale(last - 1, last, soon))
+        assertTrue(WatchAlertStore.isStale(last - WatchAlertStore.STALE_WINDOW_MS + 1, last, soon))
+        assertFalse(WatchAlertStore.isStale(last - WatchAlertStore.STALE_WINDOW_MS, last, soon))
+        // long after the last accepted one, or no receipt known in this process: not an overtaken message
+        assertTrue(WatchAlertStore.isStale(last - 1, last, WatchAlertStore.OVERTAKE_WINDOW_MS - 1))
+        assertFalse(WatchAlertStore.isStale(last - 1, last, WatchAlertStore.OVERTAKE_WINDOW_MS))
+        assertFalse(WatchAlertStore.isStale(last - 1, last, null))
+        assertFalse(WatchAlertStore.isStale(last - 1, last, -1L))
+    }
+
+    @Test
+    fun aChangeAfterThePhoneClockWentBackIsNotLost() {
+        // critic M1 of part 7d: the phone clock was 3 min ahead when a message was accepted, then set right
+        val t = 1_800_000_000_000L
+        val key = "alert_${AlertType.LOW.id}_alarmDur"
+        fun send(seconds: Int, at: Long, uptime: Long) = WatchAlertStore.onMessage(
+            context, ModAlertSettings.encode(listOf(settings(AlertType.LOW.id, seconds)), at), Levels(), NoToggles, uptime,
+        )
+        assertTrue(send(40, t + 3 * 60_000L, 100_000L))
+        // the change comes minutes later on the watch: written though its stamp is older
+        assertTrue(send(20, t + 60_000L, 100_000L + 2 * 60_000L))
+        assertEquals(20, alerts.getInt(key, 0))
+        // a watch process started again knows no receipt: written too
+        WatchAlertStore.resetForTests()
+        assertTrue(send(25, t, 1_000L))
+        assertEquals(25, alerts.getInt(key, 0))
+    }
+
+    /** Native on/off as the watch holds it and as the phone last sent it. */
+    private class Toggles(val phone: Map<AlertType, Boolean>) : WatchAlertStore.ToggleState {
+        val watch = HashMap(phone)
+        @Volatile
+        var requests = 0
+        override fun watchEnabled(type: AlertType): Boolean? = watch[type]
+        override fun phoneEnabled(type: AlertType): Boolean? = phone[type]
+        override fun requestState() {
+            requests++
+        }
+    }
+
+    private object NoToggles : WatchAlertStore.ToggleState {
+        override fun watchEnabled(type: AlertType): Boolean? = null
+        override fun phoneEnabled(type: AlertType): Boolean? = null
+        override fun requestState() = throw AssertionError("no state request expected")
+    }
+
+    private val phoneToggles = mapOf(AlertType.LOW to true, AlertType.HIGH to true, AlertType.LOSS to false)
+
+    @Test
+    fun aNeighbourSwitchedOffByTheRaceAsksThePhoneForItsState() {
+        val toggles = Toggles(phoneToggles)
+        // our level write read "high off" just before their toggle sync turned it on, and wrote the group back
+        toggles.watch[AlertType.HIGH] = false
+        assertEquals(listOf(AlertType.HIGH), WatchAlertStore.checkToggles(toggles))
+        assertEquals(1, toggles.requests)
+    }
+
+    @Test
+    fun theSameOnOffAsThePhoneAsksNothing() {
+        val toggles = Toggles(phoneToggles)
+        assertEquals(emptyList<AlertType>(), WatchAlertStore.checkToggles(toggles))
+        assertEquals(0, toggles.requests)
+        // nothing from the phone yet: nothing compared, nothing asked
+        assertEquals(emptyList<AlertType>(), WatchAlertStore.checkToggles(Toggles(emptyMap())))
+    }
+
+    @Test
+    fun aNativeWriteIsFollowedByTheOnOffCheck() {
+        val toggles = Toggles(phoneToggles)
+        val racing = object : ModAlertSettings.ThresholdStore {
+            val levels = HashMap<AlertType, Int>()
+            override fun read(type: AlertType): Int? = levels[type]
+            override fun write(type: AlertType, mgPerL: Int) {
+                levels[type] = mgPerL
+                toggles.watch[AlertType.HIGH] = false
+            }
+        }
+        val data = ModAlertSettings.encode(listOf(settings(AlertType.LOW.id, 40).copy(thresholdMgPerL = 700)), 1_000L)
+        assertTrue(WatchAlertStore.onMessage(context, data, racing, toggles))
+        assertEquals(0, toggles.requests)
+        val until = System.currentTimeMillis() + WatchAlertStore.REAPPLY_DELAY_MS + 5_000
+        while (toggles.requests == 0 && System.currentTimeMillis() < until) Thread.sleep(100)
+        assertEquals(1, toggles.requests)
+        assertEquals(700, racing.levels[AlertType.LOW])
+    }
+
+    @Test
+    fun theToggleListenerIsInPlaceBeforeTheFirstWrite() {
+        assertFalse(WatchAlertStore.isWatchingToggles())
+        var watchingAtWrite: Boolean? = null
+        val store = object : ModAlertSettings.ThresholdStore {
+            override fun read(type: AlertType): Int? = null
+            override fun write(type: AlertType, mgPerL: Int) {
+                if (watchingAtWrite == null) watchingAtWrite = WatchAlertStore.isWatchingToggles()
+            }
+        }
+        val data = ModAlertSettings.encode(listOf(settings(AlertType.LOW.id, 40).copy(thresholdMgPerL = 700)), 1_000L)
+        assertTrue(WatchAlertStore.onMessage(context, data, store, Toggles(emptyMap())))
+        assertEquals(true, watchingAtWrite)
     }
 
     @Test

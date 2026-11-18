@@ -102,7 +102,7 @@ object ModAlertSettings {
     private const val NO_SHORT = 0xffff
 
     /** Alerts whose on/off and threshold AlertRepository.loadConfig takes from the native side, the rest from the file. */
-    private val NATIVE_BACKED = setOf(
+    val NATIVE_BACKED: Set<AlertType> = setOf(
         AlertType.LOW, AlertType.HIGH, AlertType.VERY_LOW, AlertType.VERY_HIGH,
         AlertType.PRE_LOW, AlertType.PRE_HIGH, AlertType.LOSS,
     )
@@ -136,8 +136,11 @@ object ModAlertSettings {
         val thresholdMgPerL: Int? = null,
     )
 
-    /** A decoded message: its entries and the phone time of the send (`null` from a phone of part 7b). */
-    data class Message(val settings: List<Settings>, val sentAtMs: Long?)
+    /**
+     * A decoded message: its entries, the phone time of the send (`null` from a phone of part 7b) and the kinds whose
+     * threshold came out of range (dropped - the watch keeps its own; for the log, without the value).
+     */
+    data class Message(val settings: List<Settings>, val sentAtMs: Long?, val outOfRangeKinds: List<Int> = emptyList())
 
     /** [value] in [mmol] (mmol/L, else mg/dL) as mg/L, rounded. */
     fun toMgPerL(value: Float, mmol: Boolean): Int = (value * if (mmol) 180f else 10f).roundToInt()
@@ -229,6 +232,7 @@ object ModAlertSettings {
         val body = ModWatchMessages.open(data, 1) ?: return null
         val count = body.get().toInt() and 0xff
         val result = ArrayList<Settings>(count)
+        val outOfRange = ArrayList<Int>()
         repeat(count) {
             if (body.remaining() < 1) return null
             val length = body.get().toInt() and 0xff
@@ -252,6 +256,8 @@ object ModAlertSettings {
             val threshold = if (full) body.short.toInt() and 0xffff else NO_SHORT
             body.position(end)
             val type = AlertType.settingsEntries.firstOrNull { it.id == kind } ?: return@repeat
+            val thresholdInRange = threshold in MIN_THRESHOLD_MG_PER_L..MAX_THRESHOLD_MG_PER_L
+            if (threshold != NO_SHORT && !thresholdInRange) outOfRange += kind
             result += Settings(
                 kind = kind,
                 soundEnabled = flags and FLAG_SOUND != 0,
@@ -273,14 +279,14 @@ object ModAlertSettings {
                 activeStartMinute = time(startMinute, 59),
                 activeEndHour = time(endHour, 23),
                 activeEndMinute = time(endMinute, 59),
-                thresholdMgPerL = threshold.takeIf { it in MIN_THRESHOLD_MG_PER_L..MAX_THRESHOLD_MG_PER_L },
+                thresholdMgPerL = threshold.takeIf { thresholdInRange },
             )
         }
         var sentAt: Long? = null
         if (body.remaining() >= 1 + Long.SIZE_BYTES && (body.get().toInt() and 0xff) == TRAILER_SENT_AT) {
             sentAt = body.long.takeIf { it > 0 }
         }
-        return Message(result, sentAt)
+        return Message(result, sentAt, outOfRange)
     }
 
     /**
@@ -322,7 +328,9 @@ object ModAlertSettings {
      * first, so it cannot later replace ours), set through Natives.setAlertConfig - what their AlertRepository.saveConfig
      * calls. That call takes on/off too: we pass the state the phone last sent through their toggle sync
      * (WearToggleSync.knownEnabled - set before their own apply runs, so a toggle arriving at the same moment is not
-     * undone), else the state the watch holds now. Never a value of ours.
+     * undone), else the state the watch holds now. Never a value of ours. The call also writes back the on/off of the
+     * kind's native neighbours as it read them; a toggle of a neighbour landing in between is caught by the watch's
+     * check afterwards (WatchAlertStore.checkToggles).
      */
     object UpstreamThresholds : ThresholdStore {
         override fun read(type: AlertType): Int? {

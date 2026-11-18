@@ -1,10 +1,12 @@
 package mod.watch
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.alerts.HapticProfile
 import tk.glucodata.mod.watch.AlertSendMemory
+import tk.glucodata.mod.watch.SendStamps
 import tk.glucodata.mod.watch.ModAlertSettings.Settings
 import tk.glucodata.mod.watch.WatchAlertSettings
 
@@ -60,5 +62,17 @@ class AlertSendMemoryTest {
         memory.sent("a", settings(10), now)
         assertFalse(memory.due("a", settings(10), now + minute))
         assertTrue(memory.due("c", settings(10), now + minute))
+    }
+
+    @Test
+    fun theSendStampNeverGoesBack() {
+        val stamps = SendStamps()
+        assertEquals(now, stamps.next(now))
+        assertEquals(now + minute, stamps.next(now + minute))
+        // the phone clock set back 3 minutes (critic M1 of part 7d): still after the last one, so the watch accepts it
+        assertEquals(now + minute + 1, stamps.next(now - 2 * minute))
+        assertEquals(now + minute + 2, stamps.next(now + minute))
+        // the clock caught up: its own time again
+        assertEquals(now + 2 * minute, stamps.next(now + 2 * minute))
     }
 }

@@ -21,8 +21,10 @@ import tk.glucodata.MessageSender
  * and once an [RESEND_MS] for safety ([AlertSendMemory]) - so the alert settings no longer ride along every 5 minutes.
  * And always [CHANGE_DELAY_MS] after the last change of a carried key or of an alert's on/off in upstream's alert
  * preferences ([ModAlertSettings.triggersSend]), so a slider drag goes once and upstream's own toggle push (at once)
- * lands on the watch before ours. Each message carries its send time: the watch drops one overtaken by a newer one.
- * Nothing goes while the user has the watch companion switched off (as upstream's own sender). The log has counts only.
+ * lands on the watch before ours. Each message carries its send time ([SendStamps]: never back while the process
+ * lives, so a phone clock corrected backwards cannot make the watch drop a change it counts as delivered): the watch
+ * drops one overtaken by a newer one. Nothing goes while the user has the watch companion switched off (as upstream's
+ * own sender). The log has counts only.
  */
 object WatchAlertSettings {
 
@@ -35,6 +37,8 @@ object WatchAlertSettings {
     private const val WAIT_SECONDS = 10L
 
     private val memory = AlertSendMemory()
+
+    private val stamps = SendStamps()
 
     private val executor = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "ModWatchAlerts").apply { isDaemon = true }
@@ -57,14 +61,15 @@ object WatchAlertSettings {
             memory.keepOnly(nodeIds)
             if (nodeIds.isEmpty()) return 0
             val now = System.currentTimeMillis()
-            val settings = ModAlertSettings.collect()
+            // read and stamped together: a later read always has a later stamp, whichever send finishes first
+            val (settings, stamp) = synchronized(stamps) { ModAlertSettings.collect() to stamps.next(now) }
             if (settings.isEmpty()) {
                 ModWatchLog.w("alerts $label: nothing to send")
                 return 0
             }
             val due = nodeIds.filter { force || memory.due(it, settings, now) }
             if (due.isEmpty()) return 0
-            val data = ModAlertSettings.encode(settings, now)
+            val data = ModAlertSettings.encode(settings, stamp)
             var sent = 0
             for (id in due) {
                 try {
@@ -147,6 +152,23 @@ object WatchAlertSettings {
         } catch (t: Throwable) {
             ModWatchLog.w("alerts listener not queued: ${t.javaClass.simpleName}")
         }
+    }
+}
+
+/**
+ * Send times of `/mod/alerts`: the phone clock, but never at or below the last one given in this process (critic
+ * finding M1 of part 7d) - the watch drops a message stamped shortly before the last it accepted as overtaken, and a
+ * clock set back a few minutes would otherwise have it drop every change for those minutes.
+ */
+class SendStamps {
+
+    private var last = Long.MIN_VALUE
+
+    /** A stamp for [nowMs]: [nowMs], or one more than the last stamp when that is not below. */
+    @Synchronized
+    fun next(nowMs: Long): Long {
+        last = if (last == Long.MIN_VALUE || nowMs > last) nowMs else last + 1
+        return last
     }
 }
 
