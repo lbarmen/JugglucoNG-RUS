@@ -26,6 +26,12 @@ interface HealthSource {
     fun maintain(context: Context, nowMs: Long) {}
 
     /**
+     * Subscribes now for what the permissions allow (the page after permissions were given, a watch restart; part
+     * 4b), for [reason] in the log. `true` when a subscription is in place. Blocking: never on the main thread.
+     */
+    fun register(context: Context, reason: String): Boolean = false
+
+    /**
      * Fields for the status row, `key=value;...` without `\t` or line breaks: permissions, subscription and the like
      * (never heart rate or steps). Part of the permanent status: a change sends a status row at once.
      */

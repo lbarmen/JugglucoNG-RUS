@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- JugglucoNGmod: components of the watch `mod` build only (source set wear + build type mod). The classes live in
      Common/src/wear/java/tk/glucodata/mod/ (compiled by every watch build, never by the phone); declared here they
-     exist only in MOD. No package attribute: the namespace comes from Common/build.gradle. VIBRATE comes from
+     exist only in MOD. The Health Services layer (tk.glucodata.mod.health.hs) is in Common/src/wearMod/java - only
+     this build has the library. No package attribute: the namespace comes from Common/build.gradle. VIBRATE comes from
      upstream's Common/src/main/AndroidManifest.xml. -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Heart rate and steps (part 4b): Health Services needs API 30, upstream's watch minSdk is 26. Our code calls the
+         library only on API 30+ (HealthSubscription.supported); the Galaxy Watch 5 Pro runs API 34. -->
+    <uses-sdk tools:overrideLibrary="androidx.health.services.client" />
+    <!-- Heart rate: BODY_SENSORS comes from upstream's watch manifest (without maxSdkVersion - with their targetSdk 35 it
+         stays the heart rate permission on Android 16 too, so we leave it as theirs). In the background: the right
+         name, without the trailing space of upstream's entry. Android 16 names, for a later targetSdk 36. -->
+    <uses-permission android:name="android.permission.BODY_SENSORS_BACKGROUND" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+    <!-- Day steps -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
+    <!-- Subscribe again after a restart of the watch (upstream declares it too; merged into one) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <application>
         <!-- "Snooze alarm": a launcher entry without a screen for a hardware button of the watch. Theme.NoDisplay
              (the activity finishes inside onCreate), out of recents and history, its own task so it never brings
@@ -77,5 +92,39 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+        <!-- Heart rate and steps (part 4b). The page "JugglucoNGmod - health": permissions, subscription, last batch,
+             "Send now"; its own launcher entry and task, never upstream's watch app. -->
+        <activity
+            android:name="tk.glucodata.mod.health.HealthActivity"
+            android:exported="true"
+            android:label="@string/mod_watch_health_label"
+            android:icon="@drawable/mod_watch_health"
+            android:theme="@android:style/Theme.DeviceDefault"
+            android:launchMode="singleTask"
+            android:taskAffinity="${applicationId}.modhealth">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Health Services hands the collected data here; only Health Services can bind it (its permission). -->
+        <service
+            android:name="tk.glucodata.mod.health.hs.ModHealthListenerService"
+            android:exported="true"
+            android:permission="com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING" />
+        <!-- Registers the Health Services source at process start (no hook in upstream's Application). -->
+        <provider
+            android:name="tk.glucodata.mod.health.hs.ModHealthStarter"
+            android:authorities="${applicationId}.modhealthstarter"
+            android:exported="false" />
+        <!-- Watch restart or app update: subscribe again. -->
+        <receiver
+            android:name="tk.glucodata.mod.health.hs.ModHealthBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>

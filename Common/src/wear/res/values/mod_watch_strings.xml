@@ -44,4 +44,27 @@
     <string name="mod_watch_face_graph_1">1 hour</string>
     <string name="mod_watch_face_graph_3">3 hours</string>
     <string name="mod_watch_face_graph_6">6 hours</string>
+
+    <!-- Heart rate and steps page (part 4b): its name in the watch's app list and its title -->
+    <string name="mod_watch_health_label">JugglucoNGmod — health</string>
+    <!-- "Access: heart rate yes, steps yes, background no" -->
+    <string name="mod_watch_health_access">Access: heart rate %1$s, steps %2$s, background %3$s</string>
+    <string name="mod_watch_health_yes">yes</string>
+    <string name="mod_watch_health_no">no</string>
+    <!-- "Subscription: heart rate, steps" -->
+    <string name="mod_watch_health_subscription">Subscription: %1$s</string>
+    <string name="mod_watch_health_none">none</string>
+    <string name="mod_watch_health_hr">heart rate</string>
+    <string name="mod_watch_health_steps">steps</string>
+    <!-- When the last batch went to the phone: "Last batch: 3 min ago" / "Last batch: never" -->
+    <string name="mod_watch_health_last_batch">Last batch: %1$s</string>
+    <string name="mod_watch_health_minutes_ago">%1$d min ago</string>
+    <string name="mod_watch_health_never">never</string>
+    <!-- Rows queued on the watch -->
+    <string name="mod_watch_health_waiting">Waiting to send: %1$d</string>
+    <!-- A failure class name, e.g. "Error: TimeoutException" -->
+    <string name="mod_watch_health_error">Error: %1$s</string>
+    <string name="mod_watch_health_allow">Allow access</string>
+    <string name="mod_watch_health_send">Send now</string>
+    <string name="mod_watch_health_old_android">Heart rate and steps need Android 11 or newer</string>
 </resources>

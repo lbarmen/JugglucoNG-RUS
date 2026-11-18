@@ -27,7 +27,18 @@ MOD_WATCHFACE_NAME = 'Juggluco JugglucoNGmod'
 # Our components that must be in the wear APK (declared in Common/src/wearMod/AndroidManifest.xml).
 MOD_WEAR_COMPONENTS = ['tk.glucodata.mod.watch.SnoozeButtonActivity', 'tk.glucodata.mod.watch.ModWearListener',
                        'tk.glucodata.mod.watch.face.ModWatchFaceService',
-                       'tk.glucodata.mod.watch.face.FaceSettingsActivity']
+                       'tk.glucodata.mod.watch.face.FaceSettingsActivity',
+                       # heart rate and steps (watch part 4b)
+                       'tk.glucodata.mod.health.HealthActivity', 'tk.glucodata.mod.health.hs.ModHealthListenerService',
+                       'tk.glucodata.mod.health.hs.ModHealthStarter', 'tk.glucodata.mod.health.hs.ModHealthBootReceiver']
+# Permissions the wear APK must request, exact names (watch part 4b; upstream's watch manifest has
+# 'BODY_SENSORS_BACKGROUND ' with a trailing space, which no system knows).
+MOD_WEAR_PERMISSIONS = ['android.permission.BODY_SENSORS', 'android.permission.BODY_SENSORS_BACKGROUND',
+                        'android.permission.health.READ_HEART_RATE',
+                        'android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND',
+                        'android.permission.ACTIVITY_RECOGNITION', 'android.permission.RECEIVE_BOOT_COMPLETED']
+# Upstream's watch minSdk: Health Services (minSdk 30) is overridden in our manifest, never raises it.
+UPSTREAM_WEAR_MIN_SDK = '26'
 # Our face's editor action (watch part 3c): the face's wearableConfigurationAction and our editor's intent filter.
 MOD_WATCHFACE_EDITOR_ACTION = 'tk.glucodata.mod.watch.face.SETTINGS'
 # Must match packagingOptions.jniLibs.excludes in upstream Common/build.gradle.
@@ -227,6 +238,41 @@ def check_wear_components(apk):
     check(f'="{MOD_WATCHFACE_EDITOR_ACTION}"' in editor and 'WEARABLE_CONFIGURATION' in editor
           and 'WATCH_FACE_EDITOR' not in editor,
           'our watch face editor: our action, WEARABLE_CONFIGURATION category')
+    check_wear_health(apk, out)
+
+
+def component_blocks(xmltree):
+    """Each activity/service/receiver/provider element of an `aapt2 dump xmltree` manifest, by its name."""
+    blocks = {}
+    for m in re.finditer(r'E: (?:service|activity|receiver|provider)\b'
+                         r'(?:(?!\n\s*E: (?:service|activity|receiver|provider|application)\b)[\s\S])*', xmltree):
+        name = re.search(r'A: (?:http://schemas.android.com/apk/res/android:)?name\([^)]*\)="([^"]+)"', m.group(0))
+        if name:
+            blocks[name.group(1)] = m.group(0)
+    return blocks
+
+
+def check_wear_health(apk, xmltree):
+    """Heart rate and steps (watch part 4b): exact permission names, the Health Services binding of our listener, the
+    boot receiver's actions, the page's launcher entry, a private starter, and upstream's minSdk kept."""
+    perms = set(re.findall(r"^uses-permission(?:-sdk-23)?: name='([^']*)'", run([build_tool('aapt2'), 'dump', 'permissions', apk]), re.M))
+    missing = [p for p in MOD_WEAR_PERMISSIONS if p not in perms]
+    check(not missing, f'wear APK requests our {len(MOD_WEAR_PERMISSIONS)} health permissions by their exact names'
+          + (f' (missing: {missing})' if missing else ''))
+    blocks = component_blocks(xmltree)
+    listener = blocks.get('tk.glucodata.mod.health.hs.ModHealthListenerService', '')
+    check('com.google.android.wearable.healthservices.permission.PASSIVE_DATA_BINDING' in listener,
+          'health listener: bound only by Health Services (PASSIVE_DATA_BINDING)')
+    boot = blocks.get('tk.glucodata.mod.health.hs.ModHealthBootReceiver', '')
+    check('android.intent.action.BOOT_COMPLETED' in boot and 'android.intent.action.MY_PACKAGE_REPLACED' in boot,
+          'health boot receiver: BOOT_COMPLETED and MY_PACKAGE_REPLACED')
+    page = blocks.get('tk.glucodata.mod.health.HealthActivity', '')
+    check('android.intent.category.LAUNCHER' in page, 'health page: own launcher entry')
+    starter = blocks.get('tk.glucodata.mod.health.hs.ModHealthStarter', '')
+    check(re.search(r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b', starter) is not None, 'health starter: not exported')
+    sdk = re.search(r"^(?:minSdkVersion|sdkVersion):'([^']*)'", run([build_tool('aapt2'), 'dump', 'badging', apk]), re.M)
+    check(sdk is not None and sdk.group(1) == UPSTREAM_WEAR_MIN_SDK,
+          f"wear minSdk {sdk.group(1) if sdk else '?'} (upstream's {UPSTREAM_WEAR_MIN_SDK}; Health Services overridden)")
 
 
 def const_only_resources():

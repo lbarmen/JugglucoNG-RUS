@@ -49,6 +49,19 @@ class HealthState(context: Context) {
     /** Class of the last send failure, empty after a good send. */
     var lastError by string("lastError")
 
+    /**
+     * The Health Services subscription (part 4b): when it was made, what it covers ("hr,steps"; empty - none or lost),
+     * the permissions it was made with ([HealthPermissions.Perms.short]), the last attempt and its failure class.
+     */
+    var registeredAt by long("registeredAt")
+    var registeredTypes by string("registeredTypes")
+    var registeredPerms by string("registeredPerms")
+    var registerAttemptAt by long("registerAttemptAt")
+    var registerError by string("registerError")
+
+    /** The page asked for the background permission once (the next time it opens the app settings instead). */
+    var askedBackground by boolean("askedBackground")
+
     private fun long(key: String) = pref({ prefs.getLong(key, 0L) }) { putLong(key, it) }
 
     private fun int(key: String, default: Int) = pref({ prefs.getInt(key, default) }) { putInt(key, it) }
