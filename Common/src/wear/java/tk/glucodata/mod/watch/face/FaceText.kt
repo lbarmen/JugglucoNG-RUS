@@ -60,6 +60,16 @@ object FaceText {
         return listOf(day, date.dayOfMonth.toString(), month).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
+    /**
+     * "18 Nov" / "18 ноя": the day of the month and the short month, from [labels] (part 7e, the face's bottom row;
+     * the weekday is left out). The painter splits it at the space.
+     */
+    fun dayAndMonth(epochMs: Long, zone: ZoneId, labels: FaceLabels): String {
+        val date = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
+        val month = labels.months.getOrNull(date.monthValue - 1).orEmpty()
+        return listOf(date.dayOfMonth.toString(), month).filter { it.isNotEmpty() }.joinToString(" ")
+    }
+
     /** A battery as "64%" / "64 %"; [FaceValues.NONE] when unknown or too old. */
     fun battery(percent: Int?, labels: FaceLabels): String {
         if (percent == null || percent !in 0..100) return FaceValues.NONE

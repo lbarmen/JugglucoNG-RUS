@@ -39,6 +39,11 @@ import tk.glucodata.mod.watch.ModWatchLog
  * (the read waits until it is). The face is drawn again only when what it shows changed - not for the graph window
  * moving on, so the dim mode keeps one frame a minute. Our failure never takes the watch face process down: every
  * step is guarded and the coroutines have a handler that swallows what escapes.
+ *
+ * The dim mode (part 7c, critic 7, S2 and N8): no forecast is read for it, a kept snapshot there is read again only
+ * after [AMBIENT_STALE_MS] (new readings still come through [request]), the picture moves one step a minute
+ * ([FaceLayout.burnInOffset]). Leaving it reads a snapshot with the forecast at once. The dots' colours come from the
+ * limits kept with the snapshot, not from native calls in every frame (critic 7, N7).
  */
 internal class ModFaceRenderer(
     private val context: Context,
@@ -59,8 +64,17 @@ internal class ModFaceRenderer(
 
     override suspend fun createSharedAssets(): Assets = Assets()
 
-    /** A snapshot with the labels of its time and when it was read (the watch's clock). */
-    private class Kept(val snapshot: FaceSnapshot, val labels: FaceLabels, val readAtMs: Long)
+    /**
+     * A snapshot with the labels of its time, when it was read (the watch's clock), whether its forecast was asked for
+     * and the traffic light's limits read with it.
+     */
+    private class Kept(
+        val snapshot: FaceSnapshot,
+        val labels: FaceLabels,
+        val readAtMs: Long,
+        val withForecast: Boolean,
+        val limits: ModFaceSource.Limits?,
+    )
 
     private val scope = CoroutineScope(
         SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, t ->
@@ -90,7 +104,12 @@ internal class ModFaceRenderer(
 
     init {
         guarded {
-            scope.launch { watchState.isAmbient.collect { ambient -> if (ambient == false) request() } }
+            // leaving the dim mode: its snapshot has no forecast, so read one now; else as new data
+            scope.launch {
+                watchState.isAmbient.collect { ambient ->
+                    if (ambient == false) { if (kept?.withForecast == false) refresh() else request() }
+                }
+            }
             scope.launch { watchState.isVisible.collect { visible -> if (visible == true && dirty) request() } }
             scope.launch { UiRefreshBus.revision.drop(1).collect { request() } }
             guarded { FaceSettings.prefs(context).registerOnSharedPreferenceChangeListener(settingsListener) }
@@ -131,8 +150,11 @@ internal class ModFaceRenderer(
         val now = System.currentTimeMillis()
         val hours = FaceSettings.hours(context)
         graphHours = hours
+        val withForecast = watchState.isAmbient.value != true
         val next = guarded {
-            Kept(FaceSources.get().snapshot(context, now, hours), FaceLabels.from(context), now)
+            val snapshot = FaceSources.get().snapshot(context, now, hours, withForecast)
+            Kept(snapshot, FaceLabels.from(context), now, withForecast,
+                guarded { ModFaceSource.limits(snapshot.isMmol) })
         } ?: return
         val old = kept
         kept = next
@@ -143,31 +165,35 @@ internal class ModFaceRenderer(
 
     /** What the face shows from a snapshot, apart from the graph window moving on with the clock. */
     private fun shown(s: FaceSnapshot) = listOf(s.isMmol, s.hour24, s.graphHours, s.current, s.history.lastOrNull(),
-        s.graphPoints.lastOrNull(), s.low, s.high, s.phoneBatteryPercent, s.watchBatteryPercent)
+        s.graphPoints.lastOrNull(), s.low, s.high, s.phoneBatteryPercent, s.watchBatteryPercent, s.forecast.lastOrNull())
 
     override fun render(canvas: Canvas, bounds: Rect, zonedDateTime: ZonedDateTime, sharedAssets: Assets) {
         try {
             val now = zonedDateTime.toInstant().toEpochMilli()
             val data = kept
-            if (data == null || abs(now - data.readAtMs) >= STALE_MS) refresh()
+            val ambient = renderParameters.drawMode == DrawMode.AMBIENT
+            if (data == null || abs(now - data.readAtMs) >= staleAfter(ambient)) refresh()
             val isMmol = data?.snapshot?.isMmol ?: ComplicationRenderer.isMmol()
             val snapshot = data?.snapshot?.copy(nowMs = now) ?: FaceSnapshot(now, isMmol, true, graphHours, null,
                 emptyList(), emptyList(), 0f, 0f, null, null)
             val labels = data?.labels ?: FaceLabels.from(context)
             val model = FaceModel.build(snapshot, zonedDateTime.zone, labels)
+            val limits = data?.limits
+            val shift = if (ambient) {
+                FaceLayout.burnInOffset(Math.floorDiv(now, 60_000L), minOf(bounds.width(), bounds.height()).toFloat(),
+                    strong = watchState.hasBurnInProtection)
+            } else null
             lastLayout = painter.draw(
                 canvas, bounds.width(), bounds.height(), model, isMmol,
-                ambient = renderParameters.drawMode == DrawMode.AMBIENT,
+                ambient = ambient,
                 showData = data != null,
                 trial = FaceSources.get() !== ModFaceSource,
-                labels = labels,
+                // every dot as the app would paint its value (part 7a), whatever upstream's range colours setting
                 traceColor = { value ->
-                    guarded {
-                        FaceGraph.traceColor(value, snapshot.low, snapshot.high,
-                            setting = { ComplicationRenderer.valueColor(it, isMmol) },
-                            outOfRange = { ModFaceSource.outOfRangeColor(it, isMmol) })
-                    } ?: TRACE
+                    limits?.let { guarded { ModFaceSource.trafficColor(value, isMmol, it) } } ?: TRACE
                 },
+                offsetX = shift?.first ?: 0f,
+                offsetY = shift?.second ?: 0f,
             )
         } catch (_: Throwable) {
             guarded { canvas.drawColor(FaceStyle.BLACK) }
@@ -199,6 +225,15 @@ internal class ModFaceRenderer(
          * the pause all the same because it is never shorter than [MIN_READ_MS] (critic 3c, N2; a test holds it).
          */
         const val STALE_MS = 50_000L
+
+        /**
+         * The same in the dim mode (part 7c, critic 7, N8): new readings come through [request] there as well, so the
+         * read of a frame is only a backstop for what arrives without one (the batteries, the labels).
+         */
+        const val AMBIENT_STALE_MS = 5 * 60_000L
+
+        /** How old a kept snapshot may get before a frame reads a new one. */
+        internal fun staleAfter(ambient: Boolean): Long = if (ambient) AMBIENT_STALE_MS else STALE_MS
 
         /**
          * New readings are read at most this often (history arrives in dozens of pieces while it catches up); short
