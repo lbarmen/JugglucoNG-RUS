@@ -32,7 +32,8 @@ class HealthCore(
 
     /**
      * Adds heart rate readings and closes the windows ended [graceMs] before [nowMs]; the closed means go to the queue
-     * first and only then leave the kept open windows (a crash in between repeats a mean - the phone drops it - instead
+     * first and only then leave the kept open windows (a crash in between repeats a mean - the same row in every field,
+     * which the phone drops as a repeat, rules in [ModHealthBatch.Sample] - instead
      * of losing it). Readings for an already closed window are counted in [HealthState.hrLate]. Returns how many means
      * were queued.
      */

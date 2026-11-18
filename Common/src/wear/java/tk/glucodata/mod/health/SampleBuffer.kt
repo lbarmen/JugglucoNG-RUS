@@ -8,7 +8,8 @@ import tk.glucodata.mod.health.ModHealthBatch.Sample
  * (no backup), they survive a restart of the process. New rows are appended to `pending.tsv`; before a send it moves
  * whole to `outbox-<time>-<n>.tsv` and appending goes on into a new pending file, so sending and receiving do not get
  * in each other's way. An outbox file is deleted only when the Data Layer accepted all its batches ([done]); a failed
- * send leaves it to go first next time (the phone drops repeats by kind and time). Over [maxBytes] the oldest outbox
+ * send leaves it to go first next time, under new batch numbers (the phone drops rows equal in every field to ones it
+ * has; rules in [ModHealthBatch.Sample]). Over [maxBytes] the oldest outbox
  * files are dropped ([trim]).
  */
 class SampleBuffer(private val dir: File, private val maxBytes: Long = HealthConfig.BUFFER_MAX_BYTES) {

@@ -27,6 +27,15 @@ class WatchTickerTest {
     }
 
     @Test
+    fun onlyTheLongWaitCarriesTheTagTheStartReadsBack() {
+        assertTrue(WatchTickWorker.TAG_LONG in WatchTickWorker.request(WatchTickWorker.NO_WATCH_PERIOD_MS).tags)
+        assertFalse(WatchTickWorker.TAG_LONG in WatchTickWorker.request(WatchTickWorker.PERIOD_MS).tags)
+        // and what WorkManager reports back with that tag reads as "waits long"
+        assertEquals(true, WatchTickWorker.waitsLong(listOf(State.ENQUEUED to
+            WatchTickWorker.request(WatchTickWorker.NO_WATCH_PERIOD_MS).tags)))
+    }
+
+    @Test
     fun aBatteryMoveOfFivePointsSendsAnExtraTick() {
         val longAgo = now - 10 * minute
         assertTrue(WatchTicker.shouldSendForBattery(55, 60, now, longAgo))

@@ -102,7 +102,8 @@ class WatchTickWorker(context: Context, params: WorkerParameters) : Worker(conte
             WorkManager.getInstance(context).enqueueUniqueWork(WORK, ExistingWorkPolicy.REPLACE, request(PERIOD_MS))
         }
 
-        private fun request(delayMs: Long): OneTimeWorkRequest {
+        /** One step of the chain; the long wait carries [TAG_LONG] (a test holds it, critic of part 2, N2-3). */
+        internal fun request(delayMs: Long): OneTimeWorkRequest {
             val builder = OneTimeWorkRequestBuilder<WatchTickWorker>().setInitialDelay(delayMs, TimeUnit.MILLISECONDS)
             if (delayMs == NO_WATCH_PERIOD_MS) builder.addTag(TAG_LONG)
             return builder.build()

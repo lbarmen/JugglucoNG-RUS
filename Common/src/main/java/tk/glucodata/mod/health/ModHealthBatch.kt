@@ -30,9 +30,15 @@ data class ModHealthBatch(
      * `key=value;...` (app version, sdk, permissions, subscription, ages of the last delivery; never heart rate or
      * steps).
      *
-     * Rules for the phone (part 5): two [KIND_HR5] rows with the same start are one window - readings that came after
-     * the watch closed it (counted in the status as `late=`); merge them by their counts, mean = (m1*n1 + m2*n2) /
-     * (n1 + n2), min and max of both. Step totals go into steps between readings by [stepsDelta].
+     * Rules for the phone (part 5), one for every kind:
+     * - a batch already taken (the same [seq] **and** [sentAtMs] - the watch numbers again from 1 after a reinstall) is
+     *   dropped whole before its rows are read;
+     * - a row equal to one already taken in every field (kind, time, value, extra) is a repeat - an outbox file sent
+     *   again after a failed send goes out under new batch numbers - and is dropped;
+     * - two [KIND_HR5] rows with the same start but other numbers are one window: the second holds readings that came
+     *   after the watch closed it (counted in the status as `late=`); they are merged by their counts ([mergeHr5]:
+     *   mean = (m1*n1 + m2*n2) / (n1 + n2), min and max of both). Other kinds keep the first row of a time.
+     * Step totals go into steps between readings by [stepsDelta].
      */
     data class Sample(val kind: String, val timeMs: Long, val value: Float, val extra: String = "") {
         /** About how many bytes this row takes in a batch (the same estimate Glucove cut its batches by). */
@@ -171,7 +177,41 @@ data class ModHealthBatch(
          */
         fun stepsDelta(previous: StepsTotal, current: StepsTotal): Double =
             (if (isNewDay(previous, current)) current.total else current.total - previous.total).coerceAtLeast(0.0)
+
+        /** The extra of a [KIND_HR5] row: `n=<count>;min=<bpm>;max=<bpm>` (the watch builds it, the phone reads it). */
+        fun hr5Extra(n: Int, min: Int, max: Int): String = "n=$n;min=$min;max=$max"
+
+        /** The counts of a [KIND_HR5] extra; `null` when `n` is missing or not above 0, or min/max are missing. */
+        fun parseHr5Extra(extra: String?): Hr5? {
+            if (extra.isNullOrEmpty()) return null
+            val fields = extra.split(';').mapNotNull { part ->
+                val eq = part.indexOf('=')
+                if (eq <= 0) null else part.substring(0, eq).trim() to part.substring(eq + 1).trim()
+            }.toMap()
+            val n = fields["n"]?.toIntOrNull()?.takeIf { it > 0 } ?: return null
+            val min = fields["min"]?.toIntOrNull() ?: return null
+            val max = fields["max"]?.toIntOrNull() ?: return null
+            return Hr5(n, min, max)
+        }
+
+        /**
+         * One window from two [KIND_HR5] rows of the same start ([a] taken first, [b] the late readings): the mean
+         * weighted by the counts, the counts added, min and max of both. `null` when they are not two such rows or an
+         * extra cannot be read (the caller keeps [a]).
+         */
+        fun mergeHr5(a: Sample, b: Sample): Sample? {
+            if (a.kind != KIND_HR5 || b.kind != KIND_HR5 || a.timeMs != b.timeMs) return null
+            val x = parseHr5Extra(a.extra) ?: return null
+            val y = parseHr5Extra(b.extra) ?: return null
+            if (!a.value.isFinite() || !b.value.isFinite()) return null
+            val n = x.n + y.n
+            val mean = (a.value.toDouble() * x.n + b.value.toDouble() * y.n) / n
+            return Sample(KIND_HR5, a.timeMs, mean.toFloat(), hr5Extra(n, minOf(x.min, y.min), maxOf(x.max, y.max)))
+        }
     }
+
+    /** The counts of one 5-minute heart rate window: readings, lowest and highest beats per minute. */
+    data class Hr5(val n: Int, val min: Int, val max: Int)
 
     /** A day total of steps: when ([atMs]), how many since the day start ([total]), that start (`null` - unknown). */
     data class StepsTotal(val atMs: Long, val total: Double, val dayStartMs: Long?) {

@@ -52,7 +52,7 @@ class HrAggregator(private val windowMs: Long = HealthConfig.HR_WINDOW_MS) {
         while (iterator.hasNext()) {
             val b = iterator.next().value
             if (b.start + windowMs > nowMs - graceMs) break
-            val extra = "n=${b.count};min=${b.min.roundToInt()};max=${b.max.roundToInt()}"
+            val extra = ModHealthBatch.hr5Extra(b.count, b.min.roundToInt(), b.max.roundToInt())
             out += Sample(ModHealthBatch.KIND_HR5, b.start, (b.sum / b.count).toFloat(), extra)
             closedUntil = maxOf(closedUntil, b.start + windowMs)
             iterator.remove()

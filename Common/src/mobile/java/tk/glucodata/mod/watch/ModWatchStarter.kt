@@ -15,7 +15,9 @@ import android.os.Looper
  * battery receiver ([WatchTicker.registerBatteryReceiver], for the life of the process) and never throws. The start
  * tick and the cycle ([WatchTicker.onAppStart]) are posted to the main thread and run on our own thread from there:
  * upstream has no androidx.startup provider, WorkManager comes up lazily from their Applic.getWorkManagerConfiguration,
- * and touching it here would open its database on the main thread before their Application.onCreate.
+ * and touching it here would open its database on the main thread before their Application.onCreate. Part 5 adds,
+ * from the same post, the drain of heart rate and steps batches left in the Data Layer ([ModWatchStore.drainAsync])
+ * and the shortcut of the check screen ([ModWatchShortcut]).
  */
 class ModWatchStarter : ContentProvider() {
 
@@ -33,6 +35,10 @@ class ModWatchStarter : ContentProvider() {
                 } catch (t: Throwable) {
                     ModWatchLog.w("watch start failed: ${t.javaClass.simpleName}")
                 }
+                // part 5: batches the listener did not get to, and the launcher shortcut of the check screen - both
+                // on our own thread (database, Data Layer, shortcut service)
+                ModWatchStore.drainAsync(app)
+                ModWatchShortcut.publishAsync(app)
             }
         } catch (_: Throwable) {
             // our code must not take upstream's app down

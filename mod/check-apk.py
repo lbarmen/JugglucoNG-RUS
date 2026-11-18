@@ -39,6 +39,9 @@ MOD_WEAR_PERMISSIONS = ['android.permission.BODY_SENSORS', 'android.permission.B
                         'android.permission.ACTIVITY_RECOGNITION', 'android.permission.RECEIVE_BOOT_COMPLETED']
 # Upstream's watch minSdk: Health Services (minSdk 30) is overridden in our manifest, never raises it.
 UPSTREAM_WEAR_MIN_SDK = '26'
+# Our phone components of the watch block (declared in Common/src/mobileMod/AndroidManifest.xml, watch parts 1, 2, 5).
+MOD_PHONE_COMPONENTS = ['tk.glucodata.mod.watch.ModPhoneListener', 'tk.glucodata.mod.watch.ModWatchStarter',
+                        'tk.glucodata.mod.watch.ModWatchActivity']
 # Our face's editor action (watch part 3c): the face's wearableConfigurationAction and our editor's intent filter.
 MOD_WATCHFACE_EDITOR_ACTION = 'tk.glucodata.mod.watch.face.SETTINGS'
 # Must match packagingOptions.jniLibs.excludes in upstream Common/build.gradle.
@@ -244,6 +247,26 @@ def check_wear_components(apk):
     check_wear_health(apk, out)
 
 
+def check_phone_components(apk):
+    """Our phone watch-block components (watch part 5, joints critic N2): the Data Layer listener with the snooze
+    messages, the watch-app capability and the heart rate and steps batches (DATA_CHANGED on /mod/health/batch/),
+    the private starter and the check screen, not exported (opened by our dynamic shortcut)."""
+    out = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+    blocks = component_blocks(out)
+    missing = [c for c in MOD_PHONE_COMPONENTS if c not in blocks]
+    check(not missing, f'phone APK declares our {len(MOD_PHONE_COMPONENTS)} watch components'
+          + (f' (missing: {missing})' if missing else ''))
+    listener = blocks.get('tk.glucodata.mod.watch.ModPhoneListener', '')
+    check('com.google.android.gms.wearable.MESSAGE_RECEIVED' in listener
+          and 'com.google.android.gms.wearable.DATA_CHANGED' in listener and '="/mod/health/batch/"' in listener,
+          'phone listener: /mod/ messages and DATA_CHANGED of /mod/health/batch/')
+    screen = blocks.get('tk.glucodata.mod.watch.ModWatchActivity', '')
+    check(re.search(r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b', screen) is not None,
+          'phone watch screen: not exported')
+    starter = blocks.get('tk.glucodata.mod.watch.ModWatchStarter', '')
+    check(re.search(r'exported\([^)]*\)=(?:false|\(type 0x12\)0x0)\b', starter) is not None, 'phone watch starter: not exported')
+
+
 def component_blocks(xmltree):
     """Each activity/service/receiver/provider element of an `aapt2 dump xmltree` manifest, by its name."""
     blocks = {}
@@ -430,6 +453,7 @@ def main():
     check_native()
     check_watchface_name(a.wear)
     check_wear_components(a.wear)
+    check_phone_components(a.phone)
     check_watchface_resources(a.wear)
     check_xml_drawable_constructors(a.wear)
     if not a.no_vendor:

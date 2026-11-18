@@ -1,7 +1,6 @@
 package tk.glucodata.mod.health
 
 import android.content.Context
-import android.os.Looper
 import java.util.concurrent.Callable
 import java.util.concurrent.Future
 import tk.glucodata.mod.watch.ModWatchLog
@@ -18,8 +17,10 @@ import tk.glucodata.mod.watch.ModWatchLog
 object HealthHandOver {
 
     /**
-     * A tick that passed the filter. On a background thread (our Data Layer listener) it runs right there, so the
-     * listener callback lasts until the batch is handed to the Data Layer; on the main thread it goes to our thread.
+     * A tick that passed the filter: always on our own thread ([HealthCore.executor]), never on the Data Layer
+     * listener's - the flush, the subscription check and the sends take up to half a minute, and the phone's
+     * "snoozed" answer comes through the same listener thread (joints critic, C4). The deliveries the hand-over waits
+     * for are still written on Health Services' own callback thread, never queued here ([HealthIntake]).
      */
     fun onTick(context: Context) {
         val source = HealthSources.current ?: return
@@ -42,7 +43,7 @@ object HealthHandOver {
         }
     }
 
-    /** [run] on [HealthCore.executor], as the button and a main-thread tick do (tests wait on the result). */
+    /** [run] on [HealthCore.executor], as the button and a tick do (tests wait on the result). */
     fun submit(
         core: HealthCore,
         source: HealthSource,
@@ -54,11 +55,7 @@ object HealthHandOver {
     private fun start(context: Context, source: HealthSource, forceStatus: Boolean) {
         try {
             val app = context.applicationContext ?: context
-            if (Looper.myLooper() == Looper.getMainLooper()) {
-                HealthCore.executor.execute { safeRun(app, source, forceStatus) }
-            } else {
-                safeRun(app, source, forceStatus)
-            }
+            HealthCore.executor.execute { safeRun(app, source, forceStatus) }
         } catch (t: Throwable) {
             ModWatchLog.w("health hand-over failed: ${t.javaClass.simpleName}")
         }

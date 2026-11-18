@@ -2,6 +2,7 @@ package tk.glucodata.mod.watch
 
 import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.CapabilityInfo
+import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
@@ -23,6 +24,22 @@ import tk.glucodata.MessageSender
  * freshly installed watch would wait up to an hour for its first tick.
  */
 class ModPhoneListener : WearableListenerService() {
+
+    /**
+     * DATA_CHANGED of `/mod/health/batch/<seq>` (part 5, filter in the same manifest): heart rate and steps batches.
+     * Only copied here (`freeze()` - the buffer closes when this returns) and handed to our own thread
+     * ([ModWatchStore]); deleted items (after our own delete) are skipped. Taken even with upstream's companion switch
+     * off - our own channel, see [ModWatchStore].
+     */
+    override fun onDataChanged(dataEvents: DataEventBuffer) {
+        try {
+            val items = dataEvents.filter { ModWatchIntake.wanted(it.type, it.dataItem.uri.path) }
+                .map { it.dataItem.freeze() }
+            ModWatchStore.receiveAsync(applicationContext, items)
+        } catch (t: Throwable) {
+            ModWatchLog.w("phone listener: data failed: ${t.javaClass.simpleName}")
+        }
+    }
 
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
         try {
