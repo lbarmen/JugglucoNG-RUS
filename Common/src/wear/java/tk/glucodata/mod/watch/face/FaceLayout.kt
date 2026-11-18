@@ -1,0 +1,121 @@
+package tk.glucodata.mod.watch.face
+
+import kotlin.math.abs
+import kotlin.math.min
+import kotlin.math.sqrt
+
+/**
+ * JugglucoNGmod, watch block (part 3a): where the face's rows sit on a round screen, without a Canvas (the sketch in
+ * the watch plan, "Watch face"):
+ * ```
+ *            14:35            time
+ *          Tue 17 Nov         date
+ *      6.4 ↗   +0.3           value, arrow, change over age
+ *              2 min
+ *   ┌────────────────────┐
+ *   │ - - - - - - - 10.0 │    graph with the target range lines
+ *   │ - - - - - - -  3.9 │
+ *   └────────────────────┘
+ *     phone 64%  watch 81%    batteries
+ * ```
+ * Every share is of the screen's diameter (the smaller side, centred); a row is as wide as the circle allows at its
+ * edge farther from the centre, less a margin, so nothing reaches the round edge on any size.
+ */
+object FaceLayout {
+
+    /** Top and bottom of each row, shares of the diameter from the top. */
+    private const val TIME_TOP = 0.10f
+    private const val TIME_BOTTOM = 0.22f
+    private const val DATE_TOP = 0.235f
+    private const val DATE_BOTTOM = 0.295f
+    private const val VALUE_TOP = 0.32f
+    private const val VALUE_BOTTOM = 0.47f
+    private const val GRAPH_TOP = 0.50f
+    private const val GRAPH_BOTTOM = 0.73f
+    private const val BATTERY_TOP = 0.76f
+    private const val BATTERY_BOTTOM = 0.81f
+
+    /** Text sizes, shares of the diameter. */
+    private const val TIME_TEXT = 0.12f
+    private const val DATE_TEXT = 0.06f
+    private const val VALUE_TEXT = 0.15f
+    private const val ARROW = 0.09f
+    private const val SIDE_TEXT = 0.065f
+    private const val GRAPH_LABEL_TEXT = 0.045f
+    private const val BATTERY_TEXT = 0.045f
+
+    /** Space kept from the round edge on each side, share of the diameter. */
+    const val MARGIN = 0.04f
+
+    /**
+     * A generous average glyph width, share of the text size, for checking that a text fits without measuring it
+     * (digits and letters of the face's fonts are narrower); the renderer measures for real.
+     */
+    const val CHAR_WIDTH = 0.6f
+
+    /** One row in pixels: its box and its text size. */
+    data class Row(val left: Float, val top: Float, val right: Float, val bottom: Float, val textSize: Float) {
+        val width: Float get() = right - left
+        val height: Float get() = bottom - top
+        val centerX: Float get() = (left + right) / 2f
+    }
+
+    /**
+     * The face on a [widthPx] x [heightPx] screen: the rows top to bottom; in the value row the number takes
+     * [Row.textSize], the arrow [arrowSize] and the change and age, one over the other, [sideTextSize].
+     */
+    data class Layout(
+        val centerX: Float,
+        val centerY: Float,
+        val radius: Float,
+        val time: Row,
+        val date: Row,
+        val value: Row,
+        val arrowSize: Float,
+        val sideTextSize: Float,
+        val graph: Row,
+        val graphLabelSize: Float,
+        val battery: Row,
+    ) {
+        val rows: List<Row> get() = listOf(time, date, value, graph, battery)
+    }
+
+    fun compute(widthPx: Int, heightPx: Int): Layout {
+        val size = min(widthPx, heightPx).toFloat().coerceAtLeast(1f)
+        val left = (widthPx - size) / 2f
+        val top = (heightPx - size) / 2f
+        fun row(rowTop: Float, rowBottom: Float, text: Float): Row {
+            // The edge farther from the centre is the narrower one.
+            val far = maxOf(abs(rowTop - 0.5f), abs(rowBottom - 0.5f))
+            val half = (sqrt((0.25f - far * far).coerceAtLeast(0f)) - MARGIN).coerceAtLeast(0f)
+            return Row(left + (0.5f - half) * size, top + rowTop * size, left + (0.5f + half) * size,
+                top + rowBottom * size, text * size)
+        }
+        return Layout(
+            centerX = left + size / 2f,
+            centerY = top + size / 2f,
+            radius = size / 2f,
+            time = row(TIME_TOP, TIME_BOTTOM, TIME_TEXT),
+            date = row(DATE_TOP, DATE_BOTTOM, DATE_TEXT),
+            value = row(VALUE_TOP, VALUE_BOTTOM, VALUE_TEXT),
+            arrowSize = ARROW * size,
+            sideTextSize = SIDE_TEXT * size,
+            graph = row(GRAPH_TOP, GRAPH_BOTTOM, GRAPH_LABEL_TEXT),
+            graphLabelSize = GRAPH_LABEL_TEXT * size,
+            battery = row(BATTERY_TOP, BATTERY_BOTTOM, BATTERY_TEXT),
+        )
+    }
+
+    /** A width estimate for [text] at [textSize] (see [CHAR_WIDTH]). */
+    fun estimatedWidth(text: String, textSize: Float): Float = text.length * CHAR_WIDTH * textSize
+
+    /**
+     * The value row's content width estimate: the number, the arrow and the wider of change and age, with the
+     * gaps the renderer leaves between them.
+     */
+    fun valueRowWidth(layout: Layout, valueText: String, deltaText: String, ageText: String): Float {
+        val gap = layout.radius * 0.04f
+        return estimatedWidth(valueText, layout.value.textSize) + gap + layout.arrowSize + gap +
+            maxOf(estimatedWidth(deltaText, layout.sideTextSize), estimatedWidth(ageText, layout.sideTextSize))
+    }
+}
