@@ -11,6 +11,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -18,7 +19,6 @@ import org.junit.Test
 import tk.glucodata.mod.watch.face.FaceGraph
 import tk.glucodata.mod.watch.face.FaceLayout
 import tk.glucodata.mod.watch.face.FacePoint
-import tk.glucodata.mod.watch.face.FaceSettingsActivity
 import tk.glucodata.mod.watch.face.FaceStyle
 import tk.glucodata.mod.watch.face.ModFaceRenderer
 import tk.glucodata.mod.watch.face.ReadPause
@@ -285,20 +285,18 @@ class FaceHoursAndRangeTest {
     }
 
     @Test
-    fun theManifestCarriesTheEditorActionForTheFaceAndTheEditor() {
+    fun theFaceHasNoEditorActionAndTheEditorIsAnAppEntry() {
         val manifest = listOf(File("src/wearMod/AndroidManifest.xml"), File("Common/src/wearMod/AndroidManifest.xml"))
             .first { it.isFile }.readText()
-        val action = FaceSettingsActivity.ACTION
         val face = Regex("""<service\s+android:name="tk\.glucodata\.mod\.watch\.face\.ModWatchFaceService"[\s\S]*?</service>""")
             .find(manifest)?.value.orEmpty()
-        assertTrue(face, Regex("""wearableConfigurationAction"\s+android:value="${Regex.escape(action)}"""")
-            .containsMatchIn(face))
+        assertTrue(face, face.contains("android.service.wallpaper.WallpaperService"))
+        // Wear OS leaves a face whose wearableConfigurationAction is not upstream's WATCH_FACE_EDITOR out of the
+        // picker (watch, 18.11.2026), and upstream's action would open their WatchFaceConfigActivity: none at all
+        assertFalse(face, face.contains("wearableConfigurationAction"))
         val editor = Regex("""<activity\s+android:name="tk\.glucodata\.mod\.watch\.face\.FaceSettingsActivity"[\s\S]*?</activity>""")
             .find(manifest)?.value.orEmpty()
-        assertTrue(editor, editor.contains("<action android:name=\"$action\" />"))
         assertTrue(editor, editor.contains("android.intent.category.LAUNCHER"))
-        // upstream's editor action would open their WatchFaceConfigActivity for our face
-        assertTrue(!action.contains("WATCH_FACE_EDITOR") && !face.contains("WATCH_FACE_EDITOR") &&
-            !editor.contains("WATCH_FACE_EDITOR"))
+        assertFalse(editor, editor.contains("WEARABLE_CONFIGURATION") || editor.contains("WATCH_FACE_EDITOR"))
     }
 }
