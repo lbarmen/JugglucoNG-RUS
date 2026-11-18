@@ -1,0 +1,72 @@
+package tk.glucodata.mod.health
+
+import android.content.Context
+import android.content.SharedPreferences
+import kotlin.properties.ReadWriteProperty
+import kotlin.reflect.KProperty
+
+/**
+ * JugglucoNGmod, watch block (part 4): what heart rate and steps collection keeps between runs of the watch process,
+ * in our own preferences file [PREFS] (not upstream's settings): the batch number, when a batch went, when data came,
+ * the open heart rate windows, what the last status and battery rows said. Times are watch times (ms of the epoch).
+ */
+class HealthState(context: Context) {
+
+    private val prefs: SharedPreferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /** The next batch number, written at once (commit) so a number never repeats after a crash. */
+    fun nextSeq(): Long = synchronized(seqLock) {
+        val next = prefs.getLong(KEY_SEQ, 0L) + 1
+        prefs.edit().putLong(KEY_SEQ, next).commit()
+        next
+    }
+
+    /** The last batch number given out (0 - none yet). */
+    val seq: Long get() = prefs.getLong(KEY_SEQ, 0L)
+
+    /** When a batch last went into the Data Layer / when a send was last tried (also by a tick that is under way). */
+    var lastSentAt by long("lastSentAt")
+    var lastAttemptAt by long("lastAttemptAt")
+
+    /** When the source last delivered data (the source's "silent for 15 min" check reads it, part 4b). */
+    var lastDataAt by long("lastDataAt")
+
+    /** Open 5-minute heart rate windows ([HrAggregator.encode]). */
+    var hrBuckets by string("hrBuckets")
+
+    /** When the last status row went and its permanent part (without ages) - the next goes on a change or after 30 min. */
+    var lastStatusAt by long("lastStatusAt")
+    var lastStatusStable by string("lastStatusStable")
+
+    /** The last battery row (-1 - none yet): a new row only when it changes. */
+    var lastBattery by int("lastBattery", -1)
+    var lastCharging by boolean("lastCharging")
+
+    /** Class of the last send failure, empty after a good send. */
+    var lastError by string("lastError")
+
+    private fun long(key: String) = pref({ prefs.getLong(key, 0L) }) { putLong(key, it) }
+
+    private fun int(key: String, default: Int) = pref({ prefs.getInt(key, default) }) { putInt(key, it) }
+
+    private fun boolean(key: String) = pref({ prefs.getBoolean(key, false) }) { putBoolean(key, it) }
+
+    private fun string(key: String) = pref({ prefs.getString(key, "").orEmpty() }) { putString(key, it) }
+
+    private fun <T> pref(read: () -> T, write: SharedPreferences.Editor.(T) -> Unit) =
+        object : ReadWriteProperty<Any?, T> {
+            override fun getValue(thisRef: Any?, property: KProperty<*>): T = read()
+
+            override fun setValue(thisRef: Any?, property: KProperty<*>, value: T) {
+                prefs.edit().apply { write(value) }.apply()
+            }
+        }
+
+    companion object {
+        /** Our preferences file for heart rate and steps on the watch (part 4). */
+        const val PREFS = "mod_health"
+
+        private const val KEY_SEQ = "seq"
+        private val seqLock = Any()
+    }
+}

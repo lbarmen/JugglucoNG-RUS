@@ -1,0 +1,63 @@
+package tk.glucodata.mod.health
+
+import android.content.Context
+import tk.glucodata.mod.health.ModHealthBatch.Sample
+import tk.glucodata.mod.watch.ModWatchLog
+
+/**
+ * JugglucoNGmod, watch block (part 4): data from the source ([HealthSource], Health Services in part 4b) into the
+ * queue. Heart rate goes into 5-minute means ([HrAggregator]); the day's step count goes as it is - the phone counts
+ * the differences of totals within one day (part 5, [ModHealthBatch.isNewDay]). After a delivery a batch goes by
+ * itself only when none went for [HealthConfig.SEND_PERIOD_MS] - the 5-minute rhythm is the phone's `/mod/tick`.
+ */
+object HealthIntake {
+
+    /** One heart rate reading at watch time [timeMs]; [noContact] - the sensor said it had no skin contact. */
+    data class HeartRate(val timeMs: Long, val bpm: Float, val noContact: Boolean = false)
+
+    /** The step count [steps] since [dayStartMs] up to [endMs] (watch times). */
+    data class StepsDay(val endMs: Long, val steps: Long, val dayStartMs: Long)
+
+    /**
+     * Entry point of the source: queues [heartRate] and [steps] on our background thread and sends if due. Never
+     * throws; may be called on any thread.
+     */
+    fun deliver(context: Context, heartRate: List<HeartRate>, steps: List<StepsDay>) {
+        if (heartRate.isEmpty() && steps.isEmpty()) return
+        try {
+            val core = HealthCore.get(context)
+            HealthCore.executor.execute {
+                try {
+                    val now = core.clock()
+                    deliverNow(core, heartRate, steps, now)
+                    HealthSender.sendIfDue(core, HealthSources.current, HealthSender.dataClient(core.context), now)
+                } catch (t: Throwable) {
+                    ModWatchLog.w("health delivery failed: ${t.javaClass.simpleName}")
+                }
+            }
+        } catch (t: Throwable) {
+            ModWatchLog.w("health delivery not queued: ${t.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Queues one delivery received at [nowMs]: heart rate into the means (windows ended 2 minutes ago close), valid step
+     * counts as they are. Returns how many rows went to the queue now.
+     */
+    fun deliverNow(core: HealthCore, heartRate: List<HeartRate>, steps: List<StepsDay>, nowMs: Long): Int {
+        if (heartRate.isEmpty() && steps.isEmpty()) return 0
+        core.state.lastDataAt = nowMs
+        val means = core.addHeartRate(heartRate, nowMs, HealthConfig.HR_GRACE_DATA_MS)
+        val stepRows = steps.mapNotNull { stepsRow(it) }
+        core.buffer.append(stepRows)
+        core.signalData()
+        ModWatchLog.i("health data hr=${heartRate.size} hr5=$means steps=${stepRows.size}")
+        return means + stepRows.size
+    }
+
+    /** The queue row of a step count; `null` when it is broken (negative, or ending before its day starts). */
+    fun stepsRow(s: StepsDay): Sample? {
+        if (s.steps < 0 || s.dayStartMs < 0 || s.endMs < s.dayStartMs) return null
+        return Sample(ModHealthBatch.KIND_STEPS_DAY, s.endMs, s.steps.toFloat(), s.dayStartMs.toString())
+    }
+}

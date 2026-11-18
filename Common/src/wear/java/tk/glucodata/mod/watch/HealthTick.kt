@@ -1,6 +1,7 @@
 package tk.glucodata.mod.watch
 
 import android.content.Context
+import tk.glucodata.mod.health.HealthHandOver
 
 /**
  * JugglucoNGmod, watch block (part 2): what a `/mod/tick` from the phone wakes for heart rate and steps. Part 4
@@ -28,8 +29,15 @@ object HealthTick {
     /** No tick went through yet, or the last one ([lastMs]) is [MIN_GAP_MS] or more ago (a clock set back too). */
     fun shouldRun(nowMs: Long, lastMs: Long?): Boolean = lastMs == null || nowMs - lastMs !in 0 until MIN_GAP_MS
 
-    /** Part 4: hand the collected heart rate and steps to the phone. Nothing yet. */
-    @Suppress("UNUSED_PARAMETER")
+    /**
+     * Part 4: hand the collected heart rate and steps to the phone ([HealthHandOver]: flush the source, wait for its
+     * data, close the heart rate windows, send). Nothing when no source is registered. Never throws.
+     */
     fun onTickForHealth(context: Context) {
+        try {
+            HealthHandOver.onTick(context)
+        } catch (t: Throwable) {
+            ModWatchLog.w("health tick failed: ${t.javaClass.simpleName}")
+        }
     }
 }
