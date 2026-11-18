@@ -1,6 +1,7 @@
 package tk.glucodata.mod.watch
 
 import com.google.android.gms.tasks.Tasks
+import com.google.android.gms.wearable.CapabilityInfo
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.Wearable
 import com.google.android.gms.wearable.WearableListenerService
@@ -16,8 +17,21 @@ import tk.glucodata.MessageSender
  * `/mod/snooze/done` goes back to the same watch - "snoozed kind N", "no alert" or "late". A repeated message is
  * harmless: upstream's action times drop a second acknowledgement. Ignored, like upstream's own receiver does, while the user
  * has the watch companion switched off on the phone. Paths of later parts are ignored until they are added here.
+ *
+ * CAPABILITY_CHANGED of the watch app's capability (part 2, filter in the same manifest): our watch app became
+ * reachable - an extra `/mod/tick` and the tick cycle back to every 5 minutes ([WatchTicker.onWatchAppeared]), or a
+ * freshly installed watch would wait up to an hour for its first tick.
  */
 class ModPhoneListener : WearableListenerService() {
+
+    override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
+        try {
+            if (capabilityInfo.name != ModWatchMessages.CAPABILITY_WATCH || capabilityInfo.nodes.isEmpty()) return
+            WatchTicker.onWatchAppeared(applicationContext, System.currentTimeMillis())
+        } catch (t: Throwable) {
+            ModWatchLog.w("phone listener: capability failed: ${t.javaClass.simpleName}")
+        }
+    }
 
     override fun onMessageReceived(messageEvent: MessageEvent) {
         try {

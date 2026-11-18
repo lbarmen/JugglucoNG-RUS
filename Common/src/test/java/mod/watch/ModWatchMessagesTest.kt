@@ -8,6 +8,7 @@ import org.junit.Test
 import tk.glucodata.mod.watch.ModWatchMessages
 import tk.glucodata.mod.watch.ModWatchMessages.SnoozeDone
 import tk.glucodata.mod.watch.ModWatchMessages.SnoozeRequest
+import tk.glucodata.mod.watch.ModWatchMessages.Tick
 
 /** JugglucoNGmod, watch block: the byte format of our phone-watch messages (runs in both test tasks). Made-up values. */
 class ModWatchMessagesTest {
@@ -110,7 +111,74 @@ class ModWatchMessagesTest {
             val bytes = ByteArray(random.nextInt(24)).also { random.nextBytes(it) }
             ModWatchMessages.decodeSnooze(bytes)
             ModWatchMessages.decodeSnoozeDone(bytes)
+            ModWatchMessages.decodeTick(bytes)
         }
+    }
+
+    @Test
+    fun tickRoundTripForEveryReasonAndBatteryState() {
+        val reasons = listOf(
+            ModWatchMessages.REASON_CYCLE, ModWatchMessages.REASON_BATTERY,
+            ModWatchMessages.REASON_START, ModWatchMessages.REASON_WATCH,
+        )
+        for (reason in reasons) {
+            for (tick in listOf(Tick(57, false, at, reason), Tick(0, true, at, reason), Tick(100, true, at, reason),
+                Tick(null, false, at, reason))) {
+                val bytes = ModWatchMessages.encodeTick(tick)
+                assertEquals(1 + 1 + 1 + 8 + 1, bytes.size)
+                assertEquals(ModWatchMessages.VERSION, bytes[0].toInt())
+                assertEquals(tick, ModWatchMessages.decodeTick(bytes))
+            }
+        }
+        assertEquals(4, reasons.toSet().size)
+    }
+
+    @Test
+    fun tickWireFormat() {
+        val bytes = ModWatchMessages.encodeTick(Tick(42, true, 0x0102030405060708L, ModWatchMessages.REASON_BATTERY))
+        assertArrayEquals(byteArrayOf(1, 42, 1, 1, 2, 3, 4, 5, 6, 7, 8, 2), bytes)
+        val unknown = ModWatchMessages.encodeTick(Tick(null, false, 0x0102030405060708L, ModWatchMessages.REASON_CYCLE))
+        assertArrayEquals(byteArrayOf(1, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 1), unknown)
+    }
+
+    @Test
+    fun aTickPercentOutOfRangeIsSentAsUnknown() {
+        for (percent in listOf(-5, 101, 255, Int.MAX_VALUE)) {
+            val bytes = ModWatchMessages.encodeTick(Tick(percent, false, at, ModWatchMessages.REASON_CYCLE))
+            assertEquals("percent $percent", Tick(null, false, at, ModWatchMessages.REASON_CYCLE),
+                ModWatchMessages.decodeTick(bytes))
+        }
+    }
+
+    @Test
+    fun anUnknownTickReasonIsKeptAsItIs() {
+        val bytes = ModWatchMessages.encodeTick(Tick(60, false, at, 200))
+        assertEquals(Tick(60, false, at, 200), ModWatchMessages.decodeTick(bytes))
+    }
+
+    @Test
+    fun brokenShortAndOtherVersionTicksAreNull() {
+        assertNull(ModWatchMessages.decodeTick(null))
+        assertNull(ModWatchMessages.decodeTick(ByteArray(0)))
+        val good = ModWatchMessages.encodeTick(Tick(60, true, at, ModWatchMessages.REASON_CYCLE))
+        for (n in 1 until good.size) assertNull("$n bytes", ModWatchMessages.decodeTick(good.copyOf(n)))
+        for (version in listOf(0, ModWatchMessages.VERSION + 1, 0xff)) {
+            assertNull("version $version", ModWatchMessages.decodeTick(good.copyOf().also { it[0] = version.toByte() }))
+        }
+        // percent past 100 or below "unknown", charging other than 0/1, a negative time
+        for (percent in listOf(101, 127, -2, -128)) {
+            assertNull("percent $percent", ModWatchMessages.decodeTick(good.copyOf().also { it[1] = percent.toByte() }))
+        }
+        for (charging in listOf(2, -1, 0x7f)) {
+            assertNull("charging $charging", ModWatchMessages.decodeTick(good.copyOf().also { it[2] = charging.toByte() }))
+        }
+        assertNull(ModWatchMessages.decodeTick(ModWatchMessages.encodeTick(Tick(60, true, -1, 1))))
+    }
+
+    @Test
+    fun anUnknownTickTailIsIgnored() {
+        val tick = Tick(33, false, at, ModWatchMessages.REASON_START)
+        assertEquals(tick, ModWatchMessages.decodeTick(ModWatchMessages.encodeTick(tick) + ByteArray(20) { 0x11 }))
     }
 
     @Test

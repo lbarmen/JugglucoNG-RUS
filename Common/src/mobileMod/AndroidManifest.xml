@@ -13,6 +13,17 @@
                 <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
                 <data android:host="*" android:pathPrefix="/mod/" android:scheme="wear" />
             </intent-filter>
+            <!-- our watch app (capability of upstream's wear/res/values/wear.xml) became reachable: tick at once -->
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.CAPABILITY_CHANGED" />
+                <data android:host="*" android:path="/jugglucowatch" android:scheme="wear" />
+            </intent-filter>
         </service>
+        <!-- Watch block starter: on every process start registers the battery receiver and posts the /mod/tick
+             cycle (WorkManager, after Application.onCreate). Not exported: nobody queries it. -->
+        <provider
+            android:name="tk.glucodata.mod.watch.ModWatchStarter"
+            android:authorities="${applicationId}.mod-watch"
+            android:exported="false" />
     </application>
 </manifest>

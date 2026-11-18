@@ -172,7 +172,7 @@ class SnoozeButtonTest {
         assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, null))
         val legacyKind = ModWatchMessages.encodeSnoozeDone(SnoozeDone(AlertType.AVAILABLE.id, pressedAt))
         assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_SNOOZE_DONE, legacyKind))
-        assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_TICK, valid))
+        assertFalse(ModWearListener.handle(context, ModWatchMessages.PATH_TICK, byteArrayOf(1, 2))) // ticks: PhoneBatteryStoreTest
         assertFalse(ModWearListener.handle(context, "/mod/unknown", valid))
         assertFalse(ModWearListener.handle(context, null, valid))
     }

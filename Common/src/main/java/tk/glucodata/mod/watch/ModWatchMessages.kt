@@ -26,7 +26,11 @@ object ModWatchMessages {
      * the phone did not get to it in time) and phone time (ms, long).
      */
     const val PATH_SNOOZE_DONE = "/mod/snooze/done"
-    /** Phone -> watch, every 5 minutes: wake-up and phone battery (body - part 2). */
+    /**
+     * Phone -> watch, every 5 minutes (and on a battery step, at start, when the watch appears): wake-up and phone
+     * battery. Body: battery percent (byte, 0-100 or [BATTERY_UNKNOWN]), charging (byte, 0/1), phone time (ms, long),
+     * reason (byte, [REASON_CYCLE] ...; a reason this code does not know is kept as it is).
+     */
     const val PATH_TICK = "/mod/tick"
     /** Watch -> phone (DataClient): heart rate and steps batches, `/mod/health/batch/<number>` (part 4). */
     const val PATH_HEALTH_BATCH_PREFIX = "/mod/health/batch/"
@@ -79,6 +83,45 @@ object ModWatchMessages {
             isStandardKind(kind) -> SnoozeDone(kind, at)
             else -> null
         }
+    }
+
+    /** Battery percent in a [Tick] when the phone could not read it. */
+    const val BATTERY_UNKNOWN = -1
+
+    /** [Tick] reasons: the 5-minute cycle, a battery step, the phone app's start, our watch appeared. */
+    const val REASON_CYCLE = 1
+    const val REASON_BATTERY = 2
+    const val REASON_START = 3
+    const val REASON_WATCH = 4
+
+    private const val TICK_BYTES = 1 + 1 + Long.SIZE_BYTES + 1
+
+    /**
+     * [batteryPercent] - phone battery 0-100, `null` when unknown; [charging] - the phone is charging (or full on the
+     * charger); [sentAtMs] - phone time; [reason] - one of the REASON_ codes (an unknown one is passed through).
+     */
+    data class Tick(val batteryPercent: Int?, val charging: Boolean, val sentAtMs: Long, val reason: Int)
+
+    fun encodeTick(tick: Tick): ByteArray {
+        val percent = tick.batteryPercent?.takeIf { it in 0..100 } ?: BATTERY_UNKNOWN
+        return allocate(TICK_BYTES)
+            .put(percent.toByte())
+            .put((if (tick.charging) 1 else 0).toByte())
+            .putLong(tick.sentAtMs)
+            .put(tick.reason.coerceIn(0, 0xff).toByte())
+            .array()
+    }
+
+    fun decodeTick(data: ByteArray?): Tick? {
+        val body = open(data, TICK_BYTES) ?: return null
+        val percent = body.get().toInt()
+        val charging = body.get().toInt()
+        val at = body.long
+        val reason = body.get().toInt() and 0xff
+        if (percent != BATTERY_UNKNOWN && percent !in 0..100) return null
+        if (charging != 0 && charging != 1) return null
+        if (at < 0) return null
+        return Tick(if (percent == BATTERY_UNKNOWN) null else percent, charging == 1, at, reason)
     }
 
     /** [kind] is one of the standard alert kinds a snooze can name. */
