@@ -1,6 +1,7 @@
 package mod.health
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.health.HealthConfig
@@ -59,6 +60,22 @@ class HrAggregatorTest {
         val s = b.close(nowMs = t0 + 6 * min, graceMs = 0).single()
         assertEquals(66f, s.value)
         assertEquals("n=3;min=64;max=68", s.extra)
+    }
+
+    @Test
+    fun readingForAClosedWindowIsLateAndGoesAsASecondRow() {
+        val a = HrAggregator()
+        assertFalse(a.add(t0 + 1_000, 60f))
+        assertEquals(1, a.close(nowMs = t0 + 7 * min, graceMs = HealthConfig.HR_GRACE_DATA_MS).size)
+        assertEquals(t0 + 5 * min, a.closedUntil)
+        assertTrue(a.add(t0 + 4 * min, 80f)) // late: its window went already
+        assertFalse(a.add(t0 + 5 * min, 70f)) // the next window is open
+        assertFalse(a.add(t0 + 4 * min, 0f)) // skipped readings are never late
+        val again = a.close(nowMs = t0 + 20 * min, graceMs = 0)
+        assertEquals(listOf(t0, t0 + 5 * min), again.map { it.timeMs }) // the phone merges the two t0 rows by n
+        assertEquals("n=1;min=80;max=80", again[0].extra)
+        // closedUntil survives a restart
+        assertTrue(HrAggregator.decode(a.encode(), a.closedUntil).add(t0 + 9 * min, 75f))
     }
 
     @Test

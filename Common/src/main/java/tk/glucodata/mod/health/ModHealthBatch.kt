@@ -29,6 +29,10 @@ data class ModHealthBatch(
      * [value] - watch battery percent, [extra] - [CHARGING] or empty. [KIND_STATUS]: [value] 0, [extra] -
      * `key=value;...` (app version, sdk, permissions, subscription, ages of the last delivery; never heart rate or
      * steps).
+     *
+     * Rules for the phone (part 5): two [KIND_HR5] rows with the same start are one window - readings that came after
+     * the watch closed it (counted in the status as `late=`); merge them by their counts, mean = (m1*n1 + m2*n2) /
+     * (n1 + n2), min and max of both. Step totals go into steps between readings by [stepsDelta].
      */
     data class Sample(val kind: String, val timeMs: Long, val value: Float, val extra: String = "") {
         /** About how many bytes this row takes in a batch (the same estimate Glucove cut its batches by). */
@@ -78,7 +82,7 @@ data class ModHealthBatch(
         /** Most bytes of rows in one batch (a Data Layer item holds 100 KB; half of it leaves room for the keys). */
         const val MAX_BYTES = 50_000
 
-        /** A day-start moving by more than this is a new day; less is the watch's own jitter of milliseconds. */
+        /** A day start moving by this or less is the watch's own jitter of milliseconds, never a new day ([isNewDay]). */
         const val NEW_DAY_SHIFT_MS = 60 * 60_000L
 
         fun path(seq: Long): String = ModWatchMessages.PATH_HEALTH_BATCH_PREFIX + seq
@@ -144,9 +148,37 @@ data class ModHealthBatch(
         }
 
         /**
-         * Two [KIND_STEPS_DAY] rows with day starts [previousStartMs] and [startMs] belong to different days: the start
-         * moved by more than [NEW_DAY_SHIFT_MS] (the phone counts differences of totals within one day, part 5).
+         * The [current] step total starts a new day after [previous] (the rule Glucove's phone ended with after review,
+         * `WatchBuckets.delta`). Both day starts known: the start moved by more than [NEW_DAY_SHIFT_MS] **and** either
+         * the new start is after the previous reading (a real midnight) or the total went down. A start that moved
+         * without a reset - a time zone change, or the watch working out its day start again, the new start before the
+         * previous reading and the total growing - is the same day. A start unknown on either side: a smaller total is
+         * a new day.
          */
-        fun isNewDay(previousStartMs: Long, startMs: Long): Boolean = abs(startMs - previousStartMs) > NEW_DAY_SHIFT_MS
+        fun isNewDay(previous: StepsTotal, current: StepsTotal): Boolean {
+            val a = previous.dayStartMs
+            val b = current.dayStartMs
+            return if (a != null && b != null) {
+                abs(b - a) > NEW_DAY_SHIFT_MS && (b > previous.atMs || current.total < previous.total)
+            } else {
+                current.total < previous.total
+            }
+        }
+
+        /**
+         * Steps between two neighbouring totals (part 5 counts them so): the whole [current] total on a new day
+         * ([isNewDay]), otherwise the difference; never negative (a total corrected down within a day gives 0).
+         */
+        fun stepsDelta(previous: StepsTotal, current: StepsTotal): Double =
+            (if (isNewDay(previous, current)) current.total else current.total - previous.total).coerceAtLeast(0.0)
+    }
+
+    /** A day total of steps: when ([atMs]), how many since the day start ([total]), that start (`null` - unknown). */
+    data class StepsTotal(val atMs: Long, val total: Double, val dayStartMs: Long?) {
+        companion object {
+            /** The total of a [KIND_STEPS_DAY] row; `null` for any other kind. */
+            fun of(sample: Sample): StepsTotal? =
+                if (sample.kind != KIND_STEPS_DAY) null else StepsTotal(sample.timeMs, sample.value.toDouble(), sample.extra.toLongOrNull())
+        }
     }
 }

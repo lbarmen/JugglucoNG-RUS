@@ -9,6 +9,7 @@ import org.junit.Test
 import tk.glucodata.mod.health.ModHealthBatch
 import tk.glucodata.mod.health.ModHealthBatch.Decoded
 import tk.glucodata.mod.health.ModHealthBatch.Sample
+import tk.glucodata.mod.health.ModHealthBatch.StepsTotal
 import tk.glucodata.mod.health.ModHealthDataMap
 
 /** JugglucoNGmod, watch block (part 4): the heart rate and steps batch format (runs in both test tasks). Made-up values. */
@@ -120,13 +121,78 @@ class ModHealthBatchTest {
         assertEquals(emptyList<List<Sample>>(), ModHealthBatch.chunks(emptyList()))
     }
 
+    // Step totals (rule ported from Glucove's phone, WatchBuckets.delta, with its tests). Made-up totals.
+    private val hour = 60 * minute
+    private val day1 = at - 10 * hour // the watch's day start
+    private val day2 = day1 + 24 * hour
+
+    private fun total(t: Long, steps: Double, start: Long?) = StepsTotal(t, steps, start)
+
     @Test
-    fun newDayIsADayStartShiftOfMoreThanAnHour() {
-        val dayStart = at - 10 * 60 * minute
-        assertFalse(ModHealthBatch.isNewDay(dayStart, dayStart + 7))
-        assertFalse(ModHealthBatch.isNewDay(dayStart, dayStart + 60 * minute))
-        assertTrue(ModHealthBatch.isNewDay(dayStart, dayStart + 60 * minute + 1))
-        assertTrue(ModHealthBatch.isNewDay(dayStart, dayStart + 24 * 60 * minute))
-        assertTrue(ModHealthBatch.isNewDay(dayStart, dayStart - 24 * 60 * minute))
+    fun sameDayIsTheDifferenceAndDayStartJitterIsNoNewDay() {
+        val a = total(at, 1000.0, day1)
+        val b = total(at + 2 * minute, 1100.0, day1 + 1)
+        val c = total(at + 4 * minute, 1150.0, day1 - 2)
+        assertFalse(ModHealthBatch.isNewDay(a, b))
+        assertEquals(100.0, ModHealthBatch.stepsDelta(a, b), 1e-9)
+        assertEquals(50.0, ModHealthBatch.stepsDelta(b, c), 1e-9)
+        assertFalse(ModHealthBatch.isNewDay(a, total(at + minute, 1001.0, day1 + hour))) // exactly an hour: jitter
+    }
+
+    @Test
+    fun realMidnightIsTheWholeTotal() {
+        val late = total(day2 - 2 * minute, 9930.0, day1)
+        val first = total(day2 + 3 * minute, 40.0, day2)
+        assertTrue(ModHealthBatch.isNewDay(late, first))
+        assertEquals(40.0, ModHealthBatch.stepsDelta(late, first), 1e-9)
+        // another day with a bigger total is not added as a difference
+        assertEquals(5000.0, ModHealthBatch.stepsDelta(total(day2 - minute, 3000.0, day1), total(day2 + 5 * minute, 5000.0, day2)), 1e-9)
+        // a late reading with the old start after midnight, then a smaller total: a new day (the total went down)
+        val lateAfterMidnight = total(day2 + 2 * minute, 9935.0, day1)
+        assertEquals(50.0, ModHealthBatch.stepsDelta(lateAfterMidnight, total(day2 + 7 * minute, 50.0, day2)), 1e-9)
+    }
+
+    @Test
+    fun dayStartShiftWithoutResetIsTheDifferenceNotTheWholeTotalAgain() {
+        // The watch worked its day start out again more than an hour later, but before the previous reading, and the
+        // total grows: the same day.
+        val prev = total(at, 5000.0, day1)
+        val cur = total(at + 3 * minute, 5200.0, day1 + 2 * hour)
+        assertFalse(ModHealthBatch.isNewDay(prev, cur))
+        assertEquals(200.0, ModHealthBatch.stepsDelta(prev, cur), 1e-9)
+    }
+
+    @Test
+    fun timeZoneChangeKeepsTheDay() {
+        // Flying west by 3 hours at 14:00: local midnight moves 3 hours later, still before the previous reading.
+        val beforeWest = total(day1 + 14 * hour, 6000.0, day1)
+        val afterWest = total(day1 + 14 * hour + 5 * minute, 6040.0, day1 + 3 * hour)
+        assertEquals(40.0, ModHealthBatch.stepsDelta(beforeWest, afterWest), 1e-9)
+        // Flying east by 5 hours: local midnight moves 5 hours earlier.
+        val afterEast = total(day1 + 14 * hour + 5 * minute, 6060.0, day1 - 5 * hour)
+        assertFalse(ModHealthBatch.isNewDay(beforeWest, afterEast))
+        assertEquals(60.0, ModHealthBatch.stepsDelta(beforeWest, afterEast), 1e-9)
+        // East late in the evening: the new local midnight is already past - the watch starts a new day from zero.
+        val evening = total(day1 + 22 * hour, 9000.0, day1)
+        val newDay = total(day1 + 22 * hour + 10 * minute, 120.0, day1 + 22 * hour + 5 * minute)
+        assertTrue(ModHealthBatch.isNewDay(evening, newDay))
+        assertEquals(120.0, ModHealthBatch.stepsDelta(evening, newDay), 1e-9)
+    }
+
+    @Test
+    fun correctionDownIsZeroAndUnknownStartFallsBackToSmallerTotal() {
+        val a = total(at, 7400.0, day1)
+        val b = total(at + 5 * minute, 7350.0, day1 + 1)
+        assertEquals(0.0, ModHealthBatch.stepsDelta(a, b), 1e-9)
+        assertEquals(150.0, ModHealthBatch.stepsDelta(b, total(at + 10 * minute, 7500.0, day1)), 1e-9)
+        assertEquals(7350.0, ModHealthBatch.stepsDelta(a.copy(dayStartMs = null), b.copy(dayStartMs = null)), 1e-9)
+        assertEquals(0.0, ModHealthBatch.stepsDelta(a.copy(dayStartMs = null), total(at + minute, -5.0, null)), 1e-9)
+    }
+
+    @Test
+    fun stepsTotalFromARow() {
+        assertEquals(total(at + 2 * minute, 4321.0, at - 10 * hour), StepsTotal.of(rows[1]))
+        assertNull(StepsTotal.of(rows[0]))
+        assertEquals(total(at, 12.0, null), StepsTotal.of(Sample(ModHealthBatch.KIND_STEPS_DAY, at, 12f, "")))
     }
 }

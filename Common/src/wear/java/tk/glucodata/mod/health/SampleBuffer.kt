@@ -24,11 +24,15 @@ class SampleBuffer(private val dir: File, private val maxBytes: Long = HealthCon
         }
     }
 
-    /** Moves what is pending to a new outbox file; returns all outbox files, oldest first. */
+    /**
+     * Moves what is pending to a new outbox file; returns all outbox files, oldest first. The name never sorts before
+     * an existing outbox file (above the newest one even when the clock went back), so [trim] drops the oldest data.
+     */
     fun takeOutbox(nowMs: Long): List<File> = synchronized(lock) {
         val current = pending
         if (current.exists() && current.length() > 0) {
-            val stamp = nowMs.coerceAtLeast(0).toString().padStart(13, '0')
+            val newest = outboxFiles().lastOrNull()?.name?.removePrefix(OUTBOX)?.substringBefore('-')?.toLongOrNull() ?: -1L
+            val stamp = maxOf(nowMs.coerceAtLeast(0), newest + 1).toString().padStart(13, '0')
             var n = 0
             var target = File(dir, "$OUTBOX$stamp-$n.tsv")
             while (target.exists()) target = File(dir, "$OUTBOX$stamp-${++n}.tsv")

@@ -5,6 +5,7 @@ import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (part 4): the one set of heart rate and steps objects of the watch process - the queue
@@ -21,7 +22,7 @@ class HealthCore(
     val buffer = SampleBuffer(dir)
 
     private val hrLock = Any()
-    private val hr: HrAggregator = HrAggregator.decode(state.hrBuckets)
+    private val hr: HrAggregator = HrAggregator.decode(state.hrBuckets, state.hrClosedUntil)
 
     private val eventLock = Object()
     private var events = 0L
@@ -30,18 +31,23 @@ class HealthCore(
     val openHeartRateWindows: Int get() = synchronized(hrLock) { hr.openCount }
 
     /**
-     * Adds heart rate readings and closes the windows ended [graceMs] before [nowMs]; the closed means go to the queue.
-     * Returns how many means were queued.
+     * Adds heart rate readings and closes the windows ended [graceMs] before [nowMs]; the closed means go to the queue
+     * first and only then leave the kept open windows (a crash in between repeats a mean - the phone drops it - instead
+     * of losing it). Readings for an already closed window are counted in [HealthState.hrLate]. Returns how many means
+     * were queued.
      */
-    fun addHeartRate(readings: List<HealthIntake.HeartRate>, nowMs: Long, graceMs: Long): Int {
-        val closed = synchronized(hrLock) {
-            readings.forEach { hr.add(it.timeMs, it.bpm, it.noContact) }
-            val out = hr.close(nowMs, graceMs)
-            state.hrBuckets = hr.encode()
-            out
-        }
+    fun addHeartRate(readings: List<HealthIntake.HeartRate>, nowMs: Long, graceMs: Long): Int = synchronized(hrLock) {
+        var late = 0
+        readings.forEach { if (hr.add(it.timeMs, it.bpm, it.noContact)) late++ }
+        val closed = hr.close(nowMs, graceMs)
         buffer.append(closed)
-        return closed.size
+        state.hrBuckets = hr.encode()
+        state.hrClosedUntil = hr.closedUntil
+        if (late > 0) {
+            state.hrLate = state.hrLate + late
+            ModWatchLog.w("health late hr=$late")
+        }
+        closed.size
     }
 
     /** Closes the heart rate windows ended [graceMs] before [nowMs] into the queue; returns how many. */
@@ -82,9 +88,18 @@ class HealthCore(
         @Volatile
         private var shared: HealthCore? = null
 
-        /** One background thread for deliveries and button sends (disk and Data Layer never on the main thread). */
+        /**
+         * One background thread for hand-overs and sends (disk and Data Layer never on the main thread). A hand-over
+         * waits here for the answer to its flush, so a delivery never queues behind it: deliveries are written on
+         * their own thread ([HealthIntake.deliver]) or, from the main thread, on [lightExecutor].
+         */
         val executor: ExecutorService by lazy {
             Executors.newSingleThreadExecutor { r -> Thread(r, "ModHealth").apply { isDaemon = true } }
+        }
+
+        /** Short disk work that must never wait behind a hand-over: deliveries from the main thread, page reads. */
+        val lightExecutor: ExecutorService by lazy {
+            Executors.newSingleThreadExecutor { r -> Thread(r, "ModHealthLight").apply { isDaemon = true } }
         }
 
         fun get(context: Context): HealthCore = shared ?: synchronized(this) {

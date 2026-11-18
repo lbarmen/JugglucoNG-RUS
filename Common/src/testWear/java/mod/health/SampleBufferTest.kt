@@ -88,6 +88,18 @@ class SampleBufferTest {
     }
 
     @Test
+    fun clockSetBackStillQueuesTheNewFileLastAndTrimDropsTheOldOne() {
+        val buffer = SampleBuffer(tmp.newFolder("q"), maxBytes = 80)
+        buffer.append(listOf(hr(1), hr(2)))
+        val first = buffer.takeOutbox(nowMs = 1_800_000_000_000L).single()
+        buffer.append(listOf(hr(3), hr(4)))
+        val files = buffer.takeOutbox(nowMs = 1_800_000_000_000L - 3_600_000L) // the clock went back an hour
+        assertEquals(listOf(hr(1), hr(2), hr(3), hr(4)), files.flatMap { buffer.read(it) })
+        assertEquals(1, buffer.trim())
+        assertFalse(first.exists())
+    }
+
+    @Test
     fun lineRoundTrip() {
         val samples = listOf(
             Sample(ModHealthBatch.KIND_HR5, 1_800_000_000_000L, 72.25f, "n=5;min=70;max=75"),

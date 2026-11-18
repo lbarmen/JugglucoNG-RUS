@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -256,7 +258,67 @@ class HealthFlowTest {
     fun noSourceNoHandOver() {
         HealthSources.current = null
         HealthHandOver.onTick(context) // nothing registered: returns at once, no Data Layer
-        HealthHandOver.sendNow(context)
+        assertFalse(HealthHandOver.sendNow(context))
         assertEquals(0L, HealthState(context).seq)
+    }
+
+    @Test
+    fun sendNowOnOurThreadGetsTheFlushAnswerThroughDeliverAtOnce() {
+        // Critic 4a, finding 1: the hand-over waits on HealthCore.executor; the answer to its flush comes through
+        // HealthIntake.deliver from Health Services' own thread and must not queue behind that wait.
+        val core = core()
+        val sink = FakeSink()
+        HealthIntake.deliver(core, listOf(HeartRate(t0 + minute, 60f)), emptyList()) { sink }
+        now = t0 + 5 * minute + HealthConfig.HR_GRACE_REFRESH_MS
+        val source = object : FakeSource() {
+            override fun flush(context: Context): Boolean {
+                super.flush(context)
+                Thread {
+                    Thread.sleep(100)
+                    HealthIntake.deliver(core, listOf(HeartRate(t0 + 4 * minute, 70f)), emptyList()) { sink }
+                }.start()
+                return true
+            }
+        }
+        val started = System.nanoTime()
+        val r = HealthHandOver.submit(core, source, sink, flushWaitMs = 5_000).get(10, TimeUnit.SECONDS)
+        val tookMs = (System.nanoTime() - started) / 1_000_000
+        HealthCore.executor.submit {}.get(10, TimeUnit.SECONDS) // the send queued by the delivery is done too
+        assertFalse(r.failed)
+        assertTrue("took $tookMs ms", tookMs < 3_000)
+        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 65f, "n=2;min=60;max=70")), sink.rows(ModHealthBatch.KIND_HR5))
+        assertEquals(0L, core.state.hrLate)
+    }
+
+    @Test
+    fun deliveryIsOnDiskBeforeItReturnsEvenWhileOurThreadIsBusy() {
+        // Critic 4a, finding 2: the service may be stopped right after its callback - the data must be written by then.
+        val core = core()
+        val gate = CountDownLatch(1)
+        HealthCore.executor.execute { gate.await(5, TimeUnit.SECONDS) }
+        try {
+            val worker = Thread {
+                HealthIntake.deliver(core, emptyList(), listOf(StepsDay(t0, 1234, t0 - 60 * minute))) { FakeSink() }
+            }
+            worker.start()
+            worker.join(5_000)
+            assertEquals(1, core.buffer.count())
+            assertEquals(1L, core.dataEvents())
+        } finally {
+            gate.countDown()
+            HealthCore.executor.submit {}.get(10, TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun lateReadingsAreCountedAndShownInTheStatus() {
+        val core = core()
+        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + minute, 60f)), emptyList(), t0 + 8 * minute)
+        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + 2 * minute, 62f), HeartRate(t0 + 3 * minute, 64f)), emptyList(), t0 + 9 * minute)
+        assertEquals(2L, core.state.hrLate)
+        assertEquals(2L, core().state.hrLate) // kept across a restart
+        val sink = FakeSink()
+        HealthSender.send(core, FakeSource(), sink, t0 + 9 * minute)
+        assertTrue(sink.rows(ModHealthBatch.KIND_STATUS).single().extra.contains(";late=2;"))
     }
 }

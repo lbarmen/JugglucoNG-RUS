@@ -2,6 +2,8 @@ package tk.glucodata.mod.health
 
 import android.content.Context
 import android.os.Looper
+import java.util.concurrent.Callable
+import java.util.concurrent.Future
 import tk.glucodata.mod.watch.ModWatchLog
 
 /**
@@ -24,32 +26,47 @@ object HealthHandOver {
         start(context, source, forceStatus = false)
     }
 
-    /** The "send now" button (part 4b): the same hand-over with a fresh status row, always on our thread. */
-    fun sendNow(context: Context) {
-        val source = HealthSources.current ?: return
-        try {
-            val core = HealthCore.get(context)
-            HealthCore.executor.execute { safeRun(core, source, forceStatus = true) }
+    /**
+     * The "send now" button (part 4b): the same hand-over with a fresh status row, always on our thread (the core is
+     * built there too - its first build reads the disk). `false` when nothing was queued (no source registered).
+     */
+    fun sendNow(context: Context): Boolean {
+        val source = HealthSources.current ?: return false
+        return try {
+            val app = context.applicationContext ?: context
+            HealthCore.executor.execute { safeRun(app, source, forceStatus = true) }
+            true
         } catch (t: Throwable) {
             ModWatchLog.w("health send-now not queued: ${t.javaClass.simpleName}")
+            false
         }
     }
 
+    /** [run] on [HealthCore.executor], as the button and a main-thread tick do (tests wait on the result). */
+    fun submit(
+        core: HealthCore,
+        source: HealthSource,
+        sink: HealthSender.Sink,
+        flushWaitMs: Long = HealthConfig.FLUSH_WAIT_MS,
+        forceStatus: Boolean = false,
+    ): Future<HealthSender.Result> = HealthCore.executor.submit(Callable { run(core, source, sink, flushWaitMs, forceStatus) })
+
     private fun start(context: Context, source: HealthSource, forceStatus: Boolean) {
         try {
-            val core = HealthCore.get(context)
+            val app = context.applicationContext ?: context
             if (Looper.myLooper() == Looper.getMainLooper()) {
-                HealthCore.executor.execute { safeRun(core, source, forceStatus) }
+                HealthCore.executor.execute { safeRun(app, source, forceStatus) }
             } else {
-                safeRun(core, source, forceStatus)
+                safeRun(app, source, forceStatus)
             }
         } catch (t: Throwable) {
             ModWatchLog.w("health hand-over failed: ${t.javaClass.simpleName}")
         }
     }
 
-    private fun safeRun(core: HealthCore, source: HealthSource, forceStatus: Boolean) {
+    private fun safeRun(context: Context, source: HealthSource, forceStatus: Boolean) {
         try {
+            val core = HealthCore.get(context)
             run(core, source, HealthSender.dataClient(core.context), forceStatus = forceStatus)
         } catch (t: Throwable) {
             ModWatchLog.w("health hand-over failed: ${t.javaClass.simpleName}")

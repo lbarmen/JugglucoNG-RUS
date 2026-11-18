@@ -189,8 +189,11 @@ internal class ModFaceRenderer(
         /** A kept snapshot this old is read again at the next frame. */
         const val STALE_MS = 50_000L
 
-        /** New readings are read at most this often (history arrives in dozens of pieces while it catches up). */
-        const val MIN_READ_MS = 60_000L
+        /**
+         * New readings are read at most this often (history arrives in dozens of pieces while it catches up); short
+         * enough that a new value shows within seconds of the minute frame.
+         */
+        const val MIN_READ_MS = 20_000L
 
         /** The graph's tone where upstream gives no range colour. */
         private const val TRACE = 0xFFE3E2DE.toInt()

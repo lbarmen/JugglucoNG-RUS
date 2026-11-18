@@ -34,6 +34,10 @@ class HealthState(context: Context) {
     /** Open 5-minute heart rate windows ([HrAggregator.encode]). */
     var hrBuckets by string("hrBuckets")
 
+    /** End of the latest closed heart rate window, and how many readings came for a closed window since install. */
+    var hrClosedUntil by long("hrClosedUntil")
+    var hrLate by long("hrLate")
+
     /** When the last status row went and its permanent part (without ages) - the next goes on a change or after 30 min. */
     var lastStatusAt by long("lastStatusAt")
     var lastStatusStable by string("lastStatusStable")

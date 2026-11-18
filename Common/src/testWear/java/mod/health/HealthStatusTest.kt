@@ -28,8 +28,8 @@ class HealthStatusTest {
     fun statusLineHasAgesNotTimes() {
         val stable = HealthStatus.stablePart("1.3.2-mod0", 34, "")
         assertEquals("app=1.3.2-mod0;sdk=34;src=none", stable)
-        val line = HealthStatus.line(stable, now, now - 7 * minute - 30_000, 0, 12, "")
-        assertEquals("app=1.3.2-mod0;sdk=34;src=none;data=7;sent=-;queue=12;err=-", line)
+        val line = HealthStatus.line(stable, now, now - 7 * minute - 30_000, 0, 12, 3, "")
+        assertEquals("app=1.3.2-mod0;sdk=34;src=none;data=7;sent=-;queue=12;late=3;err=-", line)
         assertEquals("0", HealthStatus.ageMin(now, now + minute)) // a time ahead is 0, not negative
     }
 

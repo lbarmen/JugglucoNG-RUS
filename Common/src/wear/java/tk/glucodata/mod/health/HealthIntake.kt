@@ -1,13 +1,14 @@
 package tk.glucodata.mod.health
 
 import android.content.Context
+import android.os.Looper
 import tk.glucodata.mod.health.ModHealthBatch.Sample
 import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (part 4): data from the source ([HealthSource], Health Services in part 4b) into the
  * queue. Heart rate goes into 5-minute means ([HrAggregator]); the day's step count goes as it is - the phone counts
- * the differences of totals within one day (part 5, [ModHealthBatch.isNewDay]). After a delivery a batch goes by
+ * the differences of totals within one day (part 5, [ModHealthBatch.stepsDelta]). After a delivery a batch goes by
  * itself only when none went for [HealthConfig.SEND_PERIOD_MS] - the 5-minute rhythm is the phone's `/mod/tick`.
  */
 object HealthIntake {
@@ -19,24 +20,40 @@ object HealthIntake {
     data class StepsDay(val endMs: Long, val steps: Long, val dayStartMs: Long)
 
     /**
-     * Entry point of the source: queues [heartRate] and [steps] on our background thread and sends if due. Never
-     * throws; may be called on any thread.
+     * Entry point of the source: writes [heartRate] and [steps] to the queue on disk before it returns (the service
+     * may be stopped and the process killed right after its callback), then sends on our background thread if due.
+     * On the main thread the writing goes to [HealthCore.lightExecutor] instead. Never throws.
+     *
+     * Never on [HealthCore.executor]: a hand-over waits there for exactly this delivery after its flush.
      */
     fun deliver(context: Context, heartRate: List<HeartRate>, steps: List<StepsDay>) {
         if (heartRate.isEmpty() && steps.isEmpty()) return
         try {
-            val core = HealthCore.get(context)
+            val app = context.applicationContext ?: context
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                HealthCore.lightExecutor.execute { deliver(HealthCore.get(app), heartRate, steps, HealthSender::dataClient) }
+            } else {
+                deliver(HealthCore.get(app), heartRate, steps, HealthSender::dataClient)
+            }
+        } catch (t: Throwable) {
+            ModWatchLog.w("health delivery failed: ${t.javaClass.simpleName}")
+        }
+    }
+
+    /** [deliver] with the core and the sink given (tests): the queue at once, the send if due on [HealthCore.executor]. */
+    fun deliver(core: HealthCore, heartRate: List<HeartRate>, steps: List<StepsDay>, sink: (Context) -> HealthSender.Sink) {
+        try {
+            if (heartRate.isEmpty() && steps.isEmpty()) return
+            deliverNow(core, heartRate, steps, core.clock())
             HealthCore.executor.execute {
                 try {
-                    val now = core.clock()
-                    deliverNow(core, heartRate, steps, now)
-                    HealthSender.sendIfDue(core, HealthSources.current, HealthSender.dataClient(core.context), now)
+                    HealthSender.sendIfDue(core, HealthSources.current, sink(core.context), core.clock())
                 } catch (t: Throwable) {
-                    ModWatchLog.w("health delivery failed: ${t.javaClass.simpleName}")
+                    ModWatchLog.w("health send after delivery failed: ${t.javaClass.simpleName}")
                 }
             }
         } catch (t: Throwable) {
-            ModWatchLog.w("health delivery not queued: ${t.javaClass.simpleName}")
+            ModWatchLog.w("health delivery failed: ${t.javaClass.simpleName}")
         }
     }
 
