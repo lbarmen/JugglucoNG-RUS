@@ -143,7 +143,7 @@ internal class ModFaceRenderer(
 
     /** What the face shows from a snapshot, apart from the graph window moving on with the clock. */
     private fun shown(s: FaceSnapshot) = listOf(s.isMmol, s.hour24, s.graphHours, s.current, s.history.lastOrNull(),
-        s.graphPoints.lastOrNull(), s.low, s.high, s.phoneBatteryPercent, s.watchBatteryPercent)
+        s.graphPoints.lastOrNull(), s.low, s.high, s.phoneBatteryPercent, s.watchBatteryPercent, s.forecast.lastOrNull())
 
     override fun render(canvas: Canvas, bounds: Rect, zonedDateTime: ZonedDateTime, sharedAssets: Assets) {
         try {
@@ -160,14 +160,8 @@ internal class ModFaceRenderer(
                 ambient = renderParameters.drawMode == DrawMode.AMBIENT,
                 showData = data != null,
                 trial = FaceSources.get() !== ModFaceSource,
-                labels = labels,
-                traceColor = { value ->
-                    guarded {
-                        FaceGraph.traceColor(value, snapshot.low, snapshot.high,
-                            setting = { ComplicationRenderer.valueColor(it, isMmol) },
-                            outOfRange = { ModFaceSource.outOfRangeColor(it, isMmol) })
-                    } ?: TRACE
-                },
+                // every dot as the app would paint its value (part 7a), whatever upstream's range colours setting
+                traceColor = { value -> guarded { ModFaceSource.trafficColor(value, isMmol) } ?: TRACE },
             )
         } catch (_: Throwable) {
             guarded { canvas.drawColor(FaceStyle.BLACK) }

@@ -115,8 +115,8 @@ class FaceHoursAndRangeTest {
                     assertTrue(left >= layout.hours.left && left + widths[i] <= layout.hours.right)
                 }
             }
-            // the hour labels' row is between the graph and the batteries, the range labels' column is in the graph
-            assertTrue(layout.graph.bottom <= layout.hours.top && layout.hours.bottom <= layout.battery.top)
+            // the hour labels' row is between the graph and the system's icon (part 7a)
+            assertTrue(layout.graph.bottom <= layout.hours.top && layout.hours.bottom <= layout.system.top)
         }
     }
 
@@ -207,31 +207,6 @@ class FaceHoursAndRangeTest {
         assertEquals(FaceGraph.Zone.IN, FaceGraph.zoneOf(10f, 3.9f, 10f))
         // mg/dL works the same
         assertEquals(2, FaceGraph.splitByRange(p(0, 150f), p(5, 200f), 70f, 180f).size)
-    }
-
-    @Test
-    fun outOfTheRangeTheTraceIsAlwaysColouredEvenWithTheRangeColoursOff() {
-        // part 5b, decision of 18.11: upstream's value range colours off - the setting gives the neutral tone
-        val neutral = 0xFFE3E2DE.toInt()
-        val high = 0xFFD0A23A.toInt()
-        val low = 0xFFC97970.toInt()
-        val off: (Float) -> Int = { neutral }
-        val out: (Float) -> Int = { if (it > 10f) high else low }
-        fun colour(value: Float) = FaceGraph.traceColor(value, 3.9f, 10f, off, out)
-        assertEquals(high, colour(12f))
-        assertEquals(low, colour(3.5f))
-        assertEquals(neutral, colour(6f))
-        // the lines belong to the range
-        assertEquals(neutral, colour(10f))
-        assertEquals(neutral, colour(3.9f))
-        // every piece of a step from below to above: the ends out of the range coloured, the middle by the setting
-        val pieces = FaceGraph.splitByRange(p(0, 3f), p(10, 11f), 3.9f, 10f)
-        assertEquals(listOf(low, neutral, high), pieces.map { colour(it.colorValue) })
-        // with the range colours on, the setting's colour stays in the range
-        val on: (Float) -> Int = { 0xFF4E8A55.toInt() }
-        assertEquals(0xFF4E8A55.toInt(), FaceGraph.traceColor(6f, 3.9f, 10f, on, out))
-        // limits given high first: the same zones
-        assertEquals(high, FaceGraph.traceColor(12f, 10f, 3.9f, off, out))
     }
 
     // ------------------------------------------------------------------ read pacing (critic 3c, N1/N2/N7)

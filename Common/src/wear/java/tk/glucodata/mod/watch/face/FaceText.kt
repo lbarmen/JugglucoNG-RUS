@@ -60,6 +60,13 @@ object FaceText {
         return listOf(day, date.dayOfMonth.toString(), month).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
+    /** "Wed 18" / "Ср 18": the weekday and the day of the month, from [labels] (part 7a, beside the clock). */
+    fun weekdayAndDay(epochMs: Long, zone: ZoneId, labels: FaceLabels): String {
+        val date = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
+        val day = labels.days.getOrNull(date.dayOfWeek.value - 1).orEmpty()
+        return listOf(day, date.dayOfMonth.toString()).filter { it.isNotEmpty() }.joinToString(" ")
+    }
+
     /** A battery as "64%" / "64 %"; [FaceValues.NONE] when unknown or too old. */
     fun battery(percent: Int?, labels: FaceLabels): String {
         if (percent == null || percent !in 0..100) return FaceValues.NONE

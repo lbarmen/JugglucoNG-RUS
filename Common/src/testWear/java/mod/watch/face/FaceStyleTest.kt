@@ -23,15 +23,16 @@ class FaceStyleTest {
     }
 
     @Test
-    fun ambientKeepsThePictureWithoutFillsAndWithThinnerLines() {
-        assertNotNull(normal.rangeFill)
-        assertNotNull(normal.frame)
-        assertNull(ambient.rangeFill)
-        assertNull(ambient.frame)
-        assertTrue(ambient.traceWidth < normal.traceWidth)
+    fun ambientKeepsThePictureWithoutForecastOrLabelsAndWithThinnerLines() {
+        // part 7a: the forecast and the graph's labels only in the normal mode
+        assertNotNull(normal.forecast)
+        assertNotNull(normal.hourLabel)
+        assertNull(ambient.forecast)
+        assertNull(ambient.hourLabel)
+        assertTrue(ambient.dotRadius < normal.dotRadius)
         assertTrue(ambient.rangeLineWidth < normal.rangeLineWidth)
         assertTrue(ambient.arrowStroke < normal.arrowStroke)
-        assertTrue(ambient.traceWidth > 0f && ambient.rangeLineWidth > 0f && ambient.arrowStroke > 0f)
+        assertTrue(ambient.dotRadius > 0f && ambient.rangeLineWidth > 0f && ambient.arrowStroke > 0f)
     }
 
     @Test
@@ -40,6 +41,7 @@ class FaceStyleTest {
             normal.time to ambient.time, normal.secondary to ambient.secondary, normal.age to ambient.age,
             normal.ageAlarm to ambient.ageAlarm, normal.neutral to ambient.neutral,
             normal.rangeLine to ambient.rangeLine, normal.mark to ambient.mark,
+            normal.battery to ambient.battery, normal.batteryLow to ambient.batteryLow,
         )
         pairs.forEach { (n, a) -> assertTrue("$n vs $a", brightness(a) < brightness(n)) }
         val green = 0xFF33CC66.toInt()
@@ -49,9 +51,10 @@ class FaceStyleTest {
     }
 
     @Test
-    fun theAgeAlarmIsRed() {
-        val c = normal.ageAlarm
-        assertTrue(((c shr 16) and 0xFF) > 200 && ((c shr 8) and 0xFF) < 120 && (c and 0xFF) < 120)
+    fun theAgeAlarmAndALowBatteryAreRed() {
+        for (c in listOf(normal.ageAlarm, normal.batteryLow)) {
+            assertTrue(((c shr 16) and 0xFF) > 200 && ((c shr 8) and 0xFF) < 120 && (c and 0xFF) < 120)
+        }
     }
 
     @Test

@@ -5,56 +5,57 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * JugglucoNGmod, watch block (part 3a): where the face's rows sit on a round screen, without a Canvas (the sketch in
- * the watch plan, "Watch face"):
+ * JugglucoNGmod, watch block (part 3a, the whole circle since part 7a): where the face's rows sit on a round screen,
+ * without a Canvas:
  * ```
- *            14:35            time
- *          Tue 17 Nov         date
- *      6.4 ↗   +0.3           value, arrow, change over age
- *              2 min
- *   ┌────────────────────┐
- *   │ - - - - - - - 10.0 │    graph with the target range lines
- *   │ - - - - - - -  3.9 │    (thin lines at full hours, part 3c2)
- *   └────────────────────┘
- *       8     9     10        hour labels under the lines
- *     phone 64%  watch 81%    batteries
+ *                 19:57              time, small
+ *         [▯] 49  Wed 18  [⌚] 81     batteries as icons, the weekday and day
+ *          10,8 ↗  +0.5              value (~90 px on 450), arrow, change over age
+ *                  2 min
+ *   - - - - - - - - - - - - - - - -  target lines to the round edge
+ *   10.0  ·  ·· ·  ·   ··· ·  ·::  ╌ 5-minute dots, forecast dashed on the right
+ *   3.9 - - - - - - - - - - - - - -
+ *          18      19      20        hour labels under the hour lines
+ *                 (   )              free: the system's ongoing-activity icon
  * ```
  * Every share is of the screen's diameter (the smaller side, centred); a row is as wide as the circle allows at its
- * edge farther from the centre, less a margin, so nothing reaches the round edge on any size.
+ * edge farther from the centre, less a margin, so nothing reaches the round edge on any size. The band
+ * [SYSTEM_TOP]..[SYSTEM_BOTTOM] stays empty: Wear OS draws the icon of the app's ongoing activity there.
  */
 object FaceLayout {
 
     /** Top and bottom of each row, shares of the diameter from the top. */
-    private const val TIME_TOP = 0.10f
-    private const val TIME_BOTTOM = 0.22f
-    private const val DATE_TOP = 0.235f
-    private const val DATE_BOTTOM = 0.295f
-    private const val VALUE_TOP = 0.32f
-    private const val VALUE_BOTTOM = 0.47f
-    private const val GRAPH_TOP = 0.50f
-    private const val GRAPH_BOTTOM = 0.70f
-    /** The hour labels under the graph's hour lines (part 3c2), above the batteries. */
-    private const val HOURS_TOP = 0.705f
-    private const val HOURS_BOTTOM = 0.745f
-    private const val BATTERY_TOP = 0.76f
-    private const val BATTERY_BOTTOM = 0.81f
-    /** The "TEST" mark of a local trial build (part 3b), under the batteries. */
-    private const val MARK_TOP = 0.83f
-    private const val MARK_BOTTOM = 0.875f
+    private const val TIME_TOP = 0.065f
+    private const val TIME_BOTTOM = 0.14f
+    /** The batteries and the date. */
+    private const val STATUS_TOP = 0.148f
+    private const val STATUS_BOTTOM = 0.198f
+    private const val VALUE_TOP = 0.205f
+    private const val VALUE_BOTTOM = 0.405f
+    private const val GRAPH_TOP = 0.42f
+    private const val GRAPH_BOTTOM = 0.76f
+    /** The hour labels under the graph's hour lines (part 3c2). */
+    private const val HOURS_TOP = 0.765f
+    private const val HOURS_BOTTOM = 0.81f
+    /** Kept free for the system's ongoing-activity icon (seen on the watch at ~0.82..0.90). */
+    const val SYSTEM_TOP = 0.82f
+    const val SYSTEM_BOTTOM = 0.92f
+    /** The "TEST" mark of a local trial build (part 3b), under the system's icon. */
+    private const val MARK_TOP = 0.925f
+    private const val MARK_BOTTOM = 0.965f
 
     /** Text sizes, shares of the diameter. */
-    private const val TIME_TEXT = 0.12f
-    private const val DATE_TEXT = 0.06f
-    private const val VALUE_TEXT = 0.15f
-    private const val ARROW = 0.09f
-    private const val SIDE_TEXT = 0.065f
-    private const val GRAPH_LABEL_TEXT = 0.045f
+    private const val TIME_TEXT = 0.075f
+    private const val STATUS_TEXT = 0.045f
+    private const val VALUE_TEXT = 0.20f
+    private const val ARROW = 0.10f
+    private const val SIDE_TEXT = 0.058f
+    private const val GRAPH_LABEL_TEXT = 0.038f
     private const val HOURS_TEXT = 0.035f
-    private const val BATTERY_TEXT = 0.045f
-    private const val MARK_TEXT = 0.04f
+    private const val MARK_TEXT = 0.035f
 
     /** The tap area of the value reaches this share of the value row's height above and below it. */
-    private const val TAP_SLACK = 0.25f
+    private const val TAP_SLACK = 0.05f
 
     /** Space kept from the round edge on each side, share of the diameter. */
     const val MARGIN = 0.04f
@@ -70,6 +71,7 @@ object FaceLayout {
         val width: Float get() = right - left
         val height: Float get() = bottom - top
         val centerX: Float get() = (left + right) / 2f
+        val centerY: Float get() = (top + bottom) / 2f
     }
 
     /**
@@ -81,7 +83,8 @@ object FaceLayout {
         val centerY: Float,
         val radius: Float,
         val time: Row,
-        val date: Row,
+        /** The battery icons with their numbers and, between them, the weekday and day (part 7a). */
+        val status: Row,
         val value: Row,
         val arrowSize: Float,
         val sideTextSize: Float,
@@ -89,10 +92,12 @@ object FaceLayout {
         val graphLabelSize: Float,
         /** The labels of the graph's hour lines (part 3c2). */
         val hours: Row,
-        val battery: Row,
+        /** The band the face leaves free for the system's icon; never drawn on. */
+        val system: Row,
         val mark: Row,
     ) {
-        val rows: List<Row> get() = listOf(time, date, value, graph, hours, battery, mark)
+        /** The drawn rows, top to bottom (not [system]). */
+        val rows: List<Row> get() = listOf(time, status, value, graph, hours, mark)
     }
 
     /** A thin hour line of the graph at [x] (pixels) and its [label]. */
@@ -103,6 +108,12 @@ object FaceLayout {
      * every part's size is multiplied by when the whole would be wider than the row (1 when it fits).
      */
     data class ValuePlacement(val scale: Float, val valueX: Float, val arrowX: Float, val sideX: Float)
+
+    /**
+     * Left edges in the status row: the date centred at [dateX], the phone's battery (icon and number) ending a gap
+     * left of it at [phoneX], the watch's starting a gap right of it at [watchX].
+     */
+    data class StatusPlacement(val phoneX: Float, val dateX: Float, val watchX: Float)
 
     fun compute(widthPx: Int, heightPx: Int): Layout {
         val size = min(widthPx, heightPx).toFloat().coerceAtLeast(1f)
@@ -120,16 +131,25 @@ object FaceLayout {
             centerY = top + size / 2f,
             radius = size / 2f,
             time = row(TIME_TOP, TIME_BOTTOM, TIME_TEXT),
-            date = row(DATE_TOP, DATE_BOTTOM, DATE_TEXT),
+            status = row(STATUS_TOP, STATUS_BOTTOM, STATUS_TEXT),
             value = row(VALUE_TOP, VALUE_BOTTOM, VALUE_TEXT),
             arrowSize = ARROW * size,
             sideTextSize = SIDE_TEXT * size,
             graph = row(GRAPH_TOP, GRAPH_BOTTOM, GRAPH_LABEL_TEXT),
             graphLabelSize = GRAPH_LABEL_TEXT * size,
             hours = row(HOURS_TOP, HOURS_BOTTOM, HOURS_TEXT),
-            battery = row(BATTERY_TOP, BATTERY_BOTTOM, BATTERY_TEXT),
+            system = row(SYSTEM_TOP, SYSTEM_BOTTOM, 0f),
             mark = row(MARK_TOP, MARK_BOTTOM, MARK_TEXT),
         )
+    }
+
+    /**
+     * Half the width of the circle at height [y] (pixels) less [inset] at each end: a target line drawn from
+     * `centerX - halfWidthAt` to `centerX + halfWidthAt` reaches the round edge without touching it.
+     */
+    fun halfWidthAt(layout: Layout, y: Float, inset: Float): Float {
+        val dy = y - layout.centerY
+        return (sqrt((layout.radius * layout.radius - dy * dy).coerceAtLeast(0f)) - inset).coerceAtLeast(0f)
     }
 
     /**
@@ -147,8 +167,19 @@ object FaceLayout {
     }
 
     /**
+     * The status row of measured widths ([phoneWidth] / [watchWidth]: icon, gap and number; 0 - not shown): the date
+     * centred, the batteries [gap] beside it. A battery that would reach past the row is pushed back inside.
+     */
+    fun placeStatus(row: Row, dateWidth: Float, phoneWidth: Float, watchWidth: Float, gap: Float): StatusPlacement {
+        val dateX = row.centerX - dateWidth / 2f
+        val phoneX = (dateX - gap - phoneWidth).coerceAtLeast(row.left)
+        val watchX = (dateX + dateWidth + gap).coerceAtMost(row.right - watchWidth)
+        return StatusPlacement(phoneX, dateX, watchX)
+    }
+
+    /**
      * The graph's hour lines: each of [marks] at its time in the [plot]'s window, between [plotLeft] and [plotRight]
-     * (pixels; the plot box, left of the range labels).
+     * (pixels).
      */
     fun hourLines(plot: FaceGraph.Plot, marks: List<FaceGraph.HourMark>, plotLeft: Float, plotRight: Float):
         List<HourLine> = marks.map { HourLine(plotLeft + FaceGraph.xFraction(plot, it.timeMs) * (plotRight - plotLeft), it.label) }
@@ -156,8 +187,8 @@ object FaceLayout {
     /**
      * Left edges of the hour labels in the [hours] row, each centred under its line ([widths] - measured, same
      * order as [lines]); `null` - the label is left out (its line stays): it would reach past the row (the round
-     * edge) or come closer than [gap] to the label before it. The row lies between the graph (with the range labels
-     * at its right) and the batteries, so a label never touches either.
+     * edge) or come closer than [gap] to the label before it. The row lies between the graph and the system's icon,
+     * so a label never touches either.
      */
     fun placeHourLabels(hours: Row, lines: List<HourLine>, widths: List<Float>, gap: Float): List<Float?> {
         var lastRight = Float.NEGATIVE_INFINITY

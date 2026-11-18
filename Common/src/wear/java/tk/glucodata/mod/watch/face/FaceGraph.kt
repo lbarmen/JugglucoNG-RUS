@@ -25,8 +25,10 @@ object FaceGraph {
     private const val MIN_PAD_MGDL = 5f
 
     /**
-     * What to draw: [points] inside [fromMs]..[toMs], oldest first; the vertical scale [bottom]..[top] (display
-     * units) holds every point and both [low] and [high].
+     * What to draw: [points] inside [fromMs]..[toMs], oldest first; [dots] - their [fiveMinuteMeans], what the face
+     * paints (part 7a); [forecast] - upstream's forecast after the readings, inside the window; the vertical scale
+     * [bottom]..[top] (display units) holds every point, the forecast and both [low] and [high]. [nowMs] is where the
+     * readings end: [toMs] itself without a forecast, before it with one.
      */
     data class Plot(
         val fromMs: Long,
@@ -36,6 +38,9 @@ object FaceGraph {
         val top: Float,
         val low: Float,
         val high: Float,
+        val dots: List<FacePoint> = emptyList(),
+        val forecast: List<FacePoint> = emptyList(),
+        val nowMs: Long = toMs,
     )
 
     /** A setting value as one of [HOURS]; anything else is [DEFAULT_HOURS]. */
@@ -44,16 +49,37 @@ object FaceGraph {
     fun windowMs(hours: Int): Long = sanitizeHours(hours) * 3_600_000L
 
     /**
-     * The plot of [points] for the [hours] up to [nowMs]: points before the window and unusable values are left out;
-     * points a little ahead of [nowMs] (the phone's clock ahead of the watch's) stay and sit at the right edge.
+     * The room right of now for the forecast, a share of the readings' window: a quarter of it, so the forecast takes
+     * at most a fifth of the graph's width (upstream's chart on the watch gives it 22 %, `PREDICTION_MAX_FRACTION`);
+     * a longer forecast is cut there.
      */
-    fun plot(points: List<FacePoint>, nowMs: Long, hours: Int, low: Float, high: Float, isMmol: Boolean): Plot {
-        val from = nowMs - windowMs(hours)
+    const val FORECAST_SHARE = 0.25f
+
+    /**
+     * The plot of [points] for the [hours] up to [nowMs]: points before the window and unusable values are left out;
+     * points a little ahead of [nowMs] (the phone's clock ahead of the watch's) stay and sit at the right edge of the
+     * readings. A [forecast] reaching past [nowMs] moves the right edge on by up to [FORECAST_SHARE] of the window.
+     */
+    fun plot(
+        points: List<FacePoint>,
+        nowMs: Long,
+        hours: Int,
+        low: Float,
+        high: Float,
+        isMmol: Boolean,
+        forecast: List<FacePoint> = emptyList(),
+    ): Plot {
+        val window = windowMs(hours)
+        val from = nowMs - window
         val inWindow = points.filter { it.timeMs >= from && FaceValues.usable(it.value) }.sortedBy { it.timeMs }
+        val ahead = forecast.filter { it.timeMs > nowMs && FaceValues.usable(it.value) }.sortedBy { it.timeMs }
+        val to = if (ahead.isEmpty()) nowMs else nowMs + minOf(ahead.last().timeMs - nowMs, (window * FORECAST_SHARE).toLong())
+        val future = ahead.filter { it.timeMs <= to }
         val lo = minOf(low, high)
         val hi = maxOf(low, high)
-        var minValue = minOf(lo, inWindow.minOfOrNull { it.value } ?: lo)
-        var maxValue = maxOf(hi, inWindow.maxOfOrNull { it.value } ?: hi)
+        val all = inWindow + future
+        var minValue = minOf(lo, all.minOfOrNull { it.value } ?: lo)
+        var maxValue = maxOf(hi, all.maxOfOrNull { it.value } ?: hi)
         val minSpan = if (isMmol) MIN_SPAN_MMOL else MIN_SPAN_MGDL
         if (maxValue - minValue < minSpan) {
             val mid = (maxValue + minValue) / 2f
@@ -62,7 +88,28 @@ object FaceGraph {
         }
         val pad = maxOf((maxValue - minValue) * PAD_SHARE, if (isMmol) MIN_PAD_MMOL else MIN_PAD_MGDL)
         val bottom = maxOf(0f, minValue - pad)
-        return Plot(from, nowMs, inWindow, bottom, maxValue + pad, lo, hi)
+        return Plot(from, to, inWindow, bottom, maxValue + pad, lo, hi, fiveMinuteMeans(inWindow), future, nowMs)
+    }
+
+    /** The length of one dot's bucket (part 7a, as xDrip's face draws its readings). */
+    const val BUCKET_MS = 5 * 60_000L
+
+    /**
+     * One dot per 5 minutes of the clock (:00, :05, ...; buckets start on multiples of [BUCKET_MS] since the epoch,
+     * which are full 5 minutes in every time zone), the mean of the usable values in it, at the bucket's middle; the
+     * newest bucket (still filling) at its newest reading when that is earlier, so a dot never sits ahead of the
+     * readings. A bucket without readings has no dot (a sensor gap stays visible). [points] oldest first or not.
+     */
+    fun fiveMinuteMeans(points: List<FacePoint>): List<FacePoint> {
+        val buckets = points.filter { FaceValues.usable(it.value) }
+            .groupBy { Math.floorDiv(it.timeMs, BUCKET_MS) }
+            .toSortedMap()
+        val newest = buckets.keys.lastOrNull()
+        return buckets.map { (bucket, inBucket) ->
+            val middle = bucket * BUCKET_MS + BUCKET_MS / 2
+            val time = if (bucket == newest) minOf(middle, inBucket.maxOf { it.timeMs }) else middle
+            FacePoint(time, inBucket.map { it.value }.average().toFloat())
+        }
     }
 
     /** Readings further apart than this are not joined by a line (a sensor gap stays visible). */
@@ -135,14 +182,6 @@ object FaceGraph {
         value > maxOf(low, high) -> Zone.ABOVE
         else -> Zone.IN
     }
-
-    /**
-     * The colour of the trace at [value] (a point or a piece's [Piece.colorValue], which lies in the piece's zone): out
-     * of the range always [outOfRange] - the user wants to see the trace leave the range (decision of 18.11) even with
-     * upstream's value range colours off; in the range (lines included) [setting], as the number is coloured.
-     */
-    fun traceColor(value: Float, low: Float, high: Float, setting: (Float) -> Int, outOfRange: (Float) -> Int): Int =
-        if (zoneOf(value, low, high) == Zone.IN) setting(value) else outOfRange(value)
 
     /**
      * The step from [a] to [b] cut where it crosses the [low] and [high] lines (straight line between the two

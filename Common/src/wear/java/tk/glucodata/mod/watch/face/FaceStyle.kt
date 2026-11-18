@@ -3,18 +3,18 @@ package tk.glucodata.mod.watch.face
 import java.util.Locale
 
 /**
- * JugglucoNGmod, watch block (part 3b): colours and line weights of the face, pure values (watch plan, "Watch face").
+ * JugglucoNGmod, watch block (part 3b, part 7a): colours and line weights of the face, pure values.
  *
- * The background is always black (the screen stays on, AMOLED). The dim (ambient) mode keeps the same picture:
- * every colour dimmer by [AMBIENT_DIM], thinner lines and no fills (the target band and the graph frame go), the hour
- * lines without their labels.
- * Widths are shares of the screen's diameter; [arrowStroke] is a share of the arrow's size.
+ * The background is always black (the screen stays on, AMOLED); the graph has no frame and no band (part 7a). The dim
+ * (ambient) mode keeps the same picture: every colour dimmer by [AMBIENT_DIM], thinner lines, smaller dots, no
+ * forecast, no labels on the graph.
+ * Widths and radii are shares of the screen's diameter; [arrowStroke] is a share of the arrow's size.
  */
 data class FaceStyle(
     val ambient: Boolean,
     val background: Int,
     val time: Int,
-    /** Date, change, batteries and the graph's range labels. */
+    /** Date, change, battery numbers and the graph's range labels. */
     val secondary: Int,
     val age: Int,
     /** The age after [FaceValues.AGE_ALARM_MINUTES]. */
@@ -22,23 +22,26 @@ data class FaceStyle(
     /** The "-" without a value, and the tone of a value without a range colour. */
     val neutral: Int,
     val rangeLine: Int,
-    /** The target band behind the graph; `null` - no fill. */
-    val rangeFill: Int?,
-    /** The graph's frame; `null` - no frame. */
-    val frame: Int?,
     /** The "TEST" mark of a local trial build with made-up values. */
     val mark: Int,
-    val traceWidth: Float,
+    /** The largest radius of a 5-minute dot; a dot is smaller when the dots stand closer (6 h). */
+    val dotRadius: Float,
     val rangeLineWidth: Float,
-    val frameWidth: Float,
     val arrowStroke: Float,
     /** The graph's thin lines at full hours (part 3c2). */
     val hourLine: Int = HOUR_LINE,
     val hourLineWidth: Float = 0.0025f,
-    /** The hour labels under those lines; `null` - none (the dim mode keeps the lines only). */
+    /** The hour labels under those lines and the range labels; `null` - none (the dim mode keeps the lines only). */
     val hourLabel: Int? = HOUR_LABEL,
+    /** Upstream's forecast, dashed (their chart: the neutral tone, faded); `null` - not drawn (the dim mode). */
+    val forecast: Int? = FORECAST,
+    val forecastWidth: Float = 0.006f,
+    /** A battery icon's outline and fill, and its number. */
+    val battery: Int = GREY,
+    /** The same at [FaceIcons.LOW_PERCENT] or less. */
+    val batteryLow: Int = RED,
 ) {
-    /** The value's own range colour (upstream's), dimmed in ambient; [neutral] without one. */
+    /** The value's own range colour, dimmed in ambient; [neutral] without one. */
     fun valueColor(rangeColor: Int?): Int = rangeColor?.let { tone(it) } ?: neutral
 
     /** A graph point's range colour, dimmed in ambient. */
@@ -58,26 +61,26 @@ data class FaceStyle(
         /** Upstream's neutral value tone on a dark face (as [ModFaceSource]). */
         private const val NEUTRAL = 0xFFE3E2DE.toInt()
         private const val RANGE_LINE = 0xFF7A7A7A.toInt()
-        /** A faint green band between the target lines. */
-        private const val RANGE_FILL = 0x2E4CAF50
-        private const val FRAME = 0xFF333333.toInt()
         private const val ORANGE = 0xFFFF9800.toInt()
         /** Hour lines: fainter than the target lines, so they mark time without competing with the range. */
         private const val HOUR_LINE = 0xFF4A4A4A.toInt()
         private const val HOUR_LABEL = 0xFF9A9A9A.toInt()
+        /** Upstream's forecast colour on their watch chart (the neutral tone at 55 % alpha), as it looks on black. */
+        private const val FORECAST = 0xFF7D7C7A.toInt()
 
         private val NORMAL = FaceStyle(
             ambient = false, background = BLACK, time = WHITE, secondary = GREY, age = GREY, ageAlarm = RED,
-            neutral = NEUTRAL, rangeLine = RANGE_LINE, rangeFill = RANGE_FILL, frame = FRAME, mark = ORANGE,
-            traceWidth = 0.012f, rangeLineWidth = 0.004f, frameWidth = 0.003f, arrowStroke = 0.12f,
+            neutral = NEUTRAL, rangeLine = RANGE_LINE, mark = ORANGE,
+            dotRadius = 0.0095f, rangeLineWidth = 0.004f, arrowStroke = 0.12f,
         )
 
         private val AMBIENT = FaceStyle(
             ambient = true, background = BLACK, time = dim(WHITE, AMBIENT_DIM), secondary = dim(GREY, AMBIENT_DIM),
             age = dim(GREY, AMBIENT_DIM), ageAlarm = dim(RED, AMBIENT_DIM), neutral = dim(NEUTRAL, AMBIENT_DIM),
-            rangeLine = dim(RANGE_LINE, AMBIENT_DIM), rangeFill = null, frame = null, mark = dim(ORANGE, AMBIENT_DIM),
-            traceWidth = 0.006f, rangeLineWidth = 0.0025f, frameWidth = 0f, arrowStroke = 0.07f,
-            hourLine = dim(HOUR_LINE, AMBIENT_DIM), hourLineWidth = 0.002f, hourLabel = null,
+            rangeLine = dim(RANGE_LINE, AMBIENT_DIM), mark = dim(ORANGE, AMBIENT_DIM),
+            dotRadius = 0.006f, rangeLineWidth = 0.0025f, arrowStroke = 0.07f,
+            hourLine = dim(HOUR_LINE, AMBIENT_DIM), hourLineWidth = 0.002f, hourLabel = null, forecast = null,
+            battery = dim(GREY, AMBIENT_DIM), batteryLow = dim(RED, AMBIENT_DIM),
         )
 
         fun of(ambient: Boolean): FaceStyle = if (ambient) AMBIENT else NORMAL
