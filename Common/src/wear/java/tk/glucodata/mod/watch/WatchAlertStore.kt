@@ -12,8 +12,8 @@ import tk.glucodata.alerts.AlertRepository
 import tk.glucodata.alerts.AlertType
 
 /**
- * JugglucoNGmod, watch block (parts 7d, 7f): `/mod/alerts` on the watch ([ModAlertSettings]) - order, memory, the write
- * again after upstream's toggle sync and the on/off check after a native threshold write.
+ * JugglucoNGmod, watch block (parts 7d, 7f, 7g): `/mod/alerts` on the watch ([ModAlertSettings]) - order, memory, the
+ * write again after upstream's toggle sync and the on/off check.
  *
  * Order: the phone stamps each message with a send time that never goes back while its process lives
  * (WatchAlertSettings). One older than the last accepted by less than [STALE_WINDOW_MS] and arriving within
@@ -32,10 +32,15 @@ import tk.glucodata.alerts.AlertType
  * On/off check (critic finding H1 of part 7d): upstream's Natives.setAlertConfig reads the on/off of the whole native
  * group (low, high, loss; or very low/high and forecast) and writes it back with one level. Their toggle sync runs the
  * same call on their receiver thread, with no lock we could share, so our level write landing between their read and
- * write can switch a neighbouring alert back. After any native write of ours we wait [REAPPLY_DELAY_MS], write the kept
- * message again (their save may have put an old level back) and compare every native alert's on/off with what the
- * phone last sent; on a difference we ask the phone for its state ([ToggleState.requestState]) - its answer goes
- * through upstream's own apply, which corrects the watch. The watch still never writes an on/off itself.
+ * write can switch a neighbouring alert back. [REAPPLY_DELAY_MS] after every accepted message we write the kept message
+ * again (their save may have put an old level back; a round that writes a level waits another round, at most
+ * [MAX_CHECK_ROUNDS], and the check always comes a pause after the last write) and compare every native alert's on/off
+ * with what the phone last sent; on a difference we ask the phone for its state ([ToggleState.requestState]) - its
+ * answer goes through upstream's own apply, which corrects the watch. The watch still never writes an on/off itself.
+ * A request can be lost without a word (upstream's sender skips it when it knows no phone node), so a difference still
+ * there [askRetryMs] after a request is checked and asked again, at most [MAX_ASKS] requests per [ASK_WINDOW_MS]; and
+ * since every accepted message runs the check, the phone's hourly resend brings a lost one back within the hour
+ * (critic M1 of part 7f).
  */
 object WatchAlertStore {
 
@@ -48,11 +53,19 @@ object WatchAlertStore {
      */
     const val OVERTAKE_WINDOW_MS = 60_000L
 
-    /** After upstream's toggle sync wrote an alert, or after our native write, ours is written again this much later. */
+    /** After a message, upstream's toggle sync or our native write, ours is written again this much later. */
     const val REAPPLY_DELAY_MS = 2_000L
 
     /** Rounds of "write again, wait" before the on/off check runs regardless. */
     const val MAX_CHECK_ROUNDS = 3
+
+    /** A difference still there after a state request is checked again this much later. */
+    const val ASK_RETRY_MS = 45_000L
+
+    /** State requests at most this many per [ASK_WINDOW_MS]: a difference upstream's apply cannot mend asks no more. */
+    const val MAX_ASKS = 3
+
+    const val ASK_WINDOW_MS = 10 * 60_000L
 
     private const val KEY_SENT_AT = "alerts_sent_at"
     private const val KEY_MESSAGE = "alerts_message"
@@ -66,7 +79,7 @@ object WatchAlertStore {
     @Volatile
     private var pending: ScheduledFuture<*>? = null
 
-    /** The pending task also checks the on/off (a native write of ours preceded it). */
+    /** The pending task also checks the on/off. */
     @Volatile
     private var pendingCheck = false
 
@@ -77,6 +90,20 @@ object WatchAlertStore {
     /** Watch uptime (elapsedRealtime) when the last message was accepted in this process; `null` before the first. */
     @Volatile
     private var acceptedAtUptimeMs: Long? = null
+
+    /** What the last message was written with; the toggle listener uses the same (upstream's own outside tests). */
+    @Volatile
+    private var lastThresholds: ModAlertSettings.ThresholdStore = ModAlertSettings.UpstreamThresholds
+
+    @Volatile
+    private var lastToggles: ToggleState = UpstreamToggles
+
+    /** [ASK_RETRY_MS]; shorter in tests. */
+    @Volatile
+    internal var askRetryMs = ASK_RETRY_MS
+
+    /** Watch uptimes of the state requests in the last [ASK_WINDOW_MS]. */
+    private val askedAt = ArrayDeque<Long>()
 
     /** Upstream's on/off on the watch and from the phone; an interface so tests can stand in for both. */
     interface ToggleState {
@@ -100,6 +127,9 @@ object WatchAlertStore {
         override fun requestState() = WearToggleSync.requestState()
     }
 
+    /** What [checkToggles] found: the kinds whose on/off differs from the phone's, and whether the phone was asked. */
+    data class Check(val differ: List<AlertType>, val asked: Boolean)
+
     /**
      * [sentAtMs] is older than [lastAcceptedMs] by less than [STALE_WINDOW_MS] and the message came [sinceAcceptedMs]
      * after the last accepted one, less than [OVERTAKE_WINDOW_MS]: it was overtaken. An unknown value is never stale.
@@ -110,7 +140,8 @@ object WatchAlertStore {
 
     /**
      * One `/mod/alerts` message: written into upstream's alert preferences and native thresholds unless it is broken
-     * or overtaken. [nowUptimeMs] is the watch's elapsedRealtime. Returns false only for a broken message. Never throws.
+     * or overtaken; an accepted one is followed by the write again and the on/off check. [nowUptimeMs] is the watch's
+     * elapsedRealtime. Returns false only for a broken message. Never throws.
      */
     fun onMessage(
         context: Context,
@@ -125,9 +156,10 @@ object WatchAlertStore {
             return false
         }
         try {
+            lastThresholds = thresholds
+            lastToggles = toggles
             // before the first write: upstream's save racing it must already find us listening (critic H1)
             watchToggles(context)
-            val counted = CountedThresholds(thresholds)
             synchronized(lock) {
                 val ours = PhoneBatteryStore.prefs(context)
                 val last = if (ours.contains(KEY_SENT_AT)) ours.getLong(KEY_SENT_AT, 0L) else null
@@ -136,7 +168,7 @@ object WatchAlertStore {
                     ModWatchLog.i("alerts: an overtaken message dropped")
                     return true
                 }
-                val changed = ModAlertSettings.apply(alertPrefs(context), message.settings, counted)
+                val changed = ModAlertSettings.apply(alertPrefs(context), message.settings, thresholds)
                 val editor = ours.edit().putString(KEY_MESSAGE, Base64.encodeToString(data, Base64.NO_WRAP))
                 message.sentAtMs?.let { editor.putLong(KEY_SENT_AT, it) }
                 editor.apply()
@@ -146,7 +178,9 @@ object WatchAlertStore {
                     ModWatchLog.w("alerts: threshold of kinds ${message.outOfRangeKinds} out of range, the watch keeps its own")
                 }
             }
-            if (counted.writes > 0) schedule(context, thresholds, toggles, check = true, round = 1)
+            // after every accepted message, not only after a native write of ours: a check whose state request was
+            // lost runs again with the next one - the phone's hourly resend at the latest (critic M1 of part 7f)
+            schedule(context, thresholds, toggles, check = true, round = 1)
         } catch (t: Throwable) {
             ModWatchLog.w("alerts: not applied: ${t.javaClass.simpleName}")
         }
@@ -170,9 +204,13 @@ object WatchAlertStore {
 
     /**
      * Compares every native alert's on/off on the watch with what the phone last sent; on a difference asks the phone
-     * for its state once. Returns the kinds that differ. Never throws.
+     * for its state, unless [MAX_ASKS] requests went in the last [ASK_WINDOW_MS] ([nowUptimeMs] is the watch's
+     * elapsedRealtime). Never throws.
      */
-    fun checkToggles(toggles: ToggleState = UpstreamToggles): List<AlertType> {
+    fun checkToggles(
+        toggles: ToggleState = UpstreamToggles,
+        nowUptimeMs: Long = SystemClock.elapsedRealtime(),
+    ): Check {
         val differ = ModAlertSettings.NATIVE_BACKED.filter { type ->
             try {
                 // the phone's first: before it sent any there is nothing to compare, and no native read
@@ -184,15 +222,34 @@ object WatchAlertStore {
                 false
             }
         }
-        if (differ.isNotEmpty()) {
-            ModWatchLog.w("alerts: on/off of kinds ${differ.map { it.id }} differs from the phone, its state asked")
-            try {
-                toggles.requestState()
-            } catch (t: Throwable) {
-                ModWatchLog.w("alerts: state not asked: ${t.javaClass.simpleName}")
-            }
+        if (differ.isEmpty()) return Check(differ, asked = false)
+        val kinds = differ.map { it.id }
+        val ask = mayAsk(nowUptimeMs)
+        if (ask < 0) {
+            ModWatchLog.w("alerts: on/off of kinds $kinds differs from the phone, not asked again ($MAX_ASKS asks in ${ASK_WINDOW_MS / 60_000} min)")
+            return Check(differ, asked = false)
         }
-        return differ
+        ModWatchLog.w("alerts: on/off of kinds $kinds differs from the phone, its state asked (ask ${ask + 1} of $MAX_ASKS)")
+        try {
+            toggles.requestState()
+        } catch (t: Throwable) {
+            ModWatchLog.w("alerts: state not asked: ${t.javaClass.simpleName}")
+        }
+        return Check(differ, asked = true)
+    }
+
+    /**
+     * Counts a state request at [nowUptimeMs] when fewer than [MAX_ASKS] went in the [ASK_WINDOW_MS] before it; returns
+     * how many went before this one, or -1 when it may not go.
+     */
+    internal fun mayAsk(nowUptimeMs: Long): Int = synchronized(askedAt) {
+        while (askedAt.isNotEmpty() && nowUptimeMs - askedAt.first() !in 0 until ASK_WINDOW_MS) askedAt.removeFirst()
+        if (askedAt.size >= MAX_ASKS) {
+            -1
+        } else {
+            askedAt.addLast(nowUptimeMs)
+            askedAt.size - 1
+        }
     }
 
     /** [key] is an alert's on/off in upstream's alert preferences. */
@@ -209,14 +266,14 @@ object WatchAlertStore {
         synchronized(lock) {
             if (listener != null) return
             val l = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-                if (isToggleKey(key)) schedule(app, ModAlertSettings.UpstreamThresholds, UpstreamToggles, check = false, round = 1)
+                if (isToggleKey(key)) schedule(app, lastThresholds, lastToggles, check = false, round = 1)
             }
             listener = l
             alertPrefs(app).registerOnSharedPreferenceChangeListener(l)
         }
     }
 
-    /** Tests: forgets the listener, the pending write and the last receipt of an earlier test's Application. */
+    /** Tests: forgets the listener, the pending write, the last receipt and the requests of an earlier test. */
     internal fun resetForTests() {
         synchronized(this) {
             pending?.cancel(false)
@@ -224,12 +281,17 @@ object WatchAlertStore {
         }
         listener = null
         acceptedAtUptimeMs = null
+        lastThresholds = ModAlertSettings.UpstreamThresholds
+        lastToggles = UpstreamToggles
+        askRetryMs = ASK_RETRY_MS
+        synchronized(askedAt) { askedAt.clear() }
     }
 
     /**
-     * In [REAPPLY_DELAY_MS]: writes the kept message again; when that set a native level, waits another round (it may
-     * have raced too), else - [check] or a native write in an earlier round - compares the on/off ([checkToggles]).
-     * A newer call replaces a pending one and keeps its [check].
+     * In [delayMs]: writes the kept message again ([writeAgain]); when that set a native level, waits another round
+     * (it may have raced too), and after the last round's write once more without writing; else - [check] or a native
+     * write in an earlier round - compares the on/off ([checkToggles]), and when the phone was asked, checks again in
+     * [askRetryMs]. A newer call replaces a pending one and keeps its [check].
      */
     private fun schedule(
         context: Context,
@@ -237,6 +299,8 @@ object WatchAlertStore {
         toggles: ToggleState,
         check: Boolean,
         round: Int,
+        writeAgain: Boolean = true,
+        delayMs: Long = REAPPLY_DELAY_MS,
     ) {
         try {
             synchronized(this) {
@@ -246,14 +310,21 @@ object WatchAlertStore {
                 pending = executor.schedule({
                     synchronized(this) { pendingCheck = false }
                     val counted = CountedThresholds(thresholds)
-                    val changed = reapply(context, counted)
-                    if (changed > 0) ModWatchLog.i("alerts: $changed values written again")
-                    if (counted.writes > 0 && round < MAX_CHECK_ROUNDS) {
-                        schedule(context, thresholds, toggles, check = true, round = round + 1)
-                    } else if (withCheck || counted.writes > 0) {
-                        checkToggles(toggles)
+                    if (writeAgain) {
+                        val changed = reapply(context, counted)
+                        if (changed > 0) ModWatchLog.i("alerts: $changed values written again")
                     }
-                }, REAPPLY_DELAY_MS, TimeUnit.MILLISECONDS)
+                    when {
+                        counted.writes > 0 && round < MAX_CHECK_ROUNDS ->
+                            schedule(context, thresholds, toggles, check = true, round = round + 1)
+                        // the last round wrote a level: its own race with upstream's save needs the pause too (critic L1 of 7f)
+                        counted.writes > 0 ->
+                            schedule(context, thresholds, toggles, check = true, round = round, writeAgain = false)
+                        withCheck -> if (checkToggles(toggles).asked) {
+                            schedule(context, thresholds, toggles, check = true, round = 1, writeAgain = false, delayMs = askRetryMs)
+                        }
+                    }
+                }, delayMs, TimeUnit.MILLISECONDS)
             }
         } catch (t: Throwable) {
             ModWatchLog.w("alerts: write again not queued: ${t.javaClass.simpleName}")
