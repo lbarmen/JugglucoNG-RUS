@@ -25,7 +25,9 @@ import tk.glucodata.R
  *
  * A short text says what happened ([statusFor]; user's request 18.11: a press showed nothing): "Alarm snoozed" when
  * the watch or the phone snoozed, "No alarm" when neither had one, "Phone not connected" when [WatchPhoneLink] reached
- * no phone and the watch had nothing to snooze. One press is never two texts, by the same window as the buzz.
+ * no phone and the watch had nothing to snooze. One press is never two texts: the phone's "snoozed" by the buzz
+ * window, "No alarm" and "Phone not connected" not within [TEXT_QUIET_MS] of an "Alarm snoozed" (critic of part 6:
+ * the phone lookup and the send take up to 10-20 s, and a double press may get "snoozed" then "no alert").
  */
 object SnoozeButton {
 
@@ -33,6 +35,8 @@ object SnoozeButton {
     const val BUZZ_MS = 80L
     /** No buzz for the phone's answer when the watch buzzed itself this recently; the same window for the texts. */
     const val BUZZ_DEDUP_MS = 5_000L
+    /** No "No alarm" / "Phone not connected" this long after an "Alarm snoozed": longer than the phone lookup. */
+    const val TEXT_QUIET_MS = 25_000L
 
     /** [SystemClock.elapsedRealtime] of the last buzz: a wall clock set back must not change the dedup. */
     @Volatile
@@ -40,7 +44,7 @@ object SnoozeButton {
 
     /** Both elapsedRealtime, 0 - never; read and written under [statusLock] (main thread, listener, link worker). */
     private var lastShownElapsedMs = 0L
-    private var lastWatchSnoozeElapsedMs = 0L
+    private var lastSnoozedShownElapsedMs = 0L
     private val statusLock = Any()
 
     /** What happened, as far as the text is concerned. */
@@ -73,7 +77,11 @@ object SnoozeButton {
         } catch (t: Throwable) {
             ModWatchLog.w("button: local snooze failed: ${t.javaClass.simpleName}")
         }
-        show(app, if (kind != null) Event.WATCH_SNOOZED else Event.WATCH_NO_ALERT, elapsedMs, elapsedMs)
+        try {
+            show(app, if (kind != null) Event.WATCH_SNOOZED else Event.WATCH_NO_ALERT, elapsedMs, elapsedMs)
+        } catch (t: Throwable) {
+            ModWatchLog.w("button: status failed: ${t.javaClass.simpleName}")
+        }
         try {
             send(app, pressedAtMs) { onPhoneUnreachable(app, elapsedMs) }
         } catch (t: Throwable) {
@@ -123,23 +131,26 @@ object SnoozeButton {
 
     /**
      * The text for [event] at [elapsedMs], `null` - none. [lastShownElapsedMs] - the last text shown,
-     * [lastWatchSnoozeElapsedMs] - the last press that snoozed the watch's own alert (all elapsedRealtime, 0 - never).
-     * The watch's own snooze always shows; the phone's "snoozed" only when no text was shown within [BUZZ_DEDUP_MS]
-     * (the buzz rule); the phone's "no alert" and "no phone" not when the watch has just snoozed its own alert - that
-     * press is done, and one press is one text; "late" never (the phone did not get to it: the log says so).
+     * [lastSnoozedShownElapsedMs] - the last "Alarm snoozed" shown, by the watch or the phone (all elapsedRealtime,
+     * 0 - never). The watch's own snooze always shows; the phone's "snoozed" only when no text was shown within
+     * [BUZZ_DEDUP_MS] (the buzz rule); the phone's "no alert" and "no phone" not within [TEXT_QUIET_MS] of an "Alarm
+     * snoozed" - that press is done, and one press is one text; "late" never (the phone did not get to it: the log
+     * says so).
      */
-    fun statusFor(event: Event, elapsedMs: Long, lastShownElapsedMs: Long, lastWatchSnoozeElapsedMs: Long): Status? =
+    fun statusFor(event: Event, elapsedMs: Long, lastShownElapsedMs: Long, lastSnoozedShownElapsedMs: Long): Status? =
         when (event) {
             Event.WATCH_SNOOZED -> Status.SNOOZED
             Event.WATCH_NO_ALERT, Event.PHONE_LATE -> null
-            Event.PHONE_SNOOZED -> if (within(elapsedMs, lastShownElapsedMs)) null else Status.SNOOZED
-            Event.PHONE_NO_ALERT -> if (within(elapsedMs, lastWatchSnoozeElapsedMs)) null else Status.NO_ALARM
+            Event.PHONE_SNOOZED -> if (within(elapsedMs, lastShownElapsedMs, BUZZ_DEDUP_MS)) null else Status.SNOOZED
+            Event.PHONE_NO_ALERT ->
+                if (within(elapsedMs, lastSnoozedShownElapsedMs, TEXT_QUIET_MS)) null else Status.NO_ALARM
             Event.PHONE_UNREACHABLE ->
-                if (within(elapsedMs, lastWatchSnoozeElapsedMs)) null else Status.PHONE_NOT_CONNECTED
+                if (within(elapsedMs, lastSnoozedShownElapsedMs, TEXT_QUIET_MS)) null else Status.PHONE_NOT_CONNECTED
         }
 
-    /** [sinceMs] is within [BUZZ_DEDUP_MS] before [elapsedMs] (never, or a restarted clock - not within). */
-    private fun within(elapsedMs: Long, sinceMs: Long): Boolean = !shouldBuzzForPhone(elapsedMs, sinceMs)
+    /** [sinceMs] is less than [windowMs] before [elapsedMs] (never, or a restarted clock - not within). */
+    private fun within(elapsedMs: Long, sinceMs: Long, windowMs: Long): Boolean =
+        sinceMs > 0L && elapsedMs >= sinceMs && elapsedMs - sinceMs < windowMs
 
     /**
      * Decides and records under one lock, then posts the text to the main thread. [eventElapsedMs] - the time the
@@ -147,9 +158,9 @@ object SnoozeButton {
      */
     private fun show(context: Context, event: Event, eventElapsedMs: Long, nowElapsedMs: Long): Boolean {
         val status = synchronized(statusLock) {
-            if (event == Event.WATCH_SNOOZED) lastWatchSnoozeElapsedMs = eventElapsedMs
-            val decided = statusFor(event, eventElapsedMs, lastShownElapsedMs, lastWatchSnoozeElapsedMs)
+            val decided = statusFor(event, eventElapsedMs, lastShownElapsedMs, lastSnoozedShownElapsedMs)
             if (decided != null) lastShownElapsedMs = nowElapsedMs
+            if (decided == Status.SNOOZED) lastSnoozedShownElapsedMs = nowElapsedMs
             decided
         } ?: return false
         try {
@@ -171,7 +182,7 @@ object SnoozeButton {
         lastBuzzElapsedMs = 0L
         synchronized(statusLock) {
             lastShownElapsedMs = 0L
-            lastWatchSnoozeElapsedMs = 0L
+            lastSnoozedShownElapsedMs = 0L
         }
     }
 

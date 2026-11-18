@@ -8,7 +8,7 @@ import tk.glucodata.mod.watch.PhoneBatteryStore
 /**
  * JugglucoNGmod, watch block (parts 3b, 3c): the face's one setting, "graph hours" 1 / 3 / 6 ([FaceGraph.HOURS], 3 by
  * default), kept in our own preferences file on the watch ([PhoneBatteryStore.PREFS]) and chosen in our own editor
- * ([FaceSettingsActivity], opened by the watch face's "Customise" through `wearableConfigurationAction`).
+ * ([FaceSettingsActivity], opened from its own app entry "Graph hours": the face has no "Customise").
  *
  * Not a `UserStyleSchema`: the library's on-watch editor (`EditorSession`) needs the request the system puts in the
  * editor's intent and a running face instance, so it cannot be opened directly; a plain preference can, it is read by
