@@ -55,7 +55,7 @@ internal class FacePainter {
         drawCentred(canvas, model.dateText, layout.date, layout.date.textSize, style.secondary, bold = false)
         if (showData) {
             drawValueRow(canvas, layout, model, style)
-            drawGraph(canvas, layout.graph, layout.graphLabelSize, d, model.graph, isMmol, style, traceColor)
+            drawGraph(canvas, layout, d, model, isMmol, style, traceColor)
             val batteries = FaceText.batteries(model.phoneBatteryText, model.watchBatteryText, labels)
             drawCentred(canvas, batteries, layout.battery, layout.battery.textSize, style.secondary, bold = false)
         }
@@ -200,14 +200,16 @@ internal class FacePainter {
 
     private fun drawGraph(
         canvas: Canvas,
-        row: FaceLayout.Row,
-        labelSize: Float,
+        layout: FaceLayout.Layout,
         diameter: Float,
-        plot: FaceGraph.Plot,
+        model: FaceModel,
         isMmol: Boolean,
         style: FaceStyle,
         traceColor: (Float) -> Int,
     ) {
+        val row = layout.graph
+        val labelSize = layout.graphLabelSize
+        val plot = model.graph
         if (row.width <= 0f || row.height <= 0f) return
         val locale = Locale.getDefault()
         val highText = FaceStyle.rangeLabel(plot.high, isMmol, locale)
@@ -235,6 +237,14 @@ internal class FacePainter {
             canvas.drawRoundRect(box, diameter * 0.01f, diameter * 0.01f, stroke)
         }
 
+        // thin lines at full hours of local time, their hours under the graph (not in the dim mode)
+        val hourLines = FaceLayout.hourLines(plot, model.hourMarks, plotLeft, plotRight)
+        stroke.pathEffect = null
+        stroke.strokeWidth = (diameter * style.hourLineWidth).coerceAtLeast(1f)
+        stroke.color = style.hourLine
+        for (line in hourLines) canvas.drawLine(line.x, row.top, line.x, row.bottom, stroke)
+        style.hourLabel?.let { color -> drawHourLabels(canvas, layout.hours, hourLines, color, diameter) }
+
         // target lines, dashed, their values at the right end
         stroke.strokeWidth = (diameter * style.rangeLineWidth).coerceAtLeast(1f)
         stroke.color = style.rangeLine
@@ -250,7 +260,8 @@ internal class FacePainter {
         canvas.drawText(highText, labelX, (yHigh + half).coerceIn(row.top + 2 * half, row.bottom), text)
         canvas.drawText(lowText, labelX, (yLow + half).coerceIn(row.top + 2 * half, row.bottom), text)
 
-        // the trace, each step in the range colour of where it arrives; gaps stay open
+        // the trace: a step crossing a target line is cut there (part 3c2), so what lies above the high line or below
+        // the low one has the colour the number would have out of range, the rest as before; gaps stay open
         stroke.strokeWidth = (diameter * style.traceWidth).coerceAtLeast(1f)
         for (segment in FaceGraph.segments(plot.points, FaceGraph.MAX_GAP_MS)) {
             if (segment.size == 1) {
@@ -260,11 +271,30 @@ internal class FacePainter {
                 continue
             }
             for (i in 1 until segment.size) {
-                val a = segment[i - 1]
-                val b = segment[i]
-                stroke.color = style.traceColor(traceColor(b.value))
-                canvas.drawLine(x(a.timeMs), y(a.value), x(b.timeMs), y(b.value), stroke)
+                for (piece in FaceGraph.splitByRange(segment[i - 1], segment[i], plot.low, plot.high)) {
+                    stroke.color = style.traceColor(traceColor(piece.colorValue))
+                    canvas.drawLine(x(piece.from.timeMs), y(piece.from.value), x(piece.to.timeMs), y(piece.to.value),
+                        stroke)
+                }
             }
+        }
+    }
+
+    /** The hours under their lines, small, centred; a label without room is left out ([FaceLayout.placeHourLabels]). */
+    private fun drawHourLabels(
+        canvas: Canvas,
+        row: FaceLayout.Row,
+        lines: List<FaceLayout.HourLine>,
+        color: Int,
+        diameter: Float,
+    ) {
+        if (lines.isEmpty() || row.width <= 0f || row.height <= 0f) return
+        setText(fitSize("00", row, row.textSize, bold = false), color, bold = false)
+        val widths = lines.map { text.measureText(it.label) }
+        text.getTextBounds("0", 0, 1, bounds)
+        val baseline = row.top + row.height / 2f - bounds.exactCenterY()
+        FaceLayout.placeHourLabels(row, lines, widths, diameter * 0.01f).forEachIndexed { i, left ->
+            if (left != null) canvas.drawText(lines[i].label, left, baseline, text)
         }
     }
 

@@ -30,7 +30,7 @@ class FaceLayoutTest {
     fun everyRowIsInsideTheCircleOnBothSizes() {
         for (size in sizes) {
             val layout = FaceLayout.compute(size, size)
-            val names = listOf("time", "date", "value", "graph", "battery", "mark")
+            val names = listOf("time", "date", "value", "graph", "hours", "battery", "mark")
             layout.rows.forEachIndexed { i, row ->
                 assertTrue("${names[i]} empty on $size", row.width > 0f && row.height > 0f)
                 assertInsideCircle(layout, row, "${names[i]} on $size")

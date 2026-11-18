@@ -6,6 +6,7 @@
      wear with final R ids (real ids in the code); this file keeps the resources, since inlined ids are not
      seen as uses. mod/check-apk.py verifies both against the sources. Remove once upstream fixes it.
      Our own watch face (watch part 3b): its name, setting labels, preview and wallpaper description are kept
-     too, whatever the shrinker sees (the system reads them, not our code). -->
+     too, whatever the shrinker sees (the system reads them, not our code); so is upstream's face name, which our
+     wearMod/res/values*/strings.xml renames to "JugglucoNGmod classic" (watch part 3c2). -->
 <resources xmlns:tools="http://schemas.android.com/tools"
-    tools:keep="@string/*_style_name,@drawable/red,@drawable/green,@drawable/blue,@drawable/yellow,@drawable/gray,@drawable/white,@string/mod_watch_face_*,@array/mod_watch_face_*,@drawable/mod_watch_face_preview,@xml/mod_watch_face" />
+    tools:keep="@string/*_style_name,@drawable/red,@drawable/green,@drawable/blue,@drawable/yellow,@drawable/gray,@drawable/white,@string/mod_watch_face_*,@string/watch_face_name,@array/mod_watch_face_*,@drawable/mod_watch_face_preview,@xml/mod_watch_face" />

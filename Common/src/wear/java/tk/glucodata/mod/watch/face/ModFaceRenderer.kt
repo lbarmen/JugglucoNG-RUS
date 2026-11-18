@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import tk.glucodata.UiRefreshBus
 import tk.glucodata.glucosecomplication.ComplicationRenderer
+import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (parts 3b, 3c): draws our face once a minute (upstream's face: the same 60 s frame),
@@ -62,7 +63,9 @@ internal class ModFaceRenderer(
     private class Kept(val snapshot: FaceSnapshot, val labels: FaceLabels, val readAtMs: Long)
 
     private val scope = CoroutineScope(
-        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, _ -> },
+        SupervisorJob() + Dispatchers.Main.immediate + CoroutineExceptionHandler { _, t ->
+            ModWatchLog.w("face coroutine failed: ${t.javaClass.simpleName}")
+        },
     )
     private val painter = FacePainter()
     private val refreshing = AtomicBoolean(false)
@@ -98,10 +101,14 @@ internal class ModFaceRenderer(
     /** New data (main thread): a read now, after the pause of [MIN_READ_MS], or once the face is visible again. */
     private fun request() {
         dirty = true
-        if (watchState.isVisible.value != true) return
-        val wait = lastReadAt + MIN_READ_MS - SystemClock.elapsedRealtime()
-        if (wait <= 0) refresh()
-        else if (pause?.isActive != true) pause = scope.launch { delay(wait); if (dirty) request() }
+        val wait = readWait(watchState.isVisible.value == true, lastReadAt, SystemClock.elapsedRealtime()) ?: return
+        if (wait <= 0L) refresh()
+        else if (pause?.isActive != true) pause = scope.launch {
+            delay(wait)
+            // this job is still "active" inside itself: cleared first, so a new pause can be set (critic 3c, N1)
+            pause = null
+            if (dirty) request()
+        }
     }
 
     /** Reads a new snapshot in the background; a request during a read makes one more read after it. */
@@ -186,7 +193,10 @@ internal class ModFaceRenderer(
         /** One frame a minute in interactive mode, as upstream's face (`WatchRenderer` FRAME_PERIOD_MS_DEFAULT). */
         const val FRAME_MS = 60_000L
 
-        /** A kept snapshot this old is read again at the next frame. */
+        /**
+         * A kept snapshot this old is read again at the next frame. That read does not go through [request]; it keeps
+         * the pause all the same because it is never shorter than [MIN_READ_MS] (critic 3c, N2; a test holds it).
+         */
         const val STALE_MS = 50_000L
 
         /**
@@ -194,6 +204,14 @@ internal class ModFaceRenderer(
          * enough that a new value shows within seconds of the minute frame.
          */
         const val MIN_READ_MS = 20_000L
+
+        /**
+         * What a request for new data does: `null` - nothing until the face is [visible] again (the request stays
+         * pending); 0 - read now; more - read after that many ms, the rest of the pause of [MIN_READ_MS] since the
+         * last read at [lastReadAtMs] ([nowMs] and [lastReadAtMs] on the same clock).
+         */
+        internal fun readWait(visible: Boolean, lastReadAtMs: Long, nowMs: Long): Long? =
+            if (!visible) null else (lastReadAtMs + MIN_READ_MS - nowMs).coerceAtLeast(0L)
 
         /** The graph's tone where upstream gives no range colour. */
         private const val TRACE = 0xFFE3E2DE.toInt()

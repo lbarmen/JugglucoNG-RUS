@@ -27,6 +27,8 @@ data class FaceModel(
     val graph: FaceGraph.Plot,
     val phoneBatteryText: String,
     val watchBatteryText: String,
+    /** The full hours of local time in the graph's window, for its thin hour lines (part 3c2). */
+    val hourMarks: List<FaceGraph.HourMark> = emptyList(),
 ) {
     companion object {
         fun build(snapshot: FaceSnapshot, zone: ZoneId, labels: FaceLabels): FaceModel {
@@ -41,6 +43,8 @@ data class FaceModel(
             val lastTime = shown?.timeMs ?: FaceValues.lastReadingTime(snapshot.current, snapshot.history)
             val age = lastTime?.let { FaceValues.ageMinutes(now, it) }
             val previous = shown?.let { FaceValues.previousFor(snapshot.history, it.timeMs) }
+            val graph = FaceGraph.plot(snapshot.graphPoints, now, snapshot.graphHours, snapshot.low, snapshot.high,
+                snapshot.isMmol)
             return FaceModel(
                 clock = FaceText.clock(now, zone, snapshot.hour24),
                 dateText = FaceText.date(now, zone, labels),
@@ -52,10 +56,10 @@ data class FaceModel(
                 ageMinutes = age,
                 ageText = FaceText.age(age, labels),
                 ageAlarm = age != null && FaceValues.isAgeAlarm(age),
-                graph = FaceGraph.plot(snapshot.graphPoints, now, snapshot.graphHours, snapshot.low, snapshot.high,
-                    snapshot.isMmol),
+                graph = graph,
                 phoneBatteryText = FaceText.battery(snapshot.phoneBatteryPercent, labels),
                 watchBatteryText = FaceText.battery(snapshot.watchBatteryPercent, labels),
+                hourMarks = FaceGraph.hourMarks(graph.fromMs, graph.toMs, zone, snapshot.hour24),
             )
         }
     }

@@ -18,6 +18,8 @@ import tk.glucodata.mod.watch.ModWatchLog
  * ([FaceSettings]). The watch opens it from the face's "Customise" through our own action ([ACTION], the face's
  * `wearableConfigurationAction` in Common/src/wearMod/AndroidManifest.xml); upstream's
  * `androidx.wear.watchface.editor.action.WATCH_FACE_EDITOR` would open their `WatchFaceConfigActivity` instead.
+ * Part 3c2: it is also in the watch's app list as "Graph hours" (its own launcher entry), in case the system's
+ * "Customise" does not lead here.
  *
  * A plain [Activity] with views made in code (no layout file, no Compose): a title, a line of explanation and three
  * choices. A tap keeps the choice and closes the editor; the face, in the same process, hears the change and draws the
@@ -35,11 +37,11 @@ class FaceSettingsActivity : Activity() {
         }
     }
 
-    /** Keeps [hours] and closes the editor. */
+    /** Keeps [hours] and closes the editor; `RESULT_OK` only when the choice was written. */
     internal fun choose(hours: Int) {
         try {
-            FaceSettings.setHours(applicationContext, hours)
-            setResult(RESULT_OK)
+            if (FaceSettings.setHours(applicationContext, hours)) setResult(RESULT_OK)
+            else ModWatchLog.w("face settings not written")
         } catch (t: Throwable) {
             ModWatchLog.w("face settings not kept: ${t.javaClass.simpleName}")
         }

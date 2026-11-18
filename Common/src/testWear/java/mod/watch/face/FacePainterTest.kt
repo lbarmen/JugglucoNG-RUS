@@ -101,7 +101,7 @@ class FacePainterTest {
         for ((x, y) in listOf(1 to 1, size - 2 to 1, 1 to size - 2, size - 2 to size - 2, size / 2 to 2)) {
             assertEquals("pixel $x,$y", FaceStyle.BLACK, bitmap.getPixel(x, y))
         }
-        listOf(layout.time, layout.date, layout.value, layout.graph, layout.battery).forEach {
+        listOf(layout.time, layout.date, layout.value, layout.graph, layout.hours, layout.battery).forEach {
             assertTrue("row ${it.top}..${it.bottom} is empty", lit(bitmap, it) > 50)
         }
         assertEquals(0, lit(bitmap, layout.mark))
@@ -113,6 +113,49 @@ class FacePainterTest {
         val ambient = paint(snapshot(2), ambient = true, name = "ambient")
         assertTrue(lit(ambient) < lit(normal))
         assertEquals(FaceStyle.BLACK, ambient.getPixel(1, 1))
+    }
+
+    /** Made-up swings from 2 to 12 mmol/L across both target lines (part 3c2). */
+    private fun swinging(): FaceSnapshot {
+        val history = (180 downTo 2).map { back -> FacePoint(now - back * minute, 7f + 5f * sin(back / 25.0).toFloat()) }
+        val last = history.last()
+        val current = FaceReading(last.timeMs, last.value, String.format(Locale.US, "%.1f", last.value), 0.8f, green)
+        return FaceSnapshot(now, true, true, 3, current, history, history, 3.9f, 10f, 64, 81)
+    }
+
+    private val above = 0xFFFFC107.toInt()
+    private val below = 0xFFF44336.toInt()
+
+    /** As upstream's range colours would give: in range green, above amber, below red. */
+    private fun byRange(value: Float) = when {
+        value > 10f -> above
+        value < 3.9f -> below
+        else -> green
+    }
+
+    private fun count(bitmap: Bitmap, row: FaceLayout.Row, color: Int): Int {
+        var n = 0
+        for (y in row.top.toInt() until row.bottom.toInt()) for (x in 0 until size) if (bitmap.getPixel(x, y) == color) n++
+        return n
+    }
+
+    @Test
+    fun hourLinesWithLabelsAndTheTraceInTheColourOfOutOfRange() {
+        val layout = FaceLayout.compute(size, size)
+        for (ambient in listOf(false, true)) {
+            val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+            val labels = labels()
+            val model = FaceModel.build(swinging(), zone, labels)
+            assertEquals(3, model.hourMarks.size)
+            FacePainter().draw(Canvas(bitmap), size, size, model, true, ambient, showData = true, trial = false,
+                labels = labels, traceColor = ::byRange)
+            save(bitmap, if (ambient) "hours_range_ambient" else "hours_range")
+            val style = FaceStyle.of(ambient)
+            assertTrue("above on ambient=$ambient", count(bitmap, layout.graph, style.traceColor(above)) > 10)
+            assertTrue("below on ambient=$ambient", count(bitmap, layout.graph, style.traceColor(below)) > 10)
+            assertTrue("in range on ambient=$ambient", count(bitmap, layout.graph, style.traceColor(green)) > 10)
+            if (ambient) assertEquals(0, lit(bitmap, layout.hours)) else assertTrue(lit(bitmap, layout.hours) > 10)
+        }
     }
 
     @Test

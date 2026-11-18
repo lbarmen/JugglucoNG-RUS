@@ -23,7 +23,7 @@ import zipfile
 PACKAGE = 'tk.glucodata.ng.mod'
 APP_NAME = 'JugglucoNGmod'
 # Our own watch face (watch block, part 3b) carries this name; upstream's face keeps theirs as a spare.
-MOD_WATCHFACE_NAME = 'Juggluco JugglucoNGmod'
+MOD_WATCHFACE_NAME = 'JugglucoNGmod'
 # Our components that must be in the wear APK (declared in Common/src/wearMod/AndroidManifest.xml).
 MOD_WEAR_COMPONENTS = ['tk.glucodata.mod.watch.SnoozeButtonActivity', 'tk.glucodata.mod.watch.ModWearListener',
                        'tk.glucodata.mod.watch.face.ModWatchFaceService',
@@ -197,9 +197,10 @@ def check_vendor(apk):
 
 
 def upstream_watchface_name():
-    """Upstream's own face name, from their wear strings (no longer overridden by us since watch part 3b)."""
+    """Upstream's face name as our watch app shows it: renamed by our Common/src/wearMod/res/values/strings.xml to
+    "JugglucoNGmod classic" (watch part 3c2), so the face list tells it from ours and from the official app's."""
     m = re.search(r'name="watch_face_name"[^>]*>([^<]*)<',
-                  open('Common/src/wear/res/values/strings.xml', encoding='utf-8').read())
+                  open('Common/src/wearMod/res/values/strings.xml', encoding='utf-8').read())
     return m.group(1) if m else None
 
 
@@ -238,6 +239,8 @@ def check_wear_components(apk):
     check(f'="{MOD_WATCHFACE_EDITOR_ACTION}"' in editor and 'WEARABLE_CONFIGURATION' in editor
           and 'WATCH_FACE_EDITOR' not in editor,
           'our watch face editor: our action, WEARABLE_CONFIGURATION category')
+    check('android.intent.action.MAIN' in editor and 'android.intent.category.LAUNCHER' in editor,
+          'our watch face editor: own launcher entry "Graph hours" (watch part 3c2)')
     check_wear_health(apk, out)
 
 

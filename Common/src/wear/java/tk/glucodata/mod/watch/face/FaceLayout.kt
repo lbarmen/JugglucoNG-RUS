@@ -14,8 +14,9 @@ import kotlin.math.sqrt
  *              2 min
  *   ┌────────────────────┐
  *   │ - - - - - - - 10.0 │    graph with the target range lines
- *   │ - - - - - - -  3.9 │
+ *   │ - - - - - - -  3.9 │    (thin lines at full hours, part 3c2)
  *   └────────────────────┘
+ *       8     9     10        hour labels under the lines
  *     phone 64%  watch 81%    batteries
  * ```
  * Every share is of the screen's diameter (the smaller side, centred); a row is as wide as the circle allows at its
@@ -31,7 +32,10 @@ object FaceLayout {
     private const val VALUE_TOP = 0.32f
     private const val VALUE_BOTTOM = 0.47f
     private const val GRAPH_TOP = 0.50f
-    private const val GRAPH_BOTTOM = 0.73f
+    private const val GRAPH_BOTTOM = 0.70f
+    /** The hour labels under the graph's hour lines (part 3c2), above the batteries. */
+    private const val HOURS_TOP = 0.705f
+    private const val HOURS_BOTTOM = 0.745f
     private const val BATTERY_TOP = 0.76f
     private const val BATTERY_BOTTOM = 0.81f
     /** The "TEST" mark of a local trial build (part 3b), under the batteries. */
@@ -45,6 +49,7 @@ object FaceLayout {
     private const val ARROW = 0.09f
     private const val SIDE_TEXT = 0.065f
     private const val GRAPH_LABEL_TEXT = 0.045f
+    private const val HOURS_TEXT = 0.035f
     private const val BATTERY_TEXT = 0.045f
     private const val MARK_TEXT = 0.04f
 
@@ -82,11 +87,16 @@ object FaceLayout {
         val sideTextSize: Float,
         val graph: Row,
         val graphLabelSize: Float,
+        /** The labels of the graph's hour lines (part 3c2). */
+        val hours: Row,
         val battery: Row,
         val mark: Row,
     ) {
-        val rows: List<Row> get() = listOf(time, date, value, graph, battery, mark)
+        val rows: List<Row> get() = listOf(time, date, value, graph, hours, battery, mark)
     }
+
+    /** A thin hour line of the graph at [x] (pixels) and its [label]. */
+    data class HourLine(val x: Float, val label: String)
 
     /**
      * Where the value row's parts start (left edges, pixels) once the whole is centred in the row, and the [scale]
@@ -116,6 +126,7 @@ object FaceLayout {
             sideTextSize = SIDE_TEXT * size,
             graph = row(GRAPH_TOP, GRAPH_BOTTOM, GRAPH_LABEL_TEXT),
             graphLabelSize = GRAPH_LABEL_TEXT * size,
+            hours = row(HOURS_TOP, HOURS_BOTTOM, HOURS_TEXT),
             battery = row(BATTERY_TOP, BATTERY_BOTTOM, BATTERY_TEXT),
             mark = row(MARK_TOP, MARK_BOTTOM, MARK_TEXT),
         )
@@ -133,6 +144,33 @@ object FaceLayout {
         val arrowX = left + (valueWidth + (if (arrowWidth > 0f) gap else 0f)) * scale
         val sideX = arrowX + (arrowWidth + (if (sideWidth > 0f) gap else 0f)) * scale
         return ValuePlacement(scale, left, arrowX, sideX)
+    }
+
+    /**
+     * The graph's hour lines: each of [marks] at its time in the [plot]'s window, between [plotLeft] and [plotRight]
+     * (pixels; the plot box, left of the range labels).
+     */
+    fun hourLines(plot: FaceGraph.Plot, marks: List<FaceGraph.HourMark>, plotLeft: Float, plotRight: Float):
+        List<HourLine> = marks.map { HourLine(plotLeft + FaceGraph.xFraction(plot, it.timeMs) * (plotRight - plotLeft), it.label) }
+
+    /**
+     * Left edges of the hour labels in the [hours] row, each centred under its line ([widths] - measured, same
+     * order as [lines]); `null` - the label is left out (its line stays): it would reach past the row (the round
+     * edge) or come closer than [gap] to the label before it. The row lies between the graph (with the range labels
+     * at its right) and the batteries, so a label never touches either.
+     */
+    fun placeHourLabels(hours: Row, lines: List<HourLine>, widths: List<Float>, gap: Float): List<Float?> {
+        var lastRight = Float.NEGATIVE_INFINITY
+        return lines.mapIndexed { i, line ->
+            val width = widths.getOrElse(i) { 0f }
+            val left = line.x - width / 2f
+            val right = left + width
+            if (width <= 0f || left < hours.left || right > hours.right || left < lastRight + gap) null
+            else {
+                lastRight = right
+                left
+            }
+        }
     }
 
     /** A tap at [x], [y] (pixels) is on the value: the value row, a little taller, across its width. */

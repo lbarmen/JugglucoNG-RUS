@@ -6,7 +6,8 @@ import java.util.Locale
  * JugglucoNGmod, watch block (part 3b): colours and line weights of the face, pure values (watch plan, "Watch face").
  *
  * The background is always black (the screen stays on, AMOLED). The dim (ambient) mode keeps the same picture:
- * every colour dimmer by [AMBIENT_DIM], thinner lines and no fills (the target band and the graph frame go).
+ * every colour dimmer by [AMBIENT_DIM], thinner lines and no fills (the target band and the graph frame go), the hour
+ * lines without their labels.
  * Widths are shares of the screen's diameter; [arrowStroke] is a share of the arrow's size.
  */
 data class FaceStyle(
@@ -31,6 +32,11 @@ data class FaceStyle(
     val rangeLineWidth: Float,
     val frameWidth: Float,
     val arrowStroke: Float,
+    /** The graph's thin lines at full hours (part 3c2). */
+    val hourLine: Int = HOUR_LINE,
+    val hourLineWidth: Float = 0.0025f,
+    /** The hour labels under those lines; `null` - none (the dim mode keeps the lines only). */
+    val hourLabel: Int? = HOUR_LABEL,
 ) {
     /** The value's own range colour (upstream's), dimmed in ambient; [neutral] without one. */
     fun valueColor(rangeColor: Int?): Int = rangeColor?.let { tone(it) } ?: neutral
@@ -56,6 +62,9 @@ data class FaceStyle(
         private const val RANGE_FILL = 0x2E4CAF50
         private const val FRAME = 0xFF333333.toInt()
         private const val ORANGE = 0xFFFF9800.toInt()
+        /** Hour lines: fainter than the target lines, so they mark time without competing with the range. */
+        private const val HOUR_LINE = 0xFF4A4A4A.toInt()
+        private const val HOUR_LABEL = 0xFF9A9A9A.toInt()
 
         private val NORMAL = FaceStyle(
             ambient = false, background = BLACK, time = WHITE, secondary = GREY, age = GREY, ageAlarm = RED,
@@ -68,6 +77,7 @@ data class FaceStyle(
             age = dim(GREY, AMBIENT_DIM), ageAlarm = dim(RED, AMBIENT_DIM), neutral = dim(NEUTRAL, AMBIENT_DIM),
             rangeLine = dim(RANGE_LINE, AMBIENT_DIM), rangeFill = null, frame = null, mark = dim(ORANGE, AMBIENT_DIM),
             traceWidth = 0.006f, rangeLineWidth = 0.0025f, frameWidth = 0f, arrowStroke = 0.07f,
+            hourLine = dim(HOUR_LINE, AMBIENT_DIM), hourLineWidth = 0.002f, hourLabel = null,
         )
 
         fun of(ambient: Boolean): FaceStyle = if (ambient) AMBIENT else NORMAL

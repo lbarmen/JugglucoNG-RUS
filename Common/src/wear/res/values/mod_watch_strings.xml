@@ -36,8 +36,8 @@
     <string name="mod_watch_face_phone">phone</string>
     <string name="mod_watch_face_watch">watch</string>
 
-    <!-- Our watch face (part 3b): its name in the watch face list (upstream's face keeps "Juggluco") -->
-    <string name="mod_watch_face_name" translatable="false">Juggluco JugglucoNGmod</string>
+    <!-- Our watch face (part 3b): its name in the watch face list (upstream's face is "JugglucoNGmod classic" in our app: Common/src/wearMod/res/values/strings.xml) -->
+    <string name="mod_watch_face_name" translatable="false">JugglucoNGmod</string>
     <!-- The face's one setting: how many hours the graph shows -->
     <string name="mod_watch_face_graph_setting">Graph hours</string>
     <string name="mod_watch_face_graph_setting_description">How many hours the glucose graph shows</string>
