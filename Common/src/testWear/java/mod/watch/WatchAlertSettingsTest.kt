@@ -3,6 +3,7 @@ package mod.watch
 import android.app.Application
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import java.util.concurrent.ConcurrentHashMap
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -22,10 +23,10 @@ import tk.glucodata.mod.watch.PhoneBatteryStore
 import tk.glucodata.mod.watch.WatchAlertStore
 
 /**
- * JugglucoNGmod, watch block (parts 7b, 7d, 7f): `/mod/alerts` arriving on the watch - written into upstream's alert
- * file, or not at all; never an alert's on/off; an overtaken message dropped, a change after a phone clock set back
- * not; the kept message written again after upstream's toggle sync; after a native write the on/off checked against
- * the phone's. Made-up values.
+ * JugglucoNGmod, watch block (parts 7b, 7d, 7f, 7g): `/mod/alerts` arriving on the watch - written into upstream's
+ * alert file, or not at all; never an alert's on/off; an overtaken message dropped, a change after a phone clock set
+ * back not; the kept message written again after upstream's toggle sync; after every message the on/off checked
+ * against the phone's, a lost state request asked again up to a limit. Made-up values.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34], application = Application::class)
@@ -168,42 +169,150 @@ class WatchAlertSettingsTest {
         assertEquals(25, alerts.getInt(key, 0))
     }
 
-    /** Native on/off as the watch holds it and as the phone last sent it. */
-    private class Toggles(val phone: Map<AlertType, Boolean>) : WatchAlertStore.ToggleState {
-        val watch = HashMap(phone)
+    /**
+     * Native on/off as the watch holds it and as the phone last sent it; [mends]: the phone's answer to a state request
+     * corrects the watch (upstream's apply), else the request is lost.
+     */
+    private class Toggles(val phone: Map<AlertType, Boolean>, val mends: Boolean = false) : WatchAlertStore.ToggleState {
+        val watch = ConcurrentHashMap(phone)
         @Volatile
         var requests = 0
+        /** Wall time of the first comparison: phoneEnabled is read first. */
+        @Volatile
+        var firstReadAtMs = 0L
         override fun watchEnabled(type: AlertType): Boolean? = watch[type]
-        override fun phoneEnabled(type: AlertType): Boolean? = phone[type]
+        override fun phoneEnabled(type: AlertType): Boolean? {
+            if (firstReadAtMs == 0L) firstReadAtMs = System.currentTimeMillis()
+            return phone[type]
+        }
         override fun requestState() {
             requests++
+            if (mends) watch.putAll(phone)
         }
     }
 
+    /** Nothing from the phone yet: nothing is compared, so a state request cannot happen. */
     private object NoToggles : WatchAlertStore.ToggleState {
         override fun watchEnabled(type: AlertType): Boolean? = null
         override fun phoneEnabled(type: AlertType): Boolean? = null
-        override fun requestState() = throw AssertionError("no state request expected")
+        override fun requestState() {}
     }
 
     private val phoneToggles = mapOf(AlertType.LOW to true, AlertType.HIGH to true, AlertType.LOSS to false)
+
+    private fun awaitRequests(toggles: Toggles, n: Int) {
+        val until = System.currentTimeMillis() + WatchAlertStore.REAPPLY_DELAY_MS + 5_000
+        while (toggles.requests < n && System.currentTimeMillis() < until) Thread.sleep(50)
+    }
+
+    private fun noLevel(kind: Int) = ModAlertSettings.encode(listOf(settings(kind, 40)), 1_000L)
 
     @Test
     fun aNeighbourSwitchedOffByTheRaceAsksThePhoneForItsState() {
         val toggles = Toggles(phoneToggles)
         // our level write read "high off" just before their toggle sync turned it on, and wrote the group back
         toggles.watch[AlertType.HIGH] = false
-        assertEquals(listOf(AlertType.HIGH), WatchAlertStore.checkToggles(toggles))
+        assertEquals(WatchAlertStore.Check(listOf(AlertType.HIGH), asked = true), WatchAlertStore.checkToggles(toggles))
         assertEquals(1, toggles.requests)
     }
 
     @Test
     fun theSameOnOffAsThePhoneAsksNothing() {
         val toggles = Toggles(phoneToggles)
-        assertEquals(emptyList<AlertType>(), WatchAlertStore.checkToggles(toggles))
+        assertEquals(WatchAlertStore.Check(emptyList(), asked = false), WatchAlertStore.checkToggles(toggles))
         assertEquals(0, toggles.requests)
         // nothing from the phone yet: nothing compared, nothing asked
-        assertEquals(emptyList<AlertType>(), WatchAlertStore.checkToggles(Toggles(emptyMap())))
+        assertEquals(emptyList<AlertType>(), WatchAlertStore.checkToggles(Toggles(emptyMap())).differ)
+    }
+
+    @Test
+    fun atMostThreeStateRequestsInTenMinutes() {
+        val t = 1_000_000L
+        assertEquals(0, WatchAlertStore.mayAsk(t))
+        assertEquals(1, WatchAlertStore.mayAsk(t + 1))
+        assertEquals(2, WatchAlertStore.mayAsk(t + 2))
+        assertEquals(-1, WatchAlertStore.mayAsk(t + 3))
+        assertEquals(-1, WatchAlertStore.mayAsk(t + WatchAlertStore.ASK_WINDOW_MS - 1))
+        // the first one left the window
+        assertEquals(2, WatchAlertStore.mayAsk(t + WatchAlertStore.ASK_WINDOW_MS))
+        // past the limit a difference is reported but not asked
+        val toggles = Toggles(phoneToggles).also { it.watch[AlertType.LOW] = false }
+        assertEquals(WatchAlertStore.Check(listOf(AlertType.LOW), asked = false), WatchAlertStore.checkToggles(toggles, t + 4))
+        assertEquals(0, toggles.requests)
+    }
+
+    @Test
+    fun aMessageWithoutALevelStillChecksTheOnOff() {
+        // critic M1 of part 7f: a request lost earlier left a difference; the next message (the hourly resend at the
+        // latest) writes no level, and still finds it and asks
+        val toggles = Toggles(phoneToggles)
+        toggles.watch[AlertType.LOW] = false
+        assertTrue(WatchAlertStore.onMessage(context, noLevel(AlertType.LOW.id), Levels(), toggles))
+        awaitRequests(toggles, 1)
+        assertEquals(1, toggles.requests)
+    }
+
+    @Test
+    fun aDifferenceThatStaysIsAskedAgainUpToTheLimit() {
+        WatchAlertStore.askRetryMs = 100
+        // every request is lost
+        val toggles = Toggles(phoneToggles)
+        toggles.watch[AlertType.LOW] = false
+        assertTrue(WatchAlertStore.onMessage(context, noLevel(AlertType.LOW.id), Levels(), toggles))
+        awaitRequests(toggles, WatchAlertStore.MAX_ASKS)
+        Thread.sleep(1_000)
+        assertEquals(WatchAlertStore.MAX_ASKS, toggles.requests)
+    }
+
+    @Test
+    fun aDifferenceMendedByThePhoneIsNotAskedAgain() {
+        WatchAlertStore.askRetryMs = 100
+        val toggles = Toggles(phoneToggles, mends = true)
+        toggles.watch[AlertType.HIGH] = false
+        assertTrue(WatchAlertStore.onMessage(context, noLevel(AlertType.LOW.id), Levels(), toggles))
+        awaitRequests(toggles, 1)
+        Thread.sleep(1_000)
+        assertEquals(1, toggles.requests)
+        assertEquals(true, toggles.watch[AlertType.HIGH])
+    }
+
+    @Test
+    fun theirSaveInTheSameMomentKeepsTheCheck() {
+        // critic L4 of part 7f: their toggle sync writes an on/off just as our message is written; the listener's
+        // task replaces ours and must still check
+        val toggles = Toggles(phoneToggles)
+        toggles.watch[AlertType.HIGH] = false
+        assertTrue(WatchAlertStore.onMessage(context, noLevel(AlertType.LOW.id), Levels(), toggles))
+        alerts.edit().putBoolean("alert_${AlertType.MISSED_READING.id}_enabled", true).commit()
+        awaitRequests(toggles, 1)
+        assertEquals(1, toggles.requests)
+    }
+
+    @Test
+    fun theRoundsEndAndTheCheckComesAPauseAfterTheLastWrite() {
+        // a level that never stays (their save puts the old one back every time)
+        val store = object : ModAlertSettings.ThresholdStore {
+            @Volatile
+            var writes = 0
+            @Volatile
+            var lastWriteAtMs = 0L
+            override fun read(type: AlertType): Int? = 500
+            override fun write(type: AlertType, mgPerL: Int) {
+                writes++
+                lastWriteAtMs = System.currentTimeMillis()
+            }
+        }
+        val toggles = Toggles(phoneToggles)
+        val data = ModAlertSettings.encode(listOf(settings(AlertType.LOW.id, 40).copy(thresholdMgPerL = 700)), 1_000L)
+        assertTrue(WatchAlertStore.onMessage(context, data, store, toggles))
+        val until = System.currentTimeMillis() + (WatchAlertStore.MAX_CHECK_ROUNDS + 1) * WatchAlertStore.REAPPLY_DELAY_MS + 5_000
+        while (toggles.firstReadAtMs == 0L && System.currentTimeMillis() < until) Thread.sleep(50)
+        // the message's write and one per round, then the check alone - a pause after the last write (critic L1 of 7f)
+        assertEquals(1 + WatchAlertStore.MAX_CHECK_ROUNDS, store.writes)
+        assertTrue(toggles.firstReadAtMs - store.lastWriteAtMs >= WatchAlertStore.REAPPLY_DELAY_MS - 200)
+        Thread.sleep(WatchAlertStore.REAPPLY_DELAY_MS + 500)
+        assertEquals(1 + WatchAlertStore.MAX_CHECK_ROUNDS, store.writes)
+        assertEquals(0, toggles.requests)
     }
 
     @Test
