@@ -83,6 +83,8 @@ object WatchTicker {
             }
             if (sent > 0) memory.delivered(nowMs, battery?.percent)
             ModWatchLog.i("tick $reason: $sent of ${nodes.size}")
+            // part 7b: the alert sound settings ride along to the same watches (never throws)
+            WatchAlertSettings.sendTo(client, nodes.map { it.id }, "tick $reason")
             return true
         } catch (t: Throwable) {
             ModWatchLog.w("tick $reason failed: ${t.javaClass.simpleName}")

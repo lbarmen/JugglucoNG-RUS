@@ -32,6 +32,12 @@ object ModWatchMessages {
      * reason (byte, [REASON_CYCLE] ...; a reason this code does not know is kept as it is).
      */
     const val PATH_TICK = "/mod/tick"
+    /**
+     * Phone -> watch, with every tick and a few seconds after an alert setting changed on the phone (part 7b): how
+     * each standard alert sounds - duration, sound, vibration, volume, sound delay, repeat, default snooze. Body:
+     * [ModAlertSettings].
+     */
+    const val PATH_ALERTS = "/mod/alerts"
     /** Watch -> phone (DataClient): heart rate and steps batches, `/mod/health/batch/<number>` (part 4). */
     const val PATH_HEALTH_BATCH_PREFIX = "/mod/health/batch/"
 
