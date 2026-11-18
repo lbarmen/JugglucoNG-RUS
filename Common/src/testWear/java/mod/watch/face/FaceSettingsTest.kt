@@ -96,12 +96,6 @@ class FaceSettingsTest {
         assertEquals(1, heard)
     }
 
-    @Test
-    fun theEditorActionIsOursNotUpstreams() {
-        assertEquals("tk.glucodata.mod.watch.face.SETTINGS", FaceSettingsActivity.ACTION)
-        assertFalse(FaceSettingsActivity.ACTION.contains("WATCH_FACE_EDITOR"))
-    }
-
     private fun <T : android.view.View> findAll(view: android.view.View, type: Class<T>): List<T> {
         val found = mutableListOf<T>()
         if (type.isInstance(view)) found += type.cast(view)!!

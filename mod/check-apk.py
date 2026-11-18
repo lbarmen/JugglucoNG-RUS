@@ -42,8 +42,6 @@ UPSTREAM_WEAR_MIN_SDK = '26'
 # Our phone components of the watch block (declared in Common/src/mobileMod/AndroidManifest.xml, watch parts 1, 2, 5).
 MOD_PHONE_COMPONENTS = ['tk.glucodata.mod.watch.ModPhoneListener', 'tk.glucodata.mod.watch.ModWatchStarter',
                         'tk.glucodata.mod.watch.ModWatchActivity']
-# Our face's editor action (watch part 3c): the face's wearableConfigurationAction and our editor's intent filter.
-MOD_WATCHFACE_EDITOR_ACTION = 'tk.glucodata.mod.watch.face.SETTINGS'
 # Must match packagingOptions.jniLibs.excludes in upstream Common/build.gradle.
 VENDOR_EXCLUDES = ['libdata-handle-lib*.so', 'libnative-algorithm-*.so', 'libnative-algorithm-jni-*.so',
                    'libnative-encrypy-decrypt-v110.so', 'libnative-sensitivity-v110.so', 'libnative-struct2json.so']
@@ -220,9 +218,9 @@ def check_watchface_name(apk):
 
 
 def check_wear_components(apk):
-    """Our watch components are in the wear APK's manifest; our face is a wallpaper service whose editor action is
-    ours, never upstream's WATCH_FACE_EDITOR (their WatchFaceConfigActivity alone handles it), and our editor
-    activity handles our action."""
+    """Our watch components are in the wear APK's manifest; our face is a wallpaper service without an editor action
+    (upstream's WATCH_FACE_EDITOR would open their WatchFaceConfigActivity, any other value hides the face), and our
+    editor is an app entry of its own ("Graph hours")."""
     out = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
     names = set(re.findall(r'A: (?:http://schemas.android.com/apk/res/android:)?name\([^)]*\)="([^"]+)"', out))
     missing = [c for c in MOD_WEAR_COMPONENTS if c not in names]
@@ -236,12 +234,11 @@ def check_wear_components(apk):
         if 'tk.glucodata.mod.watch.face.FaceSettingsActivity' in m.group(0):
             editor = m.group(0)
     check('android.permission.BIND_WALLPAPER' in block and 'android.service.wallpaper.WallpaperService' in block
-          and 'wearableConfigurationAction' in block and f'="{MOD_WATCHFACE_EDITOR_ACTION}"' in block
-          and 'WATCH_FACE_EDITOR' not in block,
-          'our watch face: BIND_WALLPAPER, wallpaper service filter, our editor action (not WATCH_FACE_EDITOR)')
-    check(f'="{MOD_WATCHFACE_EDITOR_ACTION}"' in editor and 'WEARABLE_CONFIGURATION' in editor
-          and 'WATCH_FACE_EDITOR' not in editor,
-          'our watch face editor: our action, WEARABLE_CONFIGURATION category')
+          and 'wearableConfigurationAction' not in block,
+          'our watch face: BIND_WALLPAPER, wallpaper service filter, no editor action (Wear OS leaves a face with an '
+          'action other than WATCH_FACE_EDITOR out of the picker - watch, 18.11.2026)')
+    check('WEARABLE_CONFIGURATION' not in editor and 'WATCH_FACE_EDITOR' not in editor,
+          'our watch face editor: not a face editor by action (no WEARABLE_CONFIGURATION, no WATCH_FACE_EDITOR)')
     check('android.intent.action.MAIN' in editor and 'android.intent.category.LAUNCHER' in editor,
           'our watch face editor: own launcher entry "Graph hours" (watch part 3c2)')
     check_wear_health(apk, out)

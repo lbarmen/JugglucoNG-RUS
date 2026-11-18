@@ -15,11 +15,10 @@ import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (part 3c): our own small editor of the watch face - "graph hours" 1 / 3 / 6 h
- * ([FaceSettings]). The watch opens it from the face's "Customise" through our own action ([ACTION], the face's
- * `wearableConfigurationAction` in Common/src/wearMod/AndroidManifest.xml); upstream's
- * `androidx.wear.watchface.editor.action.WATCH_FACE_EDITOR` would open their `WatchFaceConfigActivity` instead.
- * Part 3c2: it is also in the watch's app list as "Graph hours" (its own launcher entry), in case the system's
- * "Customise" does not lead here.
+ * ([FaceSettings]), opened from the watch's app list as "Graph hours" (its own launcher entry, part 3c2). The face
+ * has no "Customise" (no `wearableConfigurationAction`, Common/src/wearMod/AndroidManifest.xml): upstream's
+ * `androidx.wear.watchface.editor.action.WATCH_FACE_EDITOR` would open their `WatchFaceConfigActivity`, and Wear OS
+ * leaves a face with any other action out of the picker (seen on the watch 18.11.2026).
  *
  * A plain [Activity] with views made in code (no layout file, no Compose): a title, a line of explanation and three
  * choices. A tap keeps the choice and closes the editor; the face, in the same process, hears the change and draws the
@@ -83,10 +82,5 @@ class FaceSettingsActivity : Activity() {
         setText(resId)
         textSize = size
         gravity = Gravity.CENTER
-    }
-
-    companion object {
-        /** Our editor action: the face's `wearableConfigurationAction` and this activity's intent filter. */
-        const val ACTION = "tk.glucodata.mod.watch.face.SETTINGS"
     }
 }
