@@ -25,6 +25,6 @@ class SnoozeButtonActivity : Activity() {
     companion object {
         /** How the press reaches the phone; tests put a recorder here instead of the real Data Layer. */
         @Volatile
-        internal var send: (Context, Long) -> Unit = WatchPhoneLink::sendSnooze
+        internal var send: (Context, Long, () -> Unit) -> Unit = WatchPhoneLink::sendSnooze
     }
 }
