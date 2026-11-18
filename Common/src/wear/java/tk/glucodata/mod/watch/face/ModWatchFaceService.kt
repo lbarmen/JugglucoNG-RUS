@@ -10,7 +10,6 @@ import androidx.wear.watchface.WatchFaceService
 import androidx.wear.watchface.WatchFaceType
 import androidx.wear.watchface.WatchState
 import androidx.wear.watchface.style.CurrentUserStyleRepository
-import androidx.wear.watchface.style.UserStyleSchema
 import tk.glucodata.Applic
 import tk.glucodata.Natives
 import tk.glucodata.Notify
@@ -22,17 +21,11 @@ import tk.glucodata.Notify
  * do not list it. Upstream's face stays in the list under their name as a spare.
  *
  * No complication slots (plan: everything needed is already on the face). One setting, the graph's hours
- * ([FaceSettings]). A tap on the value opens upstream's main window of the watch app explicitly
- * (`Applic.startMain()`, as their face does), never the package's launch intent: the package has several launcher
+ * ([FaceSettings], our own preference and editor [FaceSettingsActivity]; no `UserStyleSchema`). A tap on the value
+ * opens upstream's main window of the watch app explicitly (`Applic.startMain()`, as their face does), never the package's launch intent: the package has several launcher
  * entries now (theirs, our "Snooze alarm"), and the first one could silently snooze an alert.
  */
 class ModWatchFaceService : WatchFaceService() {
-
-    override fun createUserStyleSchema(): UserStyleSchema = try {
-        FaceSettings.schema(resources)
-    } catch (_: Throwable) {
-        UserStyleSchema(emptyList())
-    }
 
     override suspend fun createWatchFace(
         surfaceHolder: SurfaceHolder,

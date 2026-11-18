@@ -26,7 +26,10 @@ APP_NAME = 'JugglucoNGmod'
 MOD_WATCHFACE_NAME = 'Juggluco JugglucoNGmod'
 # Our components that must be in the wear APK (declared in Common/src/wearMod/AndroidManifest.xml).
 MOD_WEAR_COMPONENTS = ['tk.glucodata.mod.watch.SnoozeButtonActivity', 'tk.glucodata.mod.watch.ModWearListener',
-                       'tk.glucodata.mod.watch.face.ModWatchFaceService']
+                       'tk.glucodata.mod.watch.face.ModWatchFaceService',
+                       'tk.glucodata.mod.watch.face.FaceSettingsActivity']
+# Our face's editor action (watch part 3c): the face's wearableConfigurationAction and our editor's intent filter.
+MOD_WATCHFACE_EDITOR_ACTION = 'tk.glucodata.mod.watch.face.SETTINGS'
 # Must match packagingOptions.jniLibs.excludes in upstream Common/build.gradle.
 VENDOR_EXCLUDES = ['libdata-handle-lib*.so', 'libnative-algorithm-*.so', 'libnative-algorithm-jni-*.so',
                    'libnative-encrypy-decrypt-v110.so', 'libnative-sensitivity-v110.so', 'libnative-struct2json.so']
@@ -202,20 +205,28 @@ def check_watchface_name(apk):
 
 
 def check_wear_components(apk):
-    """Our watch components are in the wear APK's manifest; our face is a wallpaper service without an editor
-    action (upstream's WatchFaceConfigActivity alone handles theirs)."""
+    """Our watch components are in the wear APK's manifest; our face is a wallpaper service whose editor action is
+    ours, never upstream's WATCH_FACE_EDITOR (their WatchFaceConfigActivity alone handles it), and our editor
+    activity handles our action."""
     out = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
     names = set(re.findall(r'A: (?:http://schemas.android.com/apk/res/android:)?name\([^)]*\)="([^"]+)"', out))
     missing = [c for c in MOD_WEAR_COMPONENTS if c not in names]
     check(not missing, f'wear APK declares our {len(MOD_WEAR_COMPONENTS)} components'
           + (f' (missing: {missing})' if missing else ''))
-    block = ''
-    for m in re.finditer(r'E: service\b(?:(?!\n\s*E: (?:service|activity|receiver|provider)\b)[\s\S])*', out):
+    block = editor = ''
+    for m in re.finditer(r'E: (?:service|activity)\b(?:(?!\n\s*E: (?:service|activity|receiver|provider)\b)[\s\S])*',
+                         out):
         if 'tk.glucodata.mod.watch.face.ModWatchFaceService' in m.group(0):
             block = m.group(0)
+        if 'tk.glucodata.mod.watch.face.FaceSettingsActivity' in m.group(0):
+            editor = m.group(0)
     check('android.permission.BIND_WALLPAPER' in block and 'android.service.wallpaper.WallpaperService' in block
+          and 'wearableConfigurationAction' in block and f'="{MOD_WATCHFACE_EDITOR_ACTION}"' in block
           and 'WATCH_FACE_EDITOR' not in block,
-          'our watch face: BIND_WALLPAPER, wallpaper service filter, no editor action')
+          'our watch face: BIND_WALLPAPER, wallpaper service filter, our editor action (not WATCH_FACE_EDITOR)')
+    check(f'="{MOD_WATCHFACE_EDITOR_ACTION}"' in editor and 'WEARABLE_CONFIGURATION' in editor
+          and 'WATCH_FACE_EDITOR' not in editor,
+          'our watch face editor: our action, WEARABLE_CONFIGURATION category')
 
 
 def const_only_resources():
