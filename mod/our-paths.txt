@@ -13,5 +13,16 @@ Common/src/mobile/java/tk/glucodata/mod/
 Common/src/mobileMod/
 # CareLink trial (part 4p): test builds of the phone only (mod/mod-init.gradle adds it with -PmodRelease=0)
 Common/src/modTrial/
+# watch block (feature/watch): code shared by the phone and the watch (message format, ongoing alert) - seen by every
+# build and by both of their JVM test tasks; its tests next to theirs
+Common/src/main/java/tk/glucodata/mod/
+Common/src/test/java/mod/
+# watch block: watch-only code (every watch build compiles it, components only in Common/src/wearMod/), its tests,
+# strings and drawables with the mod_ prefix next to theirs
+Common/src/wear/java/tk/glucodata/mod/
+Common/src/testWear/java/mod/
+Common/src/wear/res/values/mod_*
+Common/src/wear/res/values-ru/mod_*
+Common/src/wear/res/drawable/mod_*
 Common/src/mobile/res/values/mod_*
 Common/src/mobile/res/values-ru/mod_*
