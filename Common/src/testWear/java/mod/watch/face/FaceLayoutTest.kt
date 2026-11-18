@@ -1,6 +1,8 @@
 package mod.watch.face
 
 import kotlin.math.hypot
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.watch.face.FaceLayout
@@ -28,7 +30,7 @@ class FaceLayoutTest {
     fun everyRowIsInsideTheCircleOnBothSizes() {
         for (size in sizes) {
             val layout = FaceLayout.compute(size, size)
-            val names = listOf("time", "date", "value", "graph", "battery")
+            val names = listOf("time", "date", "value", "graph", "battery", "mark")
             layout.rows.forEachIndexed { i, row ->
                 assertTrue("${names[i]} empty on $size", row.width > 0f && row.height > 0f)
                 assertInsideCircle(layout, row, "${names[i]} on $size")
@@ -72,6 +74,38 @@ class FaceLayoutTest {
             }
             // range labels at the graph's right edge leave room for the trace
             assertTrue(FaceLayout.estimatedWidth("10,0", l.graphLabelSize) < l.graph.width / 4f)
+        }
+    }
+
+    @Test
+    fun theValueRowIsCentredAndShrinksTogetherWhenTooWide() {
+        val row = FaceLayout.compute(384, 384).value
+        val fits = FaceLayout.placeValueRow(row, 100f, 30f, 50f, 10f)
+        assertEquals(1f, fits.scale, 0.0001f)
+        val total = 100f + 10f + 30f + 10f + 50f
+        assertEquals(row.centerX - total / 2f, fits.valueX, 0.01f)
+        assertEquals(fits.valueX + 110f, fits.arrowX, 0.01f)
+        assertEquals(fits.arrowX + 40f, fits.sideX, 0.01f)
+        // without an arrow the change follows the number after one gap
+        val noArrow = FaceLayout.placeValueRow(row, 100f, 0f, 50f, 10f)
+        assertEquals(noArrow.valueX + 110f, noArrow.sideX, 0.01f)
+        // far too wide: scaled to the row exactly, still centred
+        val wide = FaceLayout.placeValueRow(row, 600f, 60f, 200f, 20f)
+        assertTrue(wide.scale < 1f)
+        assertEquals(row.left, wide.valueX, 0.01f)
+        assertEquals(row.right, wide.sideX + 200f * wide.scale, 0.01f)
+    }
+
+    @Test
+    fun aTapOnTheValueButNotOnTheTimeOrTheGraph() {
+        for (size in sizes) {
+            val l = FaceLayout.compute(size, size)
+            val v = l.value
+            assertTrue(FaceLayout.isOnValue(l, v.centerX, (v.top + v.bottom) / 2f))
+            assertTrue(FaceLayout.isOnValue(l, v.left + 1f, v.bottom + v.height * 0.2f))
+            assertFalse(FaceLayout.isOnValue(l, l.time.centerX, (l.time.top + l.time.bottom) / 2f))
+            assertFalse(FaceLayout.isOnValue(l, l.graph.centerX, (l.graph.top + l.graph.bottom) / 2f))
+            assertFalse(FaceLayout.isOnValue(l, v.left - 5f, (v.top + v.bottom) / 2f))
         }
     }
 

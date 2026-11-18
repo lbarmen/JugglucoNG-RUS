@@ -60,6 +60,19 @@ object FaceGraph {
         return Plot(from, nowMs, inWindow, bottom, maxValue + pad, lo, hi)
     }
 
+    /** Readings further apart than this are not joined by a line (a sensor gap stays visible). */
+    const val MAX_GAP_MS = 15 * 60_000L
+
+    /** [points] (oldest first) cut into runs where no two neighbours are more than [maxGapMs] apart. */
+    fun segments(points: List<FacePoint>, maxGapMs: Long = MAX_GAP_MS): List<List<FacePoint>> {
+        val runs = mutableListOf<MutableList<FacePoint>>()
+        for (p in points) {
+            val run = runs.lastOrNull()
+            if (run != null && p.timeMs - run.last().timeMs <= maxGapMs) run += p else runs += mutableListOf(p)
+        }
+        return runs
+    }
+
     /** Horizontal place of [timeMs] in the plot, 0 (left, oldest) .. 1 (right, now); clamped to the box. */
     fun xFraction(plot: Plot, timeMs: Long): Float {
         val span = (plot.toMs - plot.fromMs).coerceAtLeast(1L)

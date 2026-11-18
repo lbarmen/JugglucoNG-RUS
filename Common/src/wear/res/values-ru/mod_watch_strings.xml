@@ -27,4 +27,12 @@
     </string-array>
     <string name="mod_watch_face_percent">%1$d %%</string>
     <string name="mod_watch_face_minutes">%1$d мин</string>
+    <string name="mod_watch_face_phone">телефон</string>
+    <string name="mod_watch_face_watch">часы</string>
+
+    <string name="mod_watch_face_graph_setting">Часы графика</string>
+    <string name="mod_watch_face_graph_setting_description">Сколько часов показывает график сахара</string>
+    <string name="mod_watch_face_graph_1">1 час</string>
+    <string name="mod_watch_face_graph_3">3 часа</string>
+    <string name="mod_watch_face_graph_6">6 часов</string>
 </resources>

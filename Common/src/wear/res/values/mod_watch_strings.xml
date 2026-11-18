@@ -32,4 +32,16 @@
     <string name="mod_watch_face_percent">%1$d%%</string>
     <!-- How old the glucose value is, "2 min" -->
     <string name="mod_watch_face_minutes">%1$d min</string>
+    <!-- Battery row words: "phone 64%   watch 81%" -->
+    <string name="mod_watch_face_phone">phone</string>
+    <string name="mod_watch_face_watch">watch</string>
+
+    <!-- Our watch face (part 3b): its name in the watch face list (upstream's face keeps "Juggluco") -->
+    <string name="mod_watch_face_name" translatable="false">Juggluco JugglucoNGmod</string>
+    <!-- The face's one setting: how many hours the graph shows -->
+    <string name="mod_watch_face_graph_setting">Graph hours</string>
+    <string name="mod_watch_face_graph_setting_description">How many hours the glucose graph shows</string>
+    <string name="mod_watch_face_graph_1">1 hour</string>
+    <string name="mod_watch_face_graph_3">3 hours</string>
+    <string name="mod_watch_face_graph_6">6 hours</string>
 </resources>

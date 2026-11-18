@@ -19,6 +19,9 @@ data class FaceLabels(
     val percentFormat: String,
     /** The age of the value, `String.format` pattern with one integer ("%1$d min"). */
     val minutesFormat: String,
+    /** The battery row's words before the two percents (part 3b). */
+    val phone: String = "phone",
+    val watch: String = "watch",
 ) {
     companion object {
         /** The labels for the context's current locale. */
@@ -29,6 +32,8 @@ data class FaceLabels(
                 res.getStringArray(R.array.mod_watch_face_months).toList(),
                 res.getString(R.string.mod_watch_face_percent),
                 res.getString(R.string.mod_watch_face_minutes),
+                res.getString(R.string.mod_watch_face_phone),
+                res.getString(R.string.mod_watch_face_watch),
             )
         }
     }
@@ -60,6 +65,10 @@ object FaceText {
         if (percent == null || percent !in 0..100) return FaceValues.NONE
         return formatInt(labels.percentFormat, percent, "$percent%")
     }
+
+    /** The battery row, "phone 64%   watch 81%" / "телефон 64 %   часы 81 %" (texts from [battery]). */
+    fun batteries(phoneText: String, watchText: String, labels: FaceLabels): String =
+        "${labels.phone} $phoneText   ${labels.watch} $watchText"
 
     /** The age of the value, "2 min" / "2 мин"; `null` when there has been no reading at all. */
     fun age(minutes: Int?, labels: FaceLabels): String? {

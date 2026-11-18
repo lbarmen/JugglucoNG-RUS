@@ -34,5 +34,32 @@
                 <data android:host="*" android:pathPrefix="/mod/" android:scheme="wear" />
             </intent-filter>
         </service>
+        <!-- Our watch face "Juggluco JugglucoNGmod" (part 3b), declared as upstream declares theirs, except the
+             editor action: their WATCH_FACE_EDITOR is handled only by their WatchFaceConfigActivity, which would open
+             for our face. The one setting (graph hours) is a UserStyleSchema list. -->
+        <service
+            android:name="tk.glucodata.mod.watch.face.ModWatchFaceService"
+            android:directBootAware="true"
+            android:exported="true"
+            android:label="@string/mod_watch_face_name"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+                <category android:name="com.google.android.wearable.watchface.category.WATCH_FACE" />
+            </intent-filter>
+            <meta-data android:name="android.service.wallpaper.square_mode" android:value="false" />
+            <meta-data
+                android:name="com.google.android.wearable.watchface.preview"
+                android:resource="@drawable/mod_watch_face_preview" />
+            <meta-data
+                android:name="com.google.android.wearable.watchface.preview_circular"
+                android:resource="@drawable/mod_watch_face_preview" />
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/mod_watch_face" />
+            <meta-data
+                android:name="com.google.android.wearable.watchface.companionBuiltinConfigurationEnabled"
+                android:value="true" />
+        </service>
     </application>
 </manifest>

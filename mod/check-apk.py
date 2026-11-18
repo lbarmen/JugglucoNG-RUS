@@ -22,7 +22,11 @@ import zipfile
 
 PACKAGE = 'tk.glucodata.ng.mod'
 APP_NAME = 'JugglucoNGmod'
-WATCHFACE_NAME = 'JugglucoNGmod'
+# Our own watch face (watch block, part 3b) carries this name; upstream's face keeps theirs as a spare.
+MOD_WATCHFACE_NAME = 'Juggluco JugglucoNGmod'
+# Our components that must be in the wear APK (declared in Common/src/wearMod/AndroidManifest.xml).
+MOD_WEAR_COMPONENTS = ['tk.glucodata.mod.watch.SnoozeButtonActivity', 'tk.glucodata.mod.watch.ModWearListener',
+                       'tk.glucodata.mod.watch.face.ModWatchFaceService']
 # Must match packagingOptions.jniLibs.excludes in upstream Common/build.gradle.
 VENDOR_EXCLUDES = ['libdata-handle-lib*.so', 'libnative-algorithm-*.so', 'libnative-algorithm-jni-*.so',
                    'libnative-encrypy-decrypt-v110.so', 'libnative-sensitivity-v110.so', 'libnative-struct2json.so']
@@ -178,11 +182,40 @@ def check_vendor(apk):
           + (f' — {bad}' if bad else ''))
 
 
+def upstream_watchface_name():
+    """Upstream's own face name, from their wear strings (no longer overridden by us since watch part 3b)."""
+    m = re.search(r'name="watch_face_name"[^>]*>([^<]*)<',
+                  open('Common/src/wear/res/values/strings.xml', encoding='utf-8').read())
+    return m.group(1) if m else None
+
+
+def check_resource_string(dump, name, want, what):
+    m = re.search(rf'string/{re.escape(name)}\b.*?\n\s*\(\)\s*"([^"]*)"', dump, re.S)
+    check(m and m.group(1) == want, f'{what} "{want}" in wear APK'
+          + ('' if m else ' (not found)') + (f' (got "{m.group(1)}")' if m and m.group(1) != want else ''))
+
+
 def check_watchface_name(apk):
     out = run([build_tool('aapt2'), 'dump', 'resources', apk])
-    m = re.search(r'string/watch_face_name.*?\n\s*\(\)\s*"([^"]*)"', out, re.S)
-    check(m and m.group(1) == WATCHFACE_NAME, f'watch face name "{WATCHFACE_NAME}" in wear APK'
-          + ('' if m else ' (not found)') + (f' (got "{m.group(1)}")' if m and m.group(1) != WATCHFACE_NAME else ''))
+    check_resource_string(out, 'watch_face_name', upstream_watchface_name(), "upstream's watch face name")
+    check_resource_string(out, 'mod_watch_face_name', MOD_WATCHFACE_NAME, 'our watch face name')
+
+
+def check_wear_components(apk):
+    """Our watch components are in the wear APK's manifest; our face is a wallpaper service without an editor
+    action (upstream's WatchFaceConfigActivity alone handles theirs)."""
+    out = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', 'AndroidManifest.xml', apk])
+    names = set(re.findall(r'A: (?:http://schemas.android.com/apk/res/android:)?name\([^)]*\)="([^"]+)"', out))
+    missing = [c for c in MOD_WEAR_COMPONENTS if c not in names]
+    check(not missing, f'wear APK declares our {len(MOD_WEAR_COMPONENTS)} components'
+          + (f' (missing: {missing})' if missing else ''))
+    block = ''
+    for m in re.finditer(r'E: service\b(?:(?!\n\s*E: (?:service|activity|receiver|provider)\b)[\s\S])*', out):
+        if 'tk.glucodata.mod.watch.face.ModWatchFaceService' in m.group(0):
+            block = m.group(0)
+    check('android.permission.BIND_WALLPAPER' in block and 'android.service.wallpaper.WallpaperService' in block
+          and 'WATCH_FACE_EDITOR' not in block,
+          'our watch face: BIND_WALLPAPER, wallpaper service filter, no editor action')
 
 
 def const_only_resources():
@@ -336,6 +369,7 @@ def main():
     check_icon()
     check_native()
     check_watchface_name(a.wear)
+    check_wear_components(a.wear)
     check_watchface_resources(a.wear)
     check_xml_drawable_constructors(a.wear)
     if not a.no_vendor:

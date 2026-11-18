@@ -46,6 +46,22 @@ class FaceTextTest {
     }
 
     @Test
+    @Config(qualifiers = "en")
+    fun theBatteryRowInEnglish() {
+        val l = labels()
+        assertEquals("phone 64%   watch 81%", FaceText.batteries(FaceText.battery(64, l), FaceText.battery(81, l), l))
+        assertEquals("phone —   watch 81%", FaceText.batteries(FaceText.battery(null, l), FaceText.battery(81, l), l))
+    }
+
+    @Test
+    @Config(qualifiers = "ru")
+    fun theBatteryRowInRussian() {
+        val l = labels()
+        assertEquals("телефон 64 %   часы 81 %",
+            FaceText.batteries(FaceText.battery(64, l), FaceText.battery(81, l), l))
+    }
+
+    @Test
     fun unknownOrBrokenBatteryIsADash() {
         val labels = labels()
         assertEquals(FaceValues.NONE, FaceText.battery(null, labels))

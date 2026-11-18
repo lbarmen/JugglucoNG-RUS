@@ -34,6 +34,9 @@ object FaceLayout {
     private const val GRAPH_BOTTOM = 0.73f
     private const val BATTERY_TOP = 0.76f
     private const val BATTERY_BOTTOM = 0.81f
+    /** The "TEST" mark of a local trial build (part 3b), under the batteries. */
+    private const val MARK_TOP = 0.83f
+    private const val MARK_BOTTOM = 0.875f
 
     /** Text sizes, shares of the diameter. */
     private const val TIME_TEXT = 0.12f
@@ -43,6 +46,10 @@ object FaceLayout {
     private const val SIDE_TEXT = 0.065f
     private const val GRAPH_LABEL_TEXT = 0.045f
     private const val BATTERY_TEXT = 0.045f
+    private const val MARK_TEXT = 0.04f
+
+    /** The tap area of the value reaches this share of the value row's height above and below it. */
+    private const val TAP_SLACK = 0.25f
 
     /** Space kept from the round edge on each side, share of the diameter. */
     const val MARGIN = 0.04f
@@ -76,9 +83,16 @@ object FaceLayout {
         val graph: Row,
         val graphLabelSize: Float,
         val battery: Row,
+        val mark: Row,
     ) {
-        val rows: List<Row> get() = listOf(time, date, value, graph, battery)
+        val rows: List<Row> get() = listOf(time, date, value, graph, battery, mark)
     }
+
+    /**
+     * Where the value row's parts start (left edges, pixels) once the whole is centred in the row, and the [scale]
+     * every part's size is multiplied by when the whole would be wider than the row (1 when it fits).
+     */
+    data class ValuePlacement(val scale: Float, val valueX: Float, val arrowX: Float, val sideX: Float)
 
     fun compute(widthPx: Int, heightPx: Int): Layout {
         val size = min(widthPx, heightPx).toFloat().coerceAtLeast(1f)
@@ -103,7 +117,29 @@ object FaceLayout {
             graph = row(GRAPH_TOP, GRAPH_BOTTOM, GRAPH_LABEL_TEXT),
             graphLabelSize = GRAPH_LABEL_TEXT * size,
             battery = row(BATTERY_TOP, BATTERY_BOTTOM, BATTERY_TEXT),
+            mark = row(MARK_TOP, MARK_BOTTOM, MARK_TEXT),
         )
+    }
+
+    /**
+     * The value row of measured widths: the number, the arrow (0 - none) and the wider of change and age (0 - none),
+     * [gap] between present parts; centred, scaled down together when wider than the row.
+     */
+    fun placeValueRow(row: Row, valueWidth: Float, arrowWidth: Float, sideWidth: Float, gap: Float): ValuePlacement {
+        val gaps = (if (arrowWidth > 0f) gap else 0f) + (if (sideWidth > 0f) gap else 0f)
+        val total = valueWidth + arrowWidth + sideWidth + gaps
+        val scale = if (total > row.width && total > 0f) (row.width / total).coerceAtLeast(0f) else 1f
+        val left = row.centerX - total * scale / 2f
+        val arrowX = left + (valueWidth + (if (arrowWidth > 0f) gap else 0f)) * scale
+        val sideX = arrowX + (arrowWidth + (if (sideWidth > 0f) gap else 0f)) * scale
+        return ValuePlacement(scale, left, arrowX, sideX)
+    }
+
+    /** A tap at [x], [y] (pixels) is on the value: the value row, a little taller, across its width. */
+    fun isOnValue(layout: Layout, x: Float, y: Float): Boolean {
+        val row = layout.value
+        val slack = row.height * TAP_SLACK
+        return x >= row.left && x <= row.right && y >= row.top - slack && y <= row.bottom + slack
     }
 
     /** A width estimate for [text] at [textSize] (see [CHAR_WIDTH]). */

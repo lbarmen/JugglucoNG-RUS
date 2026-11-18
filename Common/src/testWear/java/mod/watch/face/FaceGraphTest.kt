@@ -82,4 +82,14 @@ class FaceGraphTest {
         assertEquals(1f, FaceGraph.xFraction(plot, now + 2 * minute))
         assertEquals(0f, FaceGraph.xFraction(plot, now - 3 * 60 * minute))
     }
+
+    @Test
+    fun aSensorGapSplitsTheTrace() {
+        val points = listOf(0, 5, 10, 40, 45, 70).map { FacePoint(now - (70 - it) * minute, 6f) }
+        val runs = FaceGraph.segments(points)
+        assertEquals(listOf(3, 2, 1), runs.map { it.size })
+        // exactly the limit still joins
+        assertEquals(1, FaceGraph.segments(points.take(2), 5 * minute).size)
+        assertTrue(FaceGraph.segments(emptyList()).isEmpty())
+    }
 }
