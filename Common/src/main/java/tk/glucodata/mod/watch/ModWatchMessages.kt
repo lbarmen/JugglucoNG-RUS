@@ -33,8 +33,9 @@ object ModWatchMessages {
      */
     const val PATH_TICK = "/mod/tick"
     /**
-     * Phone -> watch, with every tick and a few seconds after an alert setting changed on the phone (part 7b): how
-     * each standard alert sounds - duration, sound, vibration, volume, sound delay, repeat, default snooze. Body:
+     * Phone -> watch, with a tick when changed (or an hour old, or the watch new) and a few seconds after an alert
+     * setting or on/off changed on the phone (parts 7b, 7d): per standard alert duration, sound, vibration, volume,
+     * sound delay, repeat, default snooze, delivery, active hours and threshold, and the send time. Body:
      * [ModAlertSettings].
      */
     const val PATH_ALERTS = "/mod/alerts"

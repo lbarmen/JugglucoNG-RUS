@@ -6,24 +6,35 @@ import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.Wearable
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import tk.glucodata.MessageSender
 
 /**
- * JugglucoNGmod, watch block (part 7b): the phone's alert sound settings to our watch app ([ModAlertSettings],
- * `/mod/alerts`) - with every tick ([WatchTicker.send] hands over the watches it found), and [CHANGE_DELAY_MS] after
- * the last change of a sent key in upstream's alert preferences, so a slider drag goes once. The watch writes only
- * what differs, so the repeat with each tick costs it nothing. Nothing goes while the user has the watch companion
- * switched off (as upstream's own sender). The log has counts only.
+ * JugglucoNGmod, watch block (parts 7b, 7d): the phone's alert settings to our watch app ([ModAlertSettings],
+ * `/mod/alerts`).
+ *
+ * With a tick ([WatchTicker.send] hands over the watches the tick reached) only when the settings differ from what
+ * that watch last got, when it got nothing yet in this process or was out of reach since (a new or returning watch),
+ * and once an [RESEND_MS] for safety ([AlertSendMemory]) - so the alert settings no longer ride along every 5 minutes.
+ * And always [CHANGE_DELAY_MS] after the last change of a carried key or of an alert's on/off in upstream's alert
+ * preferences ([ModAlertSettings.triggersSend]), so a slider drag goes once and upstream's own toggle push (at once)
+ * lands on the watch before ours. Each message carries its send time: the watch drops one overtaken by a newer one.
+ * Nothing goes while the user has the watch companion switched off (as upstream's own sender). The log has counts only.
  */
 object WatchAlertSettings {
 
     /** After the last change of a sent setting, the settings go to the watch this much later. */
     const val CHANGE_DELAY_MS = 3_000L
 
+    /** Unchanged settings go to a watch again after this long. */
+    const val RESEND_MS = 60 * 60_000L
+
     private const val WAIT_SECONDS = 10L
+
+    private val memory = AlertSendMemory()
 
     private val executor = Executors.newSingleThreadScheduledExecutor { r ->
         Thread(r, "ModWatchAlerts").apply { isDaemon = true }
@@ -37,28 +48,35 @@ object WatchAlertSettings {
     private var listener: SharedPreferences.OnSharedPreferenceChangeListener? = null
 
     /**
-     * Sends the current settings to [nodeIds] with [client]; [label] names the occasion in the log. Blocks up to a few
-     * seconds per watch (a worker thread). Returns how many watches got it; never throws.
+     * Sends the current settings with [client] to those of [nodeIds] that are due ([force]: all of them); [nodeIds]
+     * are all the watches reachable now - one missing is forgotten. [label] names the occasion in the log. Blocks up
+     * to a few seconds per watch (a worker thread). Returns how many watches got it; never throws.
      */
-    fun sendTo(client: MessageClient, nodeIds: Collection<String>, label: String): Int {
-        if (nodeIds.isEmpty()) return 0
+    fun sendTo(client: MessageClient, nodeIds: Collection<String>, label: String, force: Boolean = false): Int {
         return try {
+            memory.keepOnly(nodeIds)
+            if (nodeIds.isEmpty()) return 0
+            val now = System.currentTimeMillis()
             val settings = ModAlertSettings.collect()
             if (settings.isEmpty()) {
                 ModWatchLog.w("alerts $label: nothing to send")
                 return 0
             }
-            val data = ModAlertSettings.encode(settings)
+            val due = nodeIds.filter { force || memory.due(it, settings, now) }
+            if (due.isEmpty()) return 0
+            val data = ModAlertSettings.encode(settings, now)
             var sent = 0
-            for (id in nodeIds) {
+            for (id in due) {
                 try {
                     Tasks.await(client.sendMessage(id, ModWatchMessages.PATH_ALERTS, data), WAIT_SECONDS, TimeUnit.SECONDS)
+                    memory.sent(id, settings, now)
                     sent++
                 } catch (t: Throwable) {
+                    memory.failed(id)
                     ModWatchLog.w("alerts $label: node failed: ${t.javaClass.simpleName}")
                 }
             }
-            ModWatchLog.i("alerts $label: ${settings.size} kinds to $sent of ${nodeIds.size}")
+            ModWatchLog.i("alerts $label: ${settings.size} kinds to $sent of ${due.size}")
             sent
         } catch (t: Throwable) {
             ModWatchLog.w("alerts $label failed: ${t.javaClass.simpleName}")
@@ -66,10 +84,11 @@ object WatchAlertSettings {
         }
     }
 
-    /** Looks up our reachable watches and sends them the settings; blocks (our thread). Never throws. */
+    /** Looks up our reachable watches and sends them all the settings; blocks (our thread). Never throws. */
     fun sendNow(context: Context, label: String) {
         try {
             if (!MessageSender.outgoingAllowed()) {
+                memory.forget()
                 ModWatchLog.i("alerts $label: watch companion off")
                 return
             }
@@ -79,14 +98,18 @@ object WatchAlertSettings {
                 WAIT_SECONDS, TimeUnit.SECONDS,
             ).nodes
             if (nodes.isEmpty()) {
+                memory.forget()
                 ModWatchLog.i("alerts $label: no watch")
                 return
             }
-            sendTo(Wearable.getMessageClient(context), nodes.map { it.id }, label)
+            sendTo(Wearable.getMessageClient(context), nodes.map { it.id }, label, force = true)
         } catch (t: Throwable) {
             ModWatchLog.w("alerts $label failed: ${t.javaClass.simpleName}")
         }
     }
+
+    /** Our watch app appeared again: the next tick sends it the settings whatever was sent before. */
+    fun forget() = memory.forget()
 
     /** A sent setting changed: [sendNow] once, [CHANGE_DELAY_MS] after the last such call. Returns at once. */
     fun onChanged(context: Context) {
@@ -112,7 +135,7 @@ object WatchAlertSettings {
                 try {
                     if (listener != null) return@execute
                     val l = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
-                        if (ModAlertSettings.isSentKey(key)) onChanged(app)
+                        if (ModAlertSettings.triggersSend(key)) onChanged(app)
                     }
                     listener = l
                     app.getSharedPreferences(ModAlertSettings.ALERT_PREFS, Context.MODE_PRIVATE)
@@ -124,5 +147,42 @@ object WatchAlertSettings {
         } catch (t: Throwable) {
             ModWatchLog.w("alerts listener not queued: ${t.javaClass.simpleName}")
         }
+    }
+}
+
+/**
+ * What [WatchAlertSettings] last sent to each watch in this process and the rule for a tick's send, apart from the
+ * Data Layer (tests drive it directly). Safe from several threads; a race costs at most one extra message.
+ */
+class AlertSendMemory {
+
+    private data class Sent(val settings: List<ModAlertSettings.Settings>, val atMs: Long)
+
+    private val byNode = ConcurrentHashMap<String, Sent>()
+
+    /**
+     * [node] is due [settings] at [nowMs]: it got nothing yet (or was forgotten), got other settings, or got these
+     * [WatchAlertSettings.RESEND_MS] ago or longer (a clock set back counts as long ago).
+     */
+    fun due(node: String, settings: List<ModAlertSettings.Settings>, nowMs: Long): Boolean {
+        val last = byNode[node] ?: return true
+        return last.settings != settings || nowMs - last.atMs !in 0 until WatchAlertSettings.RESEND_MS
+    }
+
+    fun sent(node: String, settings: List<ModAlertSettings.Settings>, nowMs: Long) {
+        byNode[node] = Sent(settings, nowMs)
+    }
+
+    fun failed(node: String) {
+        byNode.remove(node)
+    }
+
+    /** Forgets every watch not in [reachable]: when it is back, it is due. */
+    fun keepOnly(reachable: Collection<String>) {
+        byNode.keys.retainAll(reachable.toSet())
+    }
+
+    fun forget() {
+        byNode.clear()
     }
 }

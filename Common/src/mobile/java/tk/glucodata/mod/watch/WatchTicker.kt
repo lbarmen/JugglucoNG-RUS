@@ -72,19 +72,20 @@ object WatchTicker {
                 ModWatchMessages.Tick(battery?.percent, battery?.charging == true, nowMs, reason)
             )
             val client = Wearable.getMessageClient(context)
-            var sent = 0
+            val reached = ArrayList<String>(nodes.size)
             for (node in nodes) {
                 try {
                     Tasks.await(client.sendMessage(node.id, ModWatchMessages.PATH_TICK, data), WAIT_SECONDS, TimeUnit.SECONDS)
-                    sent++
+                    reached += node.id
                 } catch (t: Throwable) {
                     ModWatchLog.w("tick $reason: node failed: ${t.javaClass.simpleName}")
                 }
             }
+            val sent = reached.size
             if (sent > 0) memory.delivered(nowMs, battery?.percent)
             ModWatchLog.i("tick $reason: $sent of ${nodes.size}")
-            // part 7b: the alert sound settings ride along to the same watches (never throws)
-            WatchAlertSettings.sendTo(client, nodes.map { it.id }, "tick $reason")
+            // parts 7b, 7d: the alert settings to the watches the tick reached, when due (never throws)
+            WatchAlertSettings.sendTo(client, reached, "tick $reason")
             return true
         } catch (t: Throwable) {
             ModWatchLog.w("tick $reason failed: ${t.javaClass.simpleName}")
@@ -138,6 +139,7 @@ object WatchTicker {
     fun onWatchAppeared(context: Context) {
         val app = context.applicationContext ?: context
         memory.watchAppeared()
+        WatchAlertSettings.forget() // part 7d: the next tick brings the alert settings
         try {
             worker.execute {
                 try {
