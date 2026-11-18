@@ -34,13 +34,16 @@ import tk.glucodata.ui.WearSensorSelection
  *   (as `ComplicationRenderer.drawSparkline`), clock mode `Applic.hour24` (as `WatchRenderer.watchtime`);
  * - batteries: [PhoneBatteryStore] (from `/mod/tick`) and [ModBattery] (this watch);
  * - forecast: upstream's `WearPrediction.forecast` of the lane, only with their "Prediction" setting on (as their
- *   chart screen on the watch, `ChartScreen`).
+ *   chart screen on the watch, `ChartScreen`), and not for the dim mode, which never draws it (part 7c).
  *
  * Every upstream call is guarded: a failure there leaves that part empty, never the face crashed.
  */
 internal object ModFaceSource : FaceSource {
 
-    override fun snapshot(context: Context, nowMs: Long, graphHours: Int): FaceSnapshot {
+    override fun snapshot(context: Context, nowMs: Long, graphHours: Int): FaceSnapshot =
+        snapshot(context, nowMs, graphHours, withForecast = true)
+
+    override fun snapshot(context: Context, nowMs: Long, graphHours: Int, withForecast: Boolean): FaceSnapshot {
         val hours = FaceGraph.sanitizeHours(graphHours)
         val isMmol = ComplicationRenderer.isMmol()
         val sensor = guard { WearSensorSelection.resolve() }
@@ -52,23 +55,22 @@ internal object ModFaceSource : FaceSource {
         val history = lane.map { FacePoint(it.timestamp, it.value) }
         val graph = smoothed(context, lane, nowMs).map { FacePoint(it.timestamp, it.value) }
         // the lane's own value is in `value`, so upstream projects the lane the user looks at
-        val forecast = if (guard { WearPrediction.isEnabled() } == true) {
+        val forecast = if (withForecast && guard { WearPrediction.isEnabled() } == true) {
             guard { WearPrediction.forecast(lane, isMmol) }.orEmpty()
                 .filter { FaceValues.usable(it.value) }
                 .map { FacePoint(it.timestamp, it.value) }
         } else emptyList()
-        val low = FaceValues.threshold(guard { Natives.targetlow() }, GlucoseRangeColors.defaultLow(isMmol))
-        val high = FaceValues.threshold(guard { Natives.targethigh() }, GlucoseRangeColors.defaultHigh(isMmol))
+        val limits = limits(isMmol)
         return FaceSnapshot(
             nowMs = nowMs,
             isMmol = isMmol,
             hour24 = guard { Applic.hour24 } ?: true,
             graphHours = hours,
-            current = current(sensor, isMmol, nowMs, points, lane),
+            current = current(sensor, isMmol, nowMs, points, lane, limits),
             history = history,
             graphPoints = graph,
-            low = low,
-            high = high,
+            low = limits.low,
+            high = limits.high,
             phoneBatteryPercent = guard { PhoneBatteryStore.read(context, nowMs) },
             watchBatteryPercent = guard { ModBattery.read(context)?.percent },
             forecast = forecast,
@@ -85,16 +87,17 @@ internal object ModFaceSource : FaceSource {
         nowMs: Long,
         points: List<GlucosePoint>,
         lane: List<GlucosePoint>,
+        limits: Limits,
     ): FaceReading? {
         val newest = newestIndex(lane)
         val live = guard { CurrentDisplaySource.resolveCurrent(FaceValues.SOURCE_MAX_AGE_MS, sensor) }
             ?.takeIf { FaceValues.usable(it.primaryValue) && it.primaryStr.isNotBlank() && it.timeMillis > 0L }
             ?.takeIf { !FaceValues.liveIsBehind(it.timeMillis, newest?.let { i -> lane[i].timestamp }) }
         val shown = live ?: synced(sensor, nowMs, newest?.let { points[it] }) ?: return null
-        val color = guard { trafficColor(shown.primaryValue, isMmol) } ?: NEUTRAL
+        val color = guard { trafficColor(shown.primaryValue, isMmol, limits) } ?: NEUTRAL
         return FaceReading(shown.timeMillis, shown.primaryValue, shown.primaryStr, shown.rate, color,
             deltaValue = FaceValues.laneValue(shown.autoValue, shown.rawValue, shown.viewMode),
-            arrowColor = guard { arrowColor(shown.primaryValue, shown.rate, isMmol, color) } ?: color)
+            arrowColor = guard { arrowColor(shown.primaryValue, shown.rate, isMmol, color, limits) } ?: color)
     }
 
     /** Index of the newest usable point of the [lane]. */
@@ -138,9 +141,13 @@ internal object ModFaceSource : FaceSource {
     }
 
     /** The four limits of upstream's traffic light in display units (`Natives`, `GlucoseRangeColors` defaults). */
-    private class Limits(val low: Float, val high: Float, val veryLow: Float, val veryHigh: Float)
+    data class Limits(val low: Float, val high: Float, val veryLow: Float, val veryHigh: Float)
 
-    private fun limits(isMmol: Boolean) = Limits(
+    /**
+     * The limits as the user set them, four native calls: read once per snapshot, off the main thread; the renderer
+     * keeps them with the snapshot for the dots' colours (critic 7, N7).
+     */
+    fun limits(isMmol: Boolean) = Limits(
         FaceValues.threshold(guard { Natives.targetlow() }, GlucoseRangeColors.defaultLow(isMmol)),
         FaceValues.threshold(guard { Natives.targethigh() }, GlucoseRangeColors.defaultHigh(isMmol)),
         FaceValues.threshold(guard { Natives.alarmverylow() }, GlucoseRangeColors.defaultVeryLow(isMmol)),
@@ -153,8 +160,10 @@ internal object ModFaceSource : FaceSource {
      * of `ComplicationRenderer.valueColor`), whatever that setting is - in the range green, out of it yellow, past
      * very low / very high red.
      */
-    fun trafficColor(value: Float, isMmol: Boolean): Int {
-        val l = limits(isMmol)
+    fun trafficColor(value: Float, isMmol: Boolean): Int = trafficColor(value, isMmol, limits(isMmol))
+
+    /** [trafficColor] by limits already read ([limits]): no native call, for every dot of every frame. */
+    fun trafficColor(value: Float, isMmol: Boolean, l: Limits): Int {
         return GlucoseValueTone.valueColorArgb(
             value = value,
             isDark = true,
@@ -174,8 +183,10 @@ internal object ModFaceSource : FaceSource {
      * their "out" colour, out of the range their "borderline" colour, else [valueColor]. The age gate is
      * [FaceModel]'s (it knows the time of the frame).
      */
-    fun arrowColor(value: Float, rateMgdlPerMin: Float, isMmol: Boolean, valueColor: Int): Int {
-        val l = limits(isMmol)
+    fun arrowColor(value: Float, rateMgdlPerMin: Float, isMmol: Boolean, valueColor: Int): Int =
+        arrowColor(value, rateMgdlPerMin, isMmol, valueColor, limits(isMmol))
+
+    private fun arrowColor(value: Float, rateMgdlPerMin: Float, isMmol: Boolean, valueColor: Int, l: Limits): Int {
         val k = if (isMmol) MGDL_PER_MMOL else 1f
         return when (TrendProjection.classify(value * k, rateMgdlPerMin, TrendProjection.DEFAULT_HORIZON_MINUTES,
             l.low * k, l.high * k, l.veryLow * k, l.veryHigh * k)) {

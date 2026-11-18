@@ -7,7 +7,8 @@ import java.util.Locale
  *
  * The background is always black (the screen stays on, AMOLED); the graph has no frame and no band (part 7a). The dim
  * (ambient) mode keeps the same picture: every colour dimmer by [AMBIENT_DIM], thinner lines, smaller dots, no
- * forecast, no labels on the graph.
+ * forecast, no labels on the graph; the number in regular weight and dimmer still, by [AMBIENT_VALUE_DIM] (part 7c,
+ * critic 7, S2: the largest lit area of an always-on AMOLED screen).
  * Widths and radii are shares of the screen's diameter; [arrowStroke] is a share of the arrow's size.
  */
 data class FaceStyle(
@@ -38,11 +39,26 @@ data class FaceStyle(
     val forecastWidth: Float = 0.006f,
     /** A battery icon's outline and fill, and its number. */
     val battery: Int = GREY,
-    /** The same at [FaceIcons.LOW_PERCENT] or less. */
+    /** The same under [FaceIcons.LOW_PERCENT]. */
     val batteryLow: Int = RED,
+    /** The same under [FaceIcons.WARN_PERCENT] (part 7c). */
+    val batteryWarn: Int = AMBER,
+    /** The number in bold (not in the dim mode, part 7c). */
+    val valueBold: Boolean = true,
 ) {
-    /** The value's own range colour, dimmed in ambient; [neutral] without one. */
-    fun valueColor(rangeColor: Int?): Int = rangeColor?.let { tone(it) } ?: neutral
+    /** The value's own range colour, dimmed in ambient more than the rest (part 7c); [neutral] without one. */
+    fun valueColor(rangeColor: Int?): Int =
+        rangeColor?.let { if (ambient) dim(it, AMBIENT_VALUE_DIM) else it } ?: neutral
+
+    /** The arrow's and the change's range colour, dimmed in ambient as the rest. */
+    fun arrowColor(rangeColor: Int?): Int = rangeColor?.let { tone(it) } ?: neutral
+
+    /** A battery's colour by its percent: red when low, yellow under half, else grey (part 7c). */
+    fun batteryColor(percent: Int): Int = when {
+        FaceIcons.isLow(percent) -> batteryLow
+        FaceIcons.isWarn(percent) -> batteryWarn
+        else -> battery
+    }
 
     /** A graph point's range colour, dimmed in ambient. */
     fun traceColor(rangeColor: Int): Int = tone(rangeColor)
@@ -55,9 +71,13 @@ data class FaceStyle(
         /** How much of each colour channel the ambient mode keeps. */
         const val AMBIENT_DIM = 0.6f
 
+        /** How much of the number's colour the ambient mode keeps (part 7c: dimmer than the rest). */
+        const val AMBIENT_VALUE_DIM = 0.45f
+
         private const val WHITE = 0xFFFFFFFF.toInt()
         private const val GREY = 0xFFB4B4B4.toInt()
         private const val RED = 0xFFFF5252.toInt()
+        private const val AMBER = 0xFFFFC940.toInt()
         /** Upstream's neutral value tone on a dark face (as [ModFaceSource]). */
         private const val NEUTRAL = 0xFFE3E2DE.toInt()
         private const val RANGE_LINE = 0xFF7A7A7A.toInt()
@@ -80,7 +100,8 @@ data class FaceStyle(
             rangeLine = dim(RANGE_LINE, AMBIENT_DIM), mark = dim(ORANGE, AMBIENT_DIM),
             dotRadius = 0.006f, rangeLineWidth = 0.0025f, arrowStroke = 0.07f,
             hourLine = dim(HOUR_LINE, AMBIENT_DIM), hourLineWidth = 0.002f, hourLabel = null, forecast = null,
-            battery = dim(GREY, AMBIENT_DIM), batteryLow = dim(RED, AMBIENT_DIM),
+            battery = dim(GREY, AMBIENT_DIM), batteryLow = dim(RED, AMBIENT_DIM), batteryWarn = dim(AMBER, AMBIENT_DIM),
+            valueBold = false,
         )
 
         fun of(ambient: Boolean): FaceStyle = if (ambient) AMBIENT else NORMAL

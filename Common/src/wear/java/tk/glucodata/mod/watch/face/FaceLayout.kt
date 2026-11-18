@@ -5,47 +5,44 @@ import kotlin.math.min
 import kotlin.math.sqrt
 
 /**
- * JugglucoNGmod, watch block (part 3a, the whole circle since part 7a): where the face's rows sit on a round screen,
- * without a Canvas:
+ * JugglucoNGmod, watch block (part 3a, the whole circle since part 7a, the status row at the bottom since part 7c):
+ * where the face's rows sit on a round screen, without a Canvas:
  * ```
- *                 19:57              time, small
- *         [▯] 49  Wed 18  [⌚] 81     batteries as icons, the weekday and day
+ *                 19:57              time alone at the top (~50 px on 450)
  *          10,8 ↗  +0.5              value (~90 px on 450), arrow, change over age
  *                  2 min
  *   - - - - - - - - - - - - - - - -  target lines to the round edge
  *   10.0  ·  ·· ·  ·   ··· ·  ·::  ╌ 5-minute dots, forecast dashed on the right
  *   3.9 - - - - - - - - - - - - - -
  *          18      19      20        hour labels under the hour lines
- *                 (   )              free: the system's ongoing-activity icon
+ *         [▯] 49  Wed 18  [⌚] 81     batteries as icons, the weekday and day, above the round edge
  * ```
  * Every share is of the screen's diameter (the smaller side, centred); a row is as wide as the circle allows at its
- * edge farther from the centre, less a margin, so nothing reaches the round edge on any size. The band
- * [SYSTEM_TOP]..[SYSTEM_BOTTOM] stays empty: Wear OS draws the icon of the app's ongoing activity there.
+ * edge farther from the centre, less a margin, so nothing reaches the round edge on any size. Part 7c (the owner's
+ * word) gave up the free band at the bottom that was kept for the system's ongoing-activity icon: our watch build
+ * makes that icon a faint speck (`wearMod/res/drawable-anydpi-v24/novalue.xml`) and the status row takes the room.
  */
 object FaceLayout {
 
     /** Top and bottom of each row, shares of the diameter from the top. */
     private const val TIME_TOP = 0.065f
-    private const val TIME_BOTTOM = 0.14f
-    /** The batteries and the date. */
-    private const val STATUS_TOP = 0.148f
-    private const val STATUS_BOTTOM = 0.198f
-    private const val VALUE_TOP = 0.205f
-    private const val VALUE_BOTTOM = 0.405f
-    private const val GRAPH_TOP = 0.42f
-    private const val GRAPH_BOTTOM = 0.76f
+    private const val TIME_BOTTOM = 0.19f
+    private const val VALUE_TOP = 0.20f
+    private const val VALUE_BOTTOM = 0.40f
+    private const val GRAPH_TOP = 0.415f
+    private const val GRAPH_BOTTOM = 0.80f
     /** The hour labels under the graph's hour lines (part 3c2). */
-    private const val HOURS_TOP = 0.765f
-    private const val HOURS_BOTTOM = 0.81f
-    /** Kept free for the system's ongoing-activity icon (seen on the watch at ~0.82..0.90). */
-    const val SYSTEM_TOP = 0.82f
-    const val SYSTEM_BOTTOM = 0.92f
-    /** The "TEST" mark of a local trial build (part 3b), under the system's icon. */
-    private const val MARK_TOP = 0.925f
-    private const val MARK_BOTTOM = 0.965f
+    private const val HOURS_TOP = 0.806f
+    private const val HOURS_BOTTOM = 0.849f
+    /** The batteries and the date (at the bottom since part 7c). */
+    const val STATUS_TOP = 0.858f
+    const val STATUS_BOTTOM = 0.908f
+    /** The "TEST" mark of a local trial build (part 3b), under the status row. */
+    private const val MARK_TOP = 0.914f
+    private const val MARK_BOTTOM = 0.95f
 
     /** Text sizes, shares of the diameter. */
-    private const val TIME_TEXT = 0.075f
+    const val TIME_TEXT = 0.11f
     private const val STATUS_TEXT = 0.045f
     private const val VALUE_TEXT = 0.20f
     private const val ARROW = 0.10f
@@ -83,8 +80,6 @@ object FaceLayout {
         val centerY: Float,
         val radius: Float,
         val time: Row,
-        /** The battery icons with their numbers and, between them, the weekday and day (part 7a). */
-        val status: Row,
         val value: Row,
         val arrowSize: Float,
         val sideTextSize: Float,
@@ -92,12 +87,12 @@ object FaceLayout {
         val graphLabelSize: Float,
         /** The labels of the graph's hour lines (part 3c2). */
         val hours: Row,
-        /** The band the face leaves free for the system's icon; never drawn on. */
-        val system: Row,
+        /** The battery icons with their numbers and, between them, the weekday and day (part 7a; the bottom, 7c). */
+        val status: Row,
         val mark: Row,
     ) {
-        /** The drawn rows, top to bottom (not [system]). */
-        val rows: List<Row> get() = listOf(time, status, value, graph, hours, mark)
+        /** The drawn rows, top to bottom. */
+        val rows: List<Row> get() = listOf(time, value, graph, hours, status, mark)
     }
 
     /** A thin hour line of the graph at [x] (pixels) and its [label]. */
@@ -131,16 +126,35 @@ object FaceLayout {
             centerY = top + size / 2f,
             radius = size / 2f,
             time = row(TIME_TOP, TIME_BOTTOM, TIME_TEXT),
-            status = row(STATUS_TOP, STATUS_BOTTOM, STATUS_TEXT),
             value = row(VALUE_TOP, VALUE_BOTTOM, VALUE_TEXT),
             arrowSize = ARROW * size,
             sideTextSize = SIDE_TEXT * size,
             graph = row(GRAPH_TOP, GRAPH_BOTTOM, GRAPH_LABEL_TEXT),
             graphLabelSize = GRAPH_LABEL_TEXT * size,
             hours = row(HOURS_TOP, HOURS_BOTTOM, HOURS_TEXT),
-            system = row(SYSTEM_TOP, SYSTEM_BOTTOM, 0f),
+            status = row(STATUS_TOP, STATUS_BOTTOM, STATUS_TEXT),
             mark = row(MARK_TOP, MARK_BOTTOM, MARK_TEXT),
         )
+    }
+
+    /** The steps of [burnInOffset]: the picture where it is, then right, down, left and up (part 7c). */
+    private val BURN_IN_STEPS = listOf(0 to 0, 1 to 0, 0 to 1, -1 to 0, 0 to -1)
+
+    /** How far [burnInOffset] moves the picture, share of the diameter (~3.6 px on 450). */
+    const val BURN_IN_SHIFT = 0.008f
+
+    /**
+     * Where the dim mode moves the whole picture in [minute] (minutes since the epoch), pixels on a [diameter] screen
+     * (part 7c, critic 7, S2): one of five places, the next every minute, round and round, so no pixel of the number
+     * or of a line stays lit in one place all day. [strong] - the watch says its screen needs burn-in protection
+     * (`WatchState.hasBurnInProtection`): twice as far. Whole pixels. Every row keeps [MARGIN] from the round edge and the target
+     * lines 0.03 of the diameter, so the moved picture stays inside the circle.
+     */
+    fun burnInOffset(minute: Long, diameter: Float, strong: Boolean): Pair<Float, Float> {
+        val (dx, dy) = BURN_IN_STEPS[Math.floorMod(minute, BURN_IN_STEPS.size.toLong()).toInt()]
+        // whole pixels, so the moved texts stay as sharp as the unmoved ones
+        val step = Math.round(diameter * BURN_IN_SHIFT).coerceAtLeast(1) * (if (strong) 2f else 1f)
+        return dx * step to dy * step
     }
 
     /**
@@ -187,7 +201,7 @@ object FaceLayout {
     /**
      * Left edges of the hour labels in the [hours] row, each centred under its line ([widths] - measured, same
      * order as [lines]); `null` - the label is left out (its line stays): it would reach past the row (the round
-     * edge) or come closer than [gap] to the label before it. The row lies between the graph and the system's icon,
+     * edge) or come closer than [gap] to the label before it. The row lies between the graph and the status row,
      * so a label never touches either.
      */
     fun placeHourLabels(hours: Row, lines: List<HourLine>, widths: List<Float>, gap: Float): List<Float?> {

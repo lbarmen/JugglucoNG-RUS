@@ -16,7 +16,8 @@ import tk.glucodata.TrendArrowAngle
  * its colour as the app would paint that value.
  *
  * Every text is fitted into its row by its measured bounds and set on its baseline (critic 3a, N8: a text's real
- * height is not its size), so nothing reaches the round edge. One painter per renderer, used on its thread.
+ * height is not its size), so nothing reaches the round edge. One painter per renderer, used on its thread; it keeps
+ * its dash patterns for the screen's size instead of making them every frame (critic 7, N9).
  */
 internal class FacePainter {
 
@@ -31,9 +32,24 @@ internal class FacePainter {
     private val path = Path()
     private val icons = FaceIcons()
 
+    /** The dash patterns of the target lines and of the forecast, made for [dashDiameter] (critic 7, N9). */
+    private var dashDiameter = -1f
+    private var rangeDash: DashPathEffect? = null
+    private var forecastDash: DashPathEffect? = null
+
+    private fun dashesFor(diameter: Float) {
+        if (diameter == dashDiameter && rangeDash != null && forecastDash != null) return
+        dashDiameter = diameter
+        val dash = diameter * 0.012f
+        rangeDash = DashPathEffect(floatArrayOf(dash, dash), 0f)
+        forecastDash = DashPathEffect(floatArrayOf(diameter * 0.01f, diameter * 0.012f), 0f)
+    }
+
     /**
      * Paints the face on [canvas] ([widthPx] x [heightPx]) and returns the layout used (the tap area). With
      * [showData] false (no snapshot yet) only the time and the date are drawn; [trial] adds the "TEST" mark.
+     * [offsetX] / [offsetY] move the whole picture (the dim mode's burn-in steps, [FaceLayout.burnInOffset]); the
+     * returned layout is the unmoved one.
      */
     fun draw(
         canvas: Canvas,
@@ -45,18 +61,27 @@ internal class FacePainter {
         showData: Boolean,
         trial: Boolean,
         traceColor: (Float) -> Int,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f,
     ): FaceLayout.Layout {
         val style = FaceStyle.of(ambient)
         val layout = FaceLayout.compute(widthPx, heightPx)
         val d = layout.radius * 2f
+        dashesFor(d)
         canvas.drawColor(style.background)
-        drawClock(canvas, layout.time, model.clock, style)
-        drawStatus(canvas, layout, model, style, showData, d)
-        if (showData) {
-            drawValueRow(canvas, layout, model, style)
-            drawGraph(canvas, layout, d, model, isMmol, style, traceColor)
+        canvas.save()
+        canvas.translate(offsetX, offsetY)
+        try {
+            drawClock(canvas, layout.time, model.clock, style)
+            drawStatus(canvas, layout, model, style, showData, d)
+            if (showData) {
+                drawValueRow(canvas, layout, model, style)
+                drawGraph(canvas, layout, d, model, isMmol, style, traceColor)
+            }
+            if (trial) drawCentred(canvas, TRIAL_MARK, layout.mark, layout.mark.textSize, style.mark, bold = true)
+        } finally {
+            canvas.restore()
         }
-        if (trial) drawCentred(canvas, TRIAL_MARK, layout.mark, layout.mark.textSize, style.mark, bold = true)
         return layout
     }
 
@@ -112,11 +137,12 @@ internal class FacePainter {
         text.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
     }
 
-    // ------------------------------------------------------------------ status row (part 7a)
+    // ------------------------------------------------------------------ status row (part 7a, at the bottom since 7c)
 
     /**
      * The weekday and day in the middle, the phone's battery left of it and the watch's right of it, each an icon
-     * and its number; a battery without a known percent has neither, the dim mode shows only a low one.
+     * and its number in the colour of its percent ([FaceStyle.batteryColor]); a battery without a known percent has
+     * neither, the dim mode shows only a low (red) one.
      */
     private fun drawStatus(
         canvas: Canvas,
@@ -144,7 +170,7 @@ internal class FacePainter {
         canvas.drawText(model.dateText, place.dateX, baseline, text)
         fun group(kind: FaceIcons.Kind, percent: Int?, width: Float, left: Float) {
             if (width <= 0f || percent == null) return
-            val color = if (FaceIcons.isLow(percent)) style.batteryLow else style.battery
+            val color = style.batteryColor(percent)
             icons.draw(canvas, kind, percent, left, row.centerY, iconHeight, color)
             text.color = color
             canvas.drawText(percent.toString(), left + FaceIcons.width(kind, iconHeight) + iconGap, baseline, text)
@@ -159,8 +185,10 @@ internal class FacePainter {
         val row = layout.value
         val valueColor = if (model.hasValue) style.valueColor(model.valueColor) else style.neutral
         // the arrow and the change: where the value heads in 30 minutes, as the app's arrow (part 7a)
-        val arrowColor = if (model.hasValue) style.valueColor(model.arrowColor) else style.neutral
-        setText(row.textSize, valueColor, bold = true)
+        val arrowColor = if (model.hasValue) style.arrowColor(model.arrowColor) else style.neutral
+        // bold, but in the dim mode regular (part 7c, critic 7, S2)
+        val bold = style.valueBold
+        setText(row.textSize, valueColor, bold)
         val valueWidth = text.measureText(model.valueText)
         val arrowWidth = if (model.rate.isFinite()) layout.arrowSize else 0f
         setText(layout.sideTextSize, style.secondary, bold = false)
@@ -171,7 +199,7 @@ internal class FacePainter {
         val centerY = row.top + row.height / 2f
 
         // the number, its digits centred on the row
-        setText(row.textSize * place.scale, valueColor, bold = true)
+        setText(row.textSize * place.scale, valueColor, bold)
         text.getTextBounds(model.valueText, 0, model.valueText.length, bounds)
         canvas.drawText(model.valueText, place.valueX, centerY - bounds.exactCenterY(), text)
 
@@ -269,28 +297,13 @@ internal class FacePainter {
         // target lines, dashed, from round edge to round edge at their height (part 7a)
         stroke.strokeWidth = (diameter * style.rangeLineWidth).coerceAtLeast(1f)
         stroke.color = style.rangeLine
-        val dash = diameter * 0.012f
-        stroke.pathEffect = DashPathEffect(floatArrayOf(dash, dash), 0f)
+        stroke.pathEffect = rangeDash
         val edgeInset = diameter * 0.03f
         for (yLine in listOf(yHigh, yLow)) {
             val half = FaceLayout.halfWidthAt(layout, yLine, edgeInset)
             canvas.drawLine(layout.centerX - half, yLine, layout.centerX + half, yLine, stroke)
         }
         stroke.pathEffect = null
-
-        // their values small at the left end, just above each line (not in the dim mode)
-        if (style.hourLabel != null) {
-            val locale = Locale.getDefault()
-            setText(layout.graphLabelSize, style.secondary, bold = false)
-            text.getTextBounds("0", 0, 1, bounds)
-            val capHeight = bounds.height().toFloat()
-            val lift = diameter * 0.008f
-            for ((value, yLine) in listOf(plot.high to yHigh, plot.low to yLow)) {
-                val baseline = (yLine - lift).coerceIn(row.top + capHeight, row.bottom)
-                val left = maxOf(plotLeft, layout.centerX - FaceLayout.halfWidthAt(layout, baseline - capHeight, edgeInset))
-                canvas.drawText(FaceStyle.rangeLabel(value, isMmol, locale), left, baseline, text)
-            }
-        }
 
         // upstream's forecast, dashed, from the newest reading on (not in the dim mode)
         style.forecast?.let { color ->
@@ -303,7 +316,7 @@ internal class FacePainter {
             }
             stroke.strokeWidth = (diameter * style.forecastWidth).coerceAtLeast(1f)
             stroke.color = color
-            stroke.pathEffect = DashPathEffect(floatArrayOf(diameter * 0.01f, diameter * 0.012f), 0f)
+            stroke.pathEffect = forecastDash
             canvas.drawPath(path, stroke)
             stroke.pathEffect = null
         }
@@ -315,6 +328,42 @@ internal class FacePainter {
         for (dot in plot.dots) {
             fill.color = style.traceColor(traceColor(dot.value))
             canvas.drawCircle(x(dot.timeMs), y(dot.value), radius, fill)
+        }
+
+        // the target lines' values small at the left end, just above each line, over the dots with a black edge
+        // round each glyph so a dot never hides them (part 7c; not in the dim mode)
+        if (style.hourLabel != null) drawRangeLabels(canvas, layout, diameter, plot, isMmol, style, yHigh, yLow, edgeInset)
+    }
+
+    private fun drawRangeLabels(
+        canvas: Canvas,
+        layout: FaceLayout.Layout,
+        diameter: Float,
+        plot: FaceGraph.Plot,
+        isMmol: Boolean,
+        style: FaceStyle,
+        yHigh: Float,
+        yLow: Float,
+        edgeInset: Float,
+    ) {
+        val row = layout.graph
+        val locale = Locale.getDefault()
+        setText(layout.graphLabelSize, style.secondary, bold = false)
+        text.getTextBounds("0", 0, 1, bounds)
+        val capHeight = bounds.height().toFloat()
+        val lift = diameter * 0.008f
+        for ((value, yLine) in listOf(plot.high to yHigh, plot.low to yLow)) {
+            val label = FaceStyle.rangeLabel(value, isMmol, locale)
+            val baseline = (yLine - lift).coerceIn(row.top + capHeight, row.bottom)
+            val left = maxOf(row.left, layout.centerX - FaceLayout.halfWidthAt(layout, baseline - capHeight, edgeInset))
+            text.style = Paint.Style.STROKE
+            text.strokeWidth = diameter * LABEL_EDGE
+            text.strokeJoin = Paint.Join.ROUND
+            text.color = style.background
+            canvas.drawText(label, left, baseline, text)
+            text.style = Paint.Style.FILL
+            text.color = style.secondary
+            canvas.drawText(label, left, baseline, text)
         }
     }
 
@@ -339,5 +388,8 @@ internal class FacePainter {
     companion object {
         /** Marks a local trial build with made-up values; never shown with the real source. */
         const val TRIAL_MARK = "TEST"
+
+        /** The black edge round a range label's glyphs, share of the diameter (part 7c). */
+        const val LABEL_EDGE = 0.014f
     }
 }

@@ -12,6 +12,13 @@ import android.content.Context
  */
 interface FaceSource {
     fun snapshot(context: Context, nowMs: Long, graphHours: Int): FaceSnapshot
+
+    /**
+     * The same; [withForecast] false - the forecast may be left out (the dim mode never draws it, part 7c). A source
+     * without its own (the local trial source) gives the full snapshot.
+     */
+    fun snapshot(context: Context, nowMs: Long, graphHours: Int, withForecast: Boolean): FaceSnapshot =
+        snapshot(context, nowMs, graphHours)
 }
 
 /** A glucose reading in display units ([value] mmol/L or mg/dL as the app shows it). */

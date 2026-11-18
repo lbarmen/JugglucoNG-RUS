@@ -63,8 +63,14 @@ internal class FaceIcons {
     }
 
     companion object {
-        /** At this percent or less the icon and its number are red, and the dim mode still shows them. */
-        const val LOW_PERCENT = 20
+        /**
+         * Below this percent the icon and its number are red, and the dim mode still shows them (part 7c, the
+         * owner's word: under 30 % red, under 50 % yellow).
+         */
+        const val LOW_PERCENT = 30
+
+        /** Below this percent (and not low) the icon and its number are yellow (part 7c). */
+        const val WARN_PERCENT = 50
 
         /** The outline's weight, share of the icon's height. */
         private const val LINE = 0.09f
@@ -76,7 +82,10 @@ internal class FaceIcons {
         fun shown(percent: Int?, ambient: Boolean): Boolean =
             percent != null && percent in 0..100 && (!ambient || isLow(percent))
 
-        fun isLow(percent: Int): Boolean = percent <= LOW_PERCENT
+        fun isLow(percent: Int): Boolean = percent < LOW_PERCENT
+
+        /** Yellow: under [WARN_PERCENT] but not [isLow]. */
+        fun isWarn(percent: Int): Boolean = percent < WARN_PERCENT && !isLow(percent)
 
         /** How much of the icon is filled, 0..1. */
         fun fillShare(percent: Int): Float = percent.coerceIn(0, 100) / 100f

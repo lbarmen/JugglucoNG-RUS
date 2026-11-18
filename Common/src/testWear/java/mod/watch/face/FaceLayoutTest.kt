@@ -9,9 +9,9 @@ import tk.glucodata.mod.watch.face.FaceLayout
 import tk.glucodata.mod.watch.face.FaceValues
 
 /**
- * JugglucoNGmod, watch block (part 3a, part 7a): the face's rows on round screens (384 x 384 - Galaxy Watch 4/5 44 mm
- * class, 450 x 450 - Galaxy Watch 5 Pro): inside the circle, in order, clear of the system's icon at the bottom, and
- * the texts fit by a generous estimate.
+ * JugglucoNGmod, watch block (part 3a, part 7a, part 7c): the face's rows on round screens (384 x 384 - Galaxy Watch
+ * 4/5 44 mm class, 450 x 450 - Galaxy Watch 5 Pro): inside the circle, in order, the time alone at the top and the
+ * date with the batteries at the bottom, and the texts fit by a generous estimate.
  */
 class FaceLayoutTest {
 
@@ -31,7 +31,7 @@ class FaceLayoutTest {
     fun everyRowIsInsideTheCircleOnBothSizes() {
         for (size in sizes) {
             val layout = FaceLayout.compute(size, size)
-            val names = listOf("time", "status", "value", "graph", "hours", "mark")
+            val names = listOf("time", "value", "graph", "hours", "status", "mark")
             layout.rows.forEachIndexed { i, row ->
                 assertTrue("${names[i]} empty on $size", row.width > 0f && row.height > 0f)
                 assertInsideCircle(layout, row, "${names[i]} on $size")
@@ -53,26 +53,46 @@ class FaceLayoutTest {
     }
 
     @Test
-    fun nothingButTheTrialMarkReachesTheSystemIconsBand() {
+    fun theTimeIsAloneOnTopAndTheDateWithTheBatteriesAtTheBottom() {
+        // part 7c, the owner's word: the bottom band once kept free for the system's icon holds the status row
         for (size in sizes) {
             val l = FaceLayout.compute(size, size)
-            assertEquals(FaceLayout.SYSTEM_TOP * size, l.system.top, 0.01f)
-            assertEquals(FaceLayout.SYSTEM_BOTTOM * size, l.system.bottom, 0.01f)
-            listOf(l.time, l.status, l.value, l.graph, l.hours).forEach {
-                assertTrue("row ${it.top}..${it.bottom} in the system band on $size", it.bottom <= l.system.top)
-            }
-            assertTrue(l.mark.top >= l.system.bottom)
+            assertEquals(l.time, l.rows.first())
+            assertTrue(l.time.bottom <= l.value.top)
+            assertTrue(l.graph.bottom <= l.hours.top && l.hours.bottom <= l.status.top)
+            assertEquals(FaceLayout.STATUS_TOP * size, l.status.top, 0.01f)
+            assertEquals(FaceLayout.STATUS_BOTTOM * size, l.status.bottom, 0.01f)
+            // in the lowest tenth of the circle above its edge, nothing free below it but the trial mark
+            assertTrue(l.status.bottom >= 0.9f * size && l.status.bottom < size - FaceLayout.MARGIN * size)
+            assertTrue(l.mark.top >= l.status.bottom)
         }
     }
 
     @Test
-    fun theWholeCircleIsUsedTheValueIsLargeAndTheGraphWide() {
-        // the decision of part 7a on 450 px: value ~90 px, graph ~348 x 153 px
+    fun theWholeCircleIsUsedTheValueIsLargeTheTimeLargerAndTheGraphTaller() {
+        // part 7a on 450 px: value ~90 px, graph 348 x 153; part 7c: the time ~50 px (was 34), graph ~324 x 173
         val l = FaceLayout.compute(450, 450)
         assertEquals(90f, l.value.textSize, 1f)
-        assertEquals(348f, l.graph.width, 3f)
-        assertEquals(153f, l.graph.height, 2f)
-        assertTrue(l.time.textSize < l.value.textSize / 2f)
+        assertEquals(49.5f, l.time.textSize, 0.5f)
+        assertEquals(324f, l.graph.width, 3f)
+        assertEquals(173f, l.graph.height, 2f)
+        assertTrue(l.time.textSize > 0.075f * 450 && l.time.textSize < l.value.textSize)
+    }
+
+    @Test
+    fun theDimModeMovesThePictureFiveStepsRoundAndRoundAndKeepsItInside() {
+        val d = 450f
+        val steps = (0L until 5L).map { FaceLayout.burnInOffset(it, d, strong = false) }
+        assertEquals(5, steps.toSet().size)
+        assertEquals(0f to 0f, steps[0])
+        assertEquals(steps, (5L until 10L).map { FaceLayout.burnInOffset(it, d, strong = false) })
+        assertEquals(FaceLayout.burnInOffset(-1L, d, false), FaceLayout.burnInOffset(4L, d, false))
+        val far = steps.maxOf { maxOf(kotlin.math.abs(it.first), kotlin.math.abs(it.second)) }
+        assertEquals(Math.round(FaceLayout.BURN_IN_SHIFT * d).toFloat(), far, 0.01f)
+        val strong = (0L until 5L).maxOf { FaceLayout.burnInOffset(it, d, strong = true).let { p -> maxOf(kotlin.math.abs(p.first), kotlin.math.abs(p.second)) } }
+        assertEquals(2f * far, strong, 0.01f)
+        // even the strong step stays inside the margin every row keeps from the round edge
+        assertTrue(strong < FaceLayout.MARGIN * d / 2f)
     }
 
     @Test

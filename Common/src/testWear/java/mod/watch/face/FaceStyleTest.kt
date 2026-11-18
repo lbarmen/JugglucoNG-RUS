@@ -2,10 +2,12 @@ package mod.watch.face
 
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tk.glucodata.mod.watch.face.FaceIcons
 import tk.glucodata.mod.watch.face.FaceStyle
 
 /** JugglucoNGmod, watch block (part 3b): the face's colours and line weights, normal and dim (ambient). */
@@ -48,6 +50,39 @@ class FaceStyleTest {
         assertEquals(green, normal.valueColor(green))
         assertTrue(brightness(ambient.valueColor(green)) < brightness(green))
         assertTrue(brightness(ambient.traceColor(green)) < brightness(green))
+    }
+
+    @Test
+    fun theDimNumberIsRegularAndDimmerThanTheRest() {
+        // part 7c, critic 7, S2: the largest lit area of the always-on screen
+        assertTrue(normal.valueBold)
+        assertFalse(ambient.valueBold)
+        val green = 0xFF33CC66.toInt()
+        assertTrue(brightness(ambient.valueColor(green)) < brightness(ambient.arrowColor(green)))
+        assertEquals(ambient.traceColor(green), ambient.arrowColor(green))
+        assertEquals(green, normal.arrowColor(green))
+        assertEquals(normal.neutral, normal.arrowColor(null))
+    }
+
+    @Test
+    fun batteriesRedUnder30YellowUnder50ElseGrey() {
+        // part 7c, the owner's word
+        for (style in listOf(normal, ambient)) {
+            assertEquals(style.batteryLow, style.batteryColor(0))
+            assertEquals(style.batteryLow, style.batteryColor(29))
+            assertEquals(style.batteryWarn, style.batteryColor(30))
+            assertEquals(style.batteryWarn, style.batteryColor(49))
+            assertEquals(style.battery, style.batteryColor(50))
+            assertEquals(style.battery, style.batteryColor(100))
+        }
+        assertTrue(brightness(ambient.batteryWarn) < brightness(normal.batteryWarn))
+        val warn = normal.batteryWarn
+        assertTrue(((warn shr 16) and 0xFF) > 200 && ((warn shr 8) and 0xFF) > 150 && (warn and 0xFF) < 120)
+        // the dim mode shows a battery only when it is red
+        assertTrue(FaceIcons.shown(29, ambient = true))
+        assertFalse(FaceIcons.shown(30, ambient = true))
+        assertTrue(FaceIcons.shown(30, ambient = false) && FaceIcons.shown(100, ambient = false))
+        assertFalse(FaceIcons.shown(null, ambient = false))
     }
 
     @Test

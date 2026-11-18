@@ -115,8 +115,8 @@ class FaceHoursAndRangeTest {
                     assertTrue(left >= layout.hours.left && left + widths[i] <= layout.hours.right)
                 }
             }
-            // the hour labels' row is between the graph and the system's icon (part 7a)
-            assertTrue(layout.graph.bottom <= layout.hours.top && layout.hours.bottom <= layout.system.top)
+            // the hour labels' row is between the graph and the status row (part 7c)
+            assertTrue(layout.graph.bottom <= layout.hours.top && layout.hours.bottom <= layout.status.top)
         }
     }
 
@@ -257,6 +257,27 @@ class FaceHoursAndRangeTest {
     fun theStaleReadOfAFrameNeverBreaksThePause() {
         assertTrue(ModFaceRenderer.STALE_MS >= ModFaceRenderer.MIN_READ_MS)
         assertTrue(ModFaceRenderer.STALE_MS < ModFaceRenderer.FRAME_MS)
+        // the dim mode reads again only every few frames (part 7c, critic 7, N8)
+        assertEquals(ModFaceRenderer.STALE_MS, ModFaceRenderer.staleAfter(false))
+        assertEquals(ModFaceRenderer.AMBIENT_STALE_MS, ModFaceRenderer.staleAfter(true))
+        assertTrue(ModFaceRenderer.AMBIENT_STALE_MS >= 5 * ModFaceRenderer.FRAME_MS)
+    }
+
+    @Test
+    fun theSystemIconOfOurWatchBuildIsAFaintDotOfUpstreamsSize() {
+        // part 7c, the owner's word: Wear OS draws upstream's `novalue` (their ongoing activity's icon) at the bottom
+        // of every face; our watch build overrides it with a faint dot of the same box, the phone keeps theirs
+        fun file(path: String) = listOf(File("src/$path"), File("Common/src/$path")).first { it.isFile }.readText()
+        val ours = file("wearMod/res/drawable-anydpi-v24/novalue.xml")
+        val theirs = file("main/res/drawable-anydpi-v24/novalue.xml")
+        for (attr in listOf("width", "height", "viewportWidth", "viewportHeight")) {
+            val pattern = Regex("android:$attr=\"([^\"]+)\"")
+            assertEquals(attr, pattern.find(theirs)?.groupValues?.get(1), pattern.find(ours)?.groupValues?.get(1))
+        }
+        val colors = Regex("android:fillColor=\"#([0-9A-Fa-f]{8})\"").findAll(ours).map { it.groupValues[1] }.toList()
+        assertTrue(colors.isNotEmpty())
+        colors.forEach { assertTrue("alpha of #$it", it.substring(0, 2).toInt(16) <= 0x50) }
+        assertFalse(ours.contains("android:tint"))
     }
 
     @Test
