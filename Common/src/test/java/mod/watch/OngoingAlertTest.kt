@@ -180,10 +180,27 @@ class OngoingAlertTest {
     }
 
     @Test
-    fun presentedWithoutAnyEpisodeFindsNothingEvenWithASoundOn() {
-        presented = AlertType.VERY_LOW.id
+    fun theConditionClearedWhileTheSoundStillPlaysIsSnoozed() {
+        // the next reading cleared the condition: their runtime resets the episode, the sound plays to its end
+        alarmScreenOpenFor(AlertType.VERY_LOW.id)
+        alertGoingOn(AlertType.VERY_LOW)
+        AlertStateTracker.resetState(AlertType.VERY_LOW)
         NativeSink.soundOn = true
+        assertFalse(AlertStateTracker.isEpisodeActive(AlertType.VERY_LOW))
+        assertEquals(AlertType.VERY_LOW.id, OngoingAlert.find())
+        assertEquals(AlertType.VERY_LOW.id, OngoingAlert.snoozeOngoing())
+        assertTrue(SnoozeManager.isSnoozed(AlertType.VERY_LOW))
+        assertTrue(AlarmSink.calls.contains("stop"))
+        assertEquals(listOf(AlertType.VERY_LOW.id), acknowledged)
+    }
+
+    @Test
+    fun aStaleMarkWithoutAnEpisodeOrASoundFindsNothing() {
+        presented = AlertType.VERY_LOW.id
+        NativeSink.soundOn = false
         assertNull(OngoingAlert.find())
+        assertNull(OngoingAlert.snoozeOngoing())
+        assertNothingSnoozedOrCalled()
     }
 
     @Test

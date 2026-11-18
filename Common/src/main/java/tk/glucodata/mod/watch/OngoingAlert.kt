@@ -21,8 +21,9 @@ import tk.glucodata.ui.AlarmActivityAccess
  * not a manual test) and whose episode is still live: [AlertStateTracker.isEpisodeActive] and not
  * [AlertStateTracker.isDismissed] - the check upstream's Notify.isActivePresentedRecoveryBlocker adds, because "a
  * notification can outlive its condition". The presented mark alone stays after the sound and the condition are over,
- * and snoozing that stale kind would silence its next real alert. LOSS never opens an episode (the native side calls
- * Notify.lossalarm directly), so for LOSS "going on" is "its sound is on now" ([Natives.getisalarm]). Not
+ * and snoozing that stale kind would silence its next real alert. Without a live episode the presented kind is still
+ * going on while an alarm sound is on ([Natives.getisalarm]): LOSS never opens an episode (the native side calls
+ * Notify.lossalarm directly), and any kind's sound may outlive its episode by up to a minute. Not
  * `Notify.resolveAlertKind`: that one can return the last alert after it was over. Custom (user) alerts are not
  * covered: upstream has no public "which custom alert is ringing".
  *
@@ -45,11 +46,16 @@ object OngoingAlert {
     /** The kind (AlertType id) of the standard alert going on now, `null` when there is none. */
     fun find(): Int? = AlertType.settingsEntries.firstOrNull { isGoingOn(it) }?.id
 
-    /** [type] is presented now and its episode is live (see the class comment). */
+    /**
+     * [type] is presented now and its episode is live or an alarm sound is still on (see the class comment). The
+     * sound counts for every kind: when the next reading clears the condition while the sound plays, upstream's
+     * runtime resets the episode but lets the sound finish (up to a minute), and their own "Snooze" still works then.
+     * A stale mark without a sound still snoozes nothing.
+     */
     fun isGoingOn(type: AlertType): Boolean {
         if (!Notify.isCurrentStandardAlert(type.id)) return false
-        if (AlertStateTracker.isEpisodeActive(type)) return !AlertStateTracker.isDismissed(type)
-        return type == AlertType.LOSS && soundOn()
+        if (AlertStateTracker.isEpisodeActive(type) && !AlertStateTracker.isDismissed(type)) return true
+        return soundOn()
     }
 
     private fun soundOn(): Boolean = try {
