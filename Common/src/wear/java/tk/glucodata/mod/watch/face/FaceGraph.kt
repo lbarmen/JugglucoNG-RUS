@@ -137,6 +137,14 @@ object FaceGraph {
     }
 
     /**
+     * The colour of the trace at [value] (a point or a piece's [Piece.colorValue], which lies in the piece's zone): out
+     * of the range always [outOfRange] - the user wants to see the trace leave the range (decision of 18.11) even with
+     * upstream's value range colours off; in the range (lines included) [setting], as the number is coloured.
+     */
+    fun traceColor(value: Float, low: Float, high: Float, setting: (Float) -> Int, outOfRange: (Float) -> Int): Int =
+        if (zoneOf(value, low, high) == Zone.IN) setting(value) else outOfRange(value)
+
+    /**
      * The step from [a] to [b] cut where it crosses the [low] and [high] lines (straight line between the two
      * readings), so each piece lies in one [Zone] - a step from below the range to above it gives three pieces.
      * A step that crosses nothing is one piece coloured by [b], as before part 3c2 (by [a] when [b] lies exactly on

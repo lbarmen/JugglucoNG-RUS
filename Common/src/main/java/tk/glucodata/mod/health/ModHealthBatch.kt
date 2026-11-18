@@ -38,6 +38,9 @@ data class ModHealthBatch(
      * - two [KIND_HR5] rows with the same start but other numbers are one window: the second holds readings that came
      *   after the watch closed it (counted in the status as `late=`); they are merged by their counts ([mergeHr5]:
      *   mean = (m1*n1 + m2*n2) / (n1 + n2), min and max of both). Other kinds keep the first row of a time.
+     *   A late [KIND_HR5] row equal in every field to one already taken (likely with `n=1` and a whole bpm) is taken
+     *   for a repeat by the rule above: the mean stays right, only that reading is missing from `n` - accepted
+     *   (critic 5, N-5-8).
      * Step totals go into steps between readings by [stepsDelta].
      */
     data class Sample(val kind: String, val timeMs: Long, val value: Float, val extra: String = "") {
@@ -170,6 +173,22 @@ data class ModHealthBatch(
                 current.total < previous.total
             }
         }
+
+        /**
+         * How far the watch's day start may lie before the phone's for the same day: the two clocks in different time
+         * zones (after a flight, before the watch takes the phone's zone). A start a whole day before is yesterday's.
+         */
+        const val DAY_ZONE_GAP_MS = 12 * 60 * 60_000L
+
+        /**
+         * The [total] counts the phone's day that starts at [dayStartMs] - "steps today" on the phone (part 5b, critic
+         * 5 N-5-4): its watch day start, when known, is less than [DAY_ZONE_GAP_MS] before that day's start. A total
+         * sent after the phone's midnight while the watch has not passed its own (its day started about a day before)
+         * is yesterday's; one from a watch still in another time zone, its day start some hours off, is today's. An
+         * unknown start counts.
+         */
+        fun countsDayOf(total: StepsTotal, dayStartMs: Long): Boolean =
+            total.dayStartMs == null || total.dayStartMs > dayStartMs - DAY_ZONE_GAP_MS
 
         /**
          * Steps between two neighbouring totals (part 5 counts them so): the whole [current] total on a new day

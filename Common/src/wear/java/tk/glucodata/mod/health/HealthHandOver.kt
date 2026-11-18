@@ -10,7 +10,7 @@ import tk.glucodata.mod.watch.ModWatchLog
  * HealthTick) and on the "send now" button (part 4b): ask the source to deliver what it holds, wait for the data
  * (usually a fraction of a second, at most [HealthConfig.FLUSH_WAIT_MS]), let the source check its subscription,
  * close the heart rate windows ended by now and send (Glucove's Refresher). The watch stays awake only as long as
- * that takes.
+ * that takes: a tick's hand-over is held by a WorkManager task ([HealthHandOverWorker]).
  *
  * Without a registered source ([HealthSources.current]) nothing collects, and nothing is done.
  */
@@ -21,10 +21,29 @@ object HealthHandOver {
      * listener's - the flush, the subscription check and the sends take up to half a minute, and the phone's
      * "snoozed" answer comes through the same listener thread (joints critic, C4). The deliveries the hand-over waits
      * for are still written on Health Services' own callback thread, never queued here ([HealthIntake]).
+     *
+     * Queued as a WorkManager task ([HealthHandOverWorker], part 5b): the listener returns at once, and the running
+     * task keeps the process from being frozen while the hand-over works (critic of part 5, C-5-1). When the task
+     * cannot be queued, straight on our thread as before.
      */
     fun onTick(context: Context) {
         val source = HealthSources.current ?: return
-        start(context, source, forceStatus = false)
+        try {
+            HealthHandOverWorker.enqueue(context.applicationContext ?: context)
+        } catch (t: Throwable) {
+            ModWatchLog.w("health hand-over task not queued: ${t.javaClass.simpleName}")
+            start(context, source, forceStatus = false)
+        }
+    }
+
+    /**
+     * The tick's hand-over on [HealthCore.executor] for [HealthHandOverWorker] to wait on; `null` when no source is
+     * registered (nothing collects).
+     */
+    internal fun submitTick(context: Context): Future<*>? {
+        val source = HealthSources.current ?: return null
+        val app = context.applicationContext ?: context
+        return HealthCore.executor.submit { safeRun(app, source, forceStatus = false) }
     }
 
     /**

@@ -32,10 +32,13 @@ class HealthCore(
 
     /**
      * Adds heart rate readings and closes the windows ended [graceMs] before [nowMs]; the closed means go to the queue
-     * first and only then leave the kept open windows (a crash in between repeats a mean - the same row in every field,
-     * which the phone drops as a repeat, rules in [ModHealthBatch.Sample] - instead
-     * of losing it). Readings for an already closed window are counted in [HealthState.hrLate]. Returns how many means
-     * were queued.
+     * first and only then leave the kept open windows, so the process dying in between repeats a mean instead of
+     * losing it. After the restart the window comes back from the last saved [HealthState.hrBuckets] (written with
+     * `apply()`, so it may be older than the queued mean) and closes again: with the same readings it is the same row
+     * in every field, which the phone drops as a repeat; with fewer it is another row, which the phone merges as late
+     * readings ([ModHealthBatch.Sample]), counting those readings twice. Rare (the process dies within those few
+     * milliseconds) and accepted (critic 4b; critic 5, N-5-7). Readings for an already closed window are counted in
+     * [HealthState.hrLate]. Returns how many means were queued.
      */
     fun addHeartRate(readings: List<HealthIntake.HeartRate>, nowMs: Long, graceMs: Long): Int = synchronized(hrLock) {
         var late = 0

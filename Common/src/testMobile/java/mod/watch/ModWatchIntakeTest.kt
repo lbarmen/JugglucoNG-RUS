@@ -1,13 +1,17 @@
 package mod.watch
 
 import android.net.Uri
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Status
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataItem
 import com.google.android.gms.wearable.DataItemAsset
 import com.google.android.gms.wearable.DataMap
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeoutException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -200,6 +204,62 @@ class ModWatchIntakeTest {
         assertEquals(40, ModWatchIntake.summary(null, fresh, null, null, now, zone).stepsToday)
         // without a day start the total counts
         assertEquals(40, ModWatchIntake.summary(null, fresh.copy(extra = ""), null, null, now, zone).stepsToday)
+    }
+
+    @Test
+    fun aWatchStillInTheOldZoneAfterAFlightWestStillGivesTodaysSteps() {
+        // part 5b, critic 5 N-5-4: the phone is in London already, the watch counts from Moscow's midnight, 3 hours
+        // before London's (the rule of part 5 hid such a total until the watch took the new zone)
+        val west = ZoneId.of("Europe/London")
+        val now = LocalDateTime.of(2026, 11, 19, 10, 0).atZone(west).toInstant().toEpochMilli()
+        val steps = row(ModHealthBatch.KIND_STEPS_DAY, now - 5 * 60_000L, 2500.0, at(0, 0, day = 19).toString())
+        assertEquals(2500, ModWatchIntake.summary(null, steps, null, null, now, west).stepsToday)
+    }
+
+    @Test
+    fun theBatteryCarriesItsTime() {
+        val battery = row(ModHealthBatch.KIND_BATTERY, at(9, 40), 64.0)
+        assertEquals(at(9, 40), ModWatchIntake.summary(null, null, battery, null, at(12, 0), zone).watchBatteryAt)
+        assertNull(ModWatchIntake.summary(null, null, null, null, at(12, 0), zone).watchBatteryAt)
+    }
+
+    @Test
+    fun anAgeIsMinutesThenHoursThenDays() {
+        // part 5b, critic 5 N-5-5: never "4320 min"
+        val minute = 60_000L
+        assertEquals(ModWatchIntake.AgoUnit.MINUTES to 0L, ModWatchIntake.ago(-5 * minute))
+        assertEquals(ModWatchIntake.AgoUnit.MINUTES to 59L, ModWatchIntake.ago(59 * minute + 59_000L))
+        assertEquals(ModWatchIntake.AgoUnit.HOURS to 1L, ModWatchIntake.ago(60 * minute))
+        assertEquals(ModWatchIntake.AgoUnit.HOURS to 47L, ModWatchIntake.ago(47 * 60 * minute + 59 * minute))
+        assertEquals(ModWatchIntake.AgoUnit.DAYS to 2L, ModWatchIntake.ago(48 * 60 * minute))
+        assertEquals(ModWatchIntake.AgoUnit.DAYS to 3L, ModWatchIntake.ago(4320 * minute))
+    }
+
+    @Test
+    fun aNewerItemSeenByEveryDrainCountsOnceAndLeavesWhenStored() {
+        // part 5b, critic 5 N-5-2
+        var paths = emptySet<String>()
+        paths = ModWatchIntake.newerPaths(paths, "/mod/health/batch/3", newer = true)
+        paths = ModWatchIntake.newerPaths(paths, "/mod/health/batch/3", newer = true) // the next start's drain
+        paths = ModWatchIntake.newerPaths(paths, "/mod/health/batch/4", newer = true)
+        assertEquals(2, paths.size)
+        // the phone app updated: the item is stored and deleted
+        paths = ModWatchIntake.newerPaths(paths, "/mod/health/batch/3", newer = false)
+        assertEquals(setOf("/mod/health/batch/4"), paths)
+        assertEquals(paths, ModWatchIntake.newerPaths(paths, "/mod/health/batch/9", newer = false))
+    }
+
+    @Test
+    fun aDrainWithoutTheWearableApiIsNoErrorAndOtherFailuresNameTheirCause() {
+        // part 5b: the phone emulator has no Wearable API - Tasks.await wraps the ApiException
+        val missing = ExecutionException(ApiException(Status(17)))
+        assertNull(ModWatchStore.drainFailure(missing))
+        assertNull(ModWatchStore.drainFailure(ApiException(Status(17))))
+        assertEquals("watch drain failed: ExecutionException cause=ApiException status=8",
+            ModWatchStore.drainFailure(ExecutionException(ApiException(Status(8)))))
+        assertEquals("watch drain failed: ExecutionException cause=IllegalStateException",
+            ModWatchStore.drainFailure(ExecutionException(IllegalStateException("x"))))
+        assertEquals("watch drain failed: TimeoutException", ModWatchStore.drainFailure(TimeoutException()))
     }
 
     @Test

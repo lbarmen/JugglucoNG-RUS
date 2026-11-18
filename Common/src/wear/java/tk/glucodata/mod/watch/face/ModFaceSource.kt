@@ -7,6 +7,7 @@ import tk.glucodata.DataSmoothing
 import tk.glucodata.GlucosePoint
 import tk.glucodata.GlucoseRangeColors
 import tk.glucodata.GlucoseSmoothing
+import tk.glucodata.GlucoseValueTone
 import tk.glucodata.LiveReadingLanes
 import tk.glucodata.Natives
 import tk.glucodata.NotificationHistorySource
@@ -123,6 +124,23 @@ internal object ModFaceSource : FaceSource {
             )
         } ?: points
     }
+
+    /**
+     * The trace's colour out of the target range ([FaceGraph.traceColor], decision of 18.11): the colour the number
+     * would have at [value] with upstream's value range colours switched on (`GlucoseValueTone.valueColorArgb` with
+     * `enabled = true`, the thresholds of `ComplicationRenderer.valueColor`), whatever that setting is.
+     */
+    fun outOfRangeColor(value: Float, isMmol: Boolean): Int = GlucoseValueTone.valueColorArgb(
+        value = value,
+        isDark = true,
+        isMmol = isMmol,
+        targetLow = FaceValues.threshold(guard { Natives.targetlow() }, GlucoseRangeColors.defaultLow(isMmol)),
+        targetHigh = FaceValues.threshold(guard { Natives.targethigh() }, GlucoseRangeColors.defaultHigh(isMmol)),
+        veryLowThreshold = FaceValues.threshold(guard { Natives.alarmverylow() }, GlucoseRangeColors.defaultVeryLow(isMmol)),
+        veryHighThreshold = FaceValues.threshold(guard { Natives.alarmveryhigh() }, GlucoseRangeColors.defaultVeryHigh(isMmol)),
+        fallbackArgb = NEUTRAL,
+        enabled = true,
+    )
 
     /** Upstream's neutral value tone on a dark face (their renderer's fallback). */
     private const val NEUTRAL = 0xFFE3E2DE.toInt()

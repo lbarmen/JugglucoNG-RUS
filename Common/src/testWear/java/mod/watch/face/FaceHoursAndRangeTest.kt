@@ -3,6 +3,13 @@ package mod.watch.face
 import java.io.File
 import java.time.LocalDateTime
 import java.time.ZoneId
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -14,6 +21,7 @@ import tk.glucodata.mod.watch.face.FacePoint
 import tk.glucodata.mod.watch.face.FaceSettingsActivity
 import tk.glucodata.mod.watch.face.FaceStyle
 import tk.glucodata.mod.watch.face.ModFaceRenderer
+import tk.glucodata.mod.watch.face.ReadPause
 
 /**
  * JugglucoNGmod, watch block (part 3c2): the graph's hour lines (count and place for 1 / 3 / 6 h, across midnight,
@@ -201,6 +209,31 @@ class FaceHoursAndRangeTest {
         assertEquals(2, FaceGraph.splitByRange(p(0, 150f), p(5, 200f), 70f, 180f).size)
     }
 
+    @Test
+    fun outOfTheRangeTheTraceIsAlwaysColouredEvenWithTheRangeColoursOff() {
+        // part 5b, decision of 18.11: upstream's value range colours off - the setting gives the neutral tone
+        val neutral = 0xFFE3E2DE.toInt()
+        val high = 0xFFD0A23A.toInt()
+        val low = 0xFFC97970.toInt()
+        val off: (Float) -> Int = { neutral }
+        val out: (Float) -> Int = { if (it > 10f) high else low }
+        fun colour(value: Float) = FaceGraph.traceColor(value, 3.9f, 10f, off, out)
+        assertEquals(high, colour(12f))
+        assertEquals(low, colour(3.5f))
+        assertEquals(neutral, colour(6f))
+        // the lines belong to the range
+        assertEquals(neutral, colour(10f))
+        assertEquals(neutral, colour(3.9f))
+        // every piece of a step from below to above: the ends out of the range coloured, the middle by the setting
+        val pieces = FaceGraph.splitByRange(p(0, 3f), p(10, 11f), 3.9f, 10f)
+        assertEquals(listOf(low, neutral, high), pieces.map { colour(it.colorValue) })
+        // with the range colours on, the setting's colour stays in the range
+        val on: (Float) -> Int = { 0xFF4E8A55.toInt() }
+        assertEquals(0xFF4E8A55.toInt(), FaceGraph.traceColor(6f, 3.9f, 10f, on, out))
+        // limits given high first: the same zones
+        assertEquals(high, FaceGraph.traceColor(12f, 10f, 3.9f, off, out))
+    }
+
     // ------------------------------------------------------------------ read pacing (critic 3c, N1/N2/N7)
 
     @Test
@@ -212,6 +245,37 @@ class FaceHoursAndRangeTest {
         assertEquals(ModFaceRenderer.MIN_READ_MS - 5_000L, ModFaceRenderer.readWait(true, last, last + 5_000L))
         // never read yet: at once
         assertEquals(0L, ModFaceRenderer.readWait(true, Long.MIN_VALUE / 2, last))
+    }
+
+    @Test
+    fun aRequestFromTheEndOfAPauseSetsTheNextPause() {
+        // critic 5, N-5-9 (the fix of critic 3c, N1): the job clears itself before its action, or this second pause
+        // would be refused as "one is waiting" and the request lost
+        val thread = Executors.newSingleThreadExecutor()
+        val dispatcher = thread.asCoroutineDispatcher()
+        try {
+            val pause = ReadPause(CoroutineScope(dispatcher))
+            val runs = AtomicInteger()
+            val ignored = AtomicInteger()
+            val second = CountDownLatch(1)
+            runBlocking(dispatcher) {
+                pause.arm(20L) {
+                    runs.incrementAndGet()
+                    pause.arm(20L) {
+                        runs.incrementAndGet()
+                        second.countDown()
+                    }
+                }
+                // one pause at a time: a request while it waits sets nothing new
+                assertTrue(pause.waiting)
+                pause.arm(1L) { ignored.incrementAndGet() }
+            }
+            assertTrue("the second pause never ran", second.await(5, TimeUnit.SECONDS))
+            assertEquals(2, runs.get())
+            assertEquals(0, ignored.get())
+        } finally {
+            dispatcher.close()
+        }
     }
 
     @Test

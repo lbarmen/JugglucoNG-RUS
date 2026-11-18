@@ -261,7 +261,8 @@ internal class FacePainter {
         canvas.drawText(lowText, labelX, (yLow + half).coerceIn(row.top + 2 * half, row.bottom), text)
 
         // the trace: a step crossing a target line is cut there (part 3c2), so what lies above the high line or below
-        // the low one has the colour the number would have out of range, the rest as before; gaps stay open
+        // the low one has the colour the number would have out of range - always, even with upstream's range colours
+        // off (part 5b, [FaceGraph.traceColor] in [traceColor]) - the rest as before; gaps stay open
         stroke.strokeWidth = (diameter * style.traceWidth).coerceAtLeast(1f)
         for (segment in FaceGraph.segments(plot.points, FaceGraph.MAX_GAP_MS)) {
             if (segment.size == 1) {

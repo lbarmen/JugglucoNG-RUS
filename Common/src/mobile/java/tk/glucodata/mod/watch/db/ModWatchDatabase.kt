@@ -20,6 +20,14 @@ import tk.glucodata.mod.watch.ModWatchIntake
  * JugglucoNGmod, watch block (part 5): heart rate and steps from the watch on the phone - our own Room database, a
  * file of its own (`mod-watch.db`), never a table in upstream's database (their migrations are their files). Version
  * 1, no migrations; `exportSchema = false`, or Room would write the schema into upstream's `Common/schemas/`.
+ *
+ * Rules for later versions (critic 5, N-5-3): the version only goes up, by one, with a hand-written `Migration` that
+ * keeps every row (add columns or tables; never drop or rename) - upstream's test gate forbids Room's
+ * destructive fallback, and there is no schema file for auto-migrations. Rolling a phone back to an
+ * older candidate after a version went up makes Room refuse to open the file: [tk.glucodata.mod.watch.ModWatchStore.db]
+ * returns `null`, batches wait in the Data Layer and the check screen says the data could not be opened. Then: install
+ * the newer candidate again (the rows are all there), or delete only `mod-watch.db` and take what the watch still
+ * holds - upstream's data stays untouched either way. Try the roll-back on the emulator before a version goes up.
  */
 @Database(entities = [ModWatchSample::class, ModWatchBatchSeen::class], version = 1, exportSchema = false)
 abstract class ModWatchDatabase : RoomDatabase() {

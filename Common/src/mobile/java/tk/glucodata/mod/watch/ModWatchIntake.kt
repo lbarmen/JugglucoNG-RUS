@@ -90,6 +90,13 @@ object ModWatchIntake {
         is ModHealthBatch.Decoded.Broken -> Outcome.DELETE
     }
 
+    /**
+     * The paths of the items of a newer watch app left in place, after the item at [path] was read: added when it is
+     * [newer] (once, however often a drain sees it), removed when it was stored or deleted (critic 5, N-5-2).
+     */
+    fun newerPaths(paths: Set<String>, path: String, newer: Boolean): Set<String> =
+        if (newer) paths + path else paths - path
+
     // ------------------------------------------------------------------ the check screen
 
     /** The phone's day around [nowMs] in [zone]: its start and the next day's start (ms of the epoch). */
@@ -109,17 +116,35 @@ object ModWatchIntake {
         val watchCharging: Boolean,
         /** When the last batch was stored. */
         val lastBatchAt: Long?,
+        /** Watch time of [watchBattery] (part 5b: the screen shows it, old data must not look fresh). */
+        val watchBatteryAt: Long? = null,
     ) {
         val empty: Boolean
             get() = heartRate == null && stepsToday == null && watchBattery == null && lastBatchAt == null
+    }
+
+    /** The unit of an age on the check screen ([ago]). */
+    enum class AgoUnit { MINUTES, HOURS, DAYS }
+
+    /**
+     * An age of [ms] for the screen (critic 5, N-5-5): whole minutes under an hour, whole hours under two days, then
+     * whole days - never "4320 min". A negative age (clocks apart) is 0 minutes.
+     */
+    fun ago(ms: Long): Pair<AgoUnit, Long> {
+        val minutes = (ms / 60_000L).coerceAtLeast(0L)
+        return when {
+            minutes < 60 -> AgoUnit.MINUTES to minutes
+            minutes < 48 * 60 -> AgoUnit.HOURS to minutes / 60
+            else -> AgoUnit.DAYS to minutes / (24 * 60)
+        }
     }
 
     /**
      * The check screen from the newest rows: [latestHr5] and [latestBattery] whenever they were, [latestSteps] - the
      * newest day total with its time inside today ([dayBounds]). The day total is already the sum since the watch's
      * day start, so it is shown as it is (the differences of totals are for later graphs). A total whose watch day
-     * started before today by more than [ModHealthBatch.NEW_DAY_SHIFT_MS] still counts yesterday (the watch has not
-     * passed its midnight yet) and is not today's.
+     * started a whole day before today still counts yesterday (the watch has not passed its midnight yet) and is not
+     * today's - the shared rule [ModHealthBatch.countsDayOf], which also holds across a time zone change.
      */
     fun summary(
         latestHr5: ModWatchSample?,
@@ -131,10 +156,7 @@ object ModWatchIntake {
     ): Summary {
         val (dayStart, dayEnd) = dayBounds(nowMs, zone)
         val steps = latestSteps?.takeIf { it.kind == ModHealthBatch.KIND_STEPS_DAY && it.at in dayStart until dayEnd }
-            ?.takeIf { row ->
-                val watchDayStart = ModHealthBatch.StepsTotal.of(row.sample())?.dayStartMs
-                watchDayStart == null || watchDayStart >= dayStart - ModHealthBatch.NEW_DAY_SHIFT_MS
-            }
+            ?.takeIf { row -> ModHealthBatch.StepsTotal.of(row.sample())?.let { ModHealthBatch.countsDayOf(it, dayStart) } != false }
         val hr = latestHr5?.takeIf { it.kind == ModHealthBatch.KIND_HR5 && it.value.isFinite() && it.value > 0.0 }
         val battery = latestBattery?.takeIf { it.kind == ModHealthBatch.KIND_BATTERY && it.value in 0.0..100.0 }
         return Summary(
@@ -144,6 +166,7 @@ object ModWatchIntake {
             watchBattery = battery?.value?.let { Math.round(it).toInt() },
             watchCharging = battery?.extra == ModHealthBatch.CHARGING,
             lastBatchAt = lastBatchAt,
+            watchBatteryAt = battery?.at,
         )
     }
 }

@@ -2,6 +2,7 @@ package tk.glucodata.mod.watch
 
 import android.os.Bundle
 import android.text.format.DateFormat
+import android.text.format.DateUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
@@ -22,6 +23,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -35,7 +39,8 @@ import tk.glucodata.ui.JugglucoTheme
  * declared only in the phone `mod` build's manifest, not exported. Where heart rate and steps go later (graph,
  * journal) is the user's decision (watch plan, decision 8).
  *
- * The data is read on a background thread ([ModWatchStore.summary]) every [REFRESH_MS] while the screen is shown.
+ * The data is read on a background thread ([ModWatchStore.summary]) every [REFRESH_MS] while the screen is started
+ * (not while it is behind another app); times not of today carry their date.
  */
 class ModWatchActivity : ComponentActivity() {
 
@@ -64,20 +69,24 @@ private sealed interface ScreenState {
 @Composable
 private fun WatchScreen() {
     val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
     var state by remember { mutableStateOf<ScreenState>(ScreenState.Loading) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            state = withContext(Dispatchers.IO) {
-                try {
-                    val now = System.currentTimeMillis()
-                    ModWatchStore.summary(context, now)?.let { ScreenState.Data(it, ModWatchStore.newerBatches(context), now) }
-                        ?: ScreenState.NoDatabase
-                } catch (t: Throwable) {
-                    ModWatchLog.w("watch screen read failed: ${t.javaClass.simpleName}")
-                    ScreenState.NoDatabase
+    // only while the screen is started: no database reads every 30 s behind another app (critic 5, N-5-6)
+    LaunchedEffect(lifecycleOwner) {
+        lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                state = withContext(Dispatchers.IO) {
+                    try {
+                        val now = System.currentTimeMillis()
+                        ModWatchStore.summary(context, now)?.let { ScreenState.Data(it, ModWatchStore.newerBatches(context), now) }
+                            ?: ScreenState.NoDatabase
+                    } catch (t: Throwable) {
+                        ModWatchLog.w("watch screen read failed: ${t.javaClass.simpleName}")
+                        ScreenState.NoDatabase
+                    }
                 }
+                delay(ModWatchActivity.REFRESH_MS)
             }
-            delay(ModWatchActivity.REFRESH_MS)
         }
     }
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -105,7 +114,11 @@ private fun DataLines(state: ScreenState.Data) {
         Line(stringResource(R.string.mod_watch_screen_hint))
         return
     }
-    fun time(ms: Long): String = DateFormat.getTimeFormat(context).format(Date(ms))
+    // with the date when not today: old data must not look fresh (critic 5, N-5-5)
+    fun time(ms: Long): String =
+        if (DateUtils.isToday(ms)) DateFormat.getTimeFormat(context).format(Date(ms))
+        else DateUtils.formatDateTime(context, ms,
+            DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH)
     Line(
         stringResource(
             R.string.mod_watch_screen_heart_rate,
@@ -120,8 +133,12 @@ private fun DataLines(state: ScreenState.Data) {
             R.string.mod_watch_screen_battery,
             when {
                 s.watchBattery == null -> none
-                s.watchCharging -> stringResource(R.string.mod_watch_screen_percent_charging, s.watchBattery)
-                else -> stringResource(R.string.mod_watch_screen_percent, s.watchBattery)
+                else -> {
+                    val percent = if (s.watchCharging) {
+                        stringResource(R.string.mod_watch_screen_percent_charging, s.watchBattery)
+                    } else stringResource(R.string.mod_watch_screen_percent, s.watchBattery)
+                    s.watchBatteryAt?.let { stringResource(R.string.mod_watch_screen_value_at, percent, time(it)) } ?: percent
+                }
             },
         ),
     )
@@ -129,8 +146,12 @@ private fun DataLines(state: ScreenState.Data) {
         stringResource(
             R.string.mod_watch_screen_last_batch,
             s.lastBatchAt?.let {
-                val minutes = ((state.nowMs - it) / 60_000L).coerceAtLeast(0L).toInt()
-                stringResource(R.string.mod_watch_screen_minutes_ago, minutes, time(it))
+                val (unit, count) = ModWatchIntake.ago(state.nowMs - it)
+                // ids picked by if, not in when branches: resource ids are not constants in these builds
+                val ago = if (unit == ModWatchIntake.AgoUnit.MINUTES) R.string.mod_watch_screen_minutes_ago
+                else if (unit == ModWatchIntake.AgoUnit.HOURS) R.string.mod_watch_screen_hours_ago
+                else R.string.mod_watch_screen_days_ago
+                stringResource(ago, count.toInt(), time(it))
             } ?: none,
         ),
     )

@@ -13,5 +13,8 @@
     <string name="mod_watch_screen_percent_charging">%1$d %%, заряжаются</string>
     <string name="mod_watch_screen_last_batch">Последняя пачка: %1$s</string>
     <string name="mod_watch_screen_minutes_ago">%1$d мин назад (%2$s)</string>
+    <string name="mod_watch_screen_hours_ago">%1$d ч назад (%2$s)</string>
+    <string name="mod_watch_screen_days_ago">%1$d дн. назад (%2$s)</string>
+    <string name="mod_watch_screen_value_at">%1$s в %2$s</string>
     <string name="mod_watch_screen_newer">Ждут пачки от более новой версии на часах: %1$d (обновите приложение на телефоне)</string>
 </resources>

@@ -180,6 +180,23 @@ class ModHealthBatchTest {
     }
 
     @Test
+    fun aTotalCountsThePhonesDayUnlessItsWatchDayStartedADayBefore() {
+        // part 5b, critic 5 N-5-4: the phone's day starts at day2
+        val phoneDay = day2
+        assertTrue(ModHealthBatch.countsDayOf(total(day2 + 5 * minute, 40.0, day2), phoneDay))
+        // sent after the phone's midnight, but the watch has not passed its own: yesterday's total
+        assertFalse(ModHealthBatch.countsDayOf(total(day2 + 5 * minute, 9100.0, day1), phoneDay))
+        // the phone flew 3 hours west and the watch is still in the old zone: its day started 3 hours before the phone's
+        assertTrue(ModHealthBatch.countsDayOf(total(day2 + 4 * hour, 800.0, day2 - 3 * hour), phoneDay))
+        // ...or east: its day starts 5 hours after the phone's
+        assertTrue(ModHealthBatch.countsDayOf(total(day2 + 6 * hour, 900.0, day2 + 5 * hour), phoneDay))
+        // yesterday's total of a watch 3 hours west is still yesterday's
+        assertFalse(ModHealthBatch.countsDayOf(total(day2 + 2 * hour, 9000.0, day1 + 3 * hour), phoneDay))
+        // an unknown start counts
+        assertTrue(ModHealthBatch.countsDayOf(total(day2 + 5 * minute, 40.0, null), phoneDay))
+    }
+
+    @Test
     fun correctionDownIsZeroAndUnknownStartFallsBackToSmallerTotal() {
         val a = total(at, 7400.0, day1)
         val b = total(at + 5 * minute, 7350.0, day1 + 1)

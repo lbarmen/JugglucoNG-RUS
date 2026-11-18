@@ -77,7 +77,7 @@ internal class ModFaceRenderer(
     /** New data waits for a read ([request]); the read clears it. */
     @Volatile private var dirty = false
     @Volatile private var lastReadAt = Long.MIN_VALUE / 2
-    private var pause: Job? = null
+    private val pause = ReadPause(scope)
 
     /** Kept as a field: preferences hold their listeners weakly. */
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -103,12 +103,7 @@ internal class ModFaceRenderer(
         dirty = true
         val wait = readWait(watchState.isVisible.value == true, lastReadAt, SystemClock.elapsedRealtime()) ?: return
         if (wait <= 0L) refresh()
-        else if (pause?.isActive != true) pause = scope.launch {
-            delay(wait)
-            // this job is still "active" inside itself: cleared first, so a new pause can be set (critic 3c, N1)
-            pause = null
-            if (dirty) request()
-        }
+        else pause.arm(wait) { if (dirty) request() }
     }
 
     /** Reads a new snapshot in the background; a request during a read makes one more read after it. */
@@ -166,7 +161,13 @@ internal class ModFaceRenderer(
                 showData = data != null,
                 trial = FaceSources.get() !== ModFaceSource,
                 labels = labels,
-                traceColor = { value -> guarded { ComplicationRenderer.valueColor(value, isMmol) } ?: TRACE },
+                traceColor = { value ->
+                    guarded {
+                        FaceGraph.traceColor(value, snapshot.low, snapshot.high,
+                            setting = { ComplicationRenderer.valueColor(it, isMmol) },
+                            outOfRange = { ModFaceSource.outOfRangeColor(it, isMmol) })
+                    } ?: TRACE
+                },
             )
         } catch (_: Throwable) {
             guarded { canvas.drawColor(FaceStyle.BLACK) }
@@ -215,5 +216,26 @@ internal class ModFaceRenderer(
 
         /** The graph's tone where upstream gives no range colour. */
         private const val TRACE = 0xFFE3E2DE.toInt()
+    }
+}
+
+/**
+ * The one pending "read after the pause" of [ModFaceRenderer]: [arm] sets it unless one is waiting. When its wait is
+ * over the job clears itself before [then] runs - inside itself it is still "active", and a request made from [then]
+ * must be able to set the next pause (critic 3c, N1; a test holds it, critic 5, N-5-9). Used on one thread (the
+ * renderer's main scope).
+ */
+internal class ReadPause(private val scope: CoroutineScope) {
+    private var job: Job? = null
+
+    val waiting: Boolean get() = job?.isActive == true
+
+    fun arm(waitMs: Long, then: () -> Unit) {
+        if (waiting) return
+        job = scope.launch {
+            delay(waitMs)
+            job = null
+            then()
+        }
     }
 }
