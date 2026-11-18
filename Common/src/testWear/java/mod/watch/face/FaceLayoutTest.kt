@@ -117,11 +117,18 @@ class FaceLayoutTest {
             // 12-hour clock: the day part is drawn at 0.4 of the clock's size, as upstream's face does
             assertFits(FaceLayout.estimatedWidth("12:59", l.time.textSize) +
                 FaceLayout.estimatedWidth("pm", l.time.textSize * 0.4f), l.time, "12 h clock on $size")
-            // the status row: icon (at most 0.62 of the row's height), gap, "100" on each side of the date
-            val battery = 0.62f * l.status.height + 0.01f * size + FaceLayout.estimatedWidth("100", l.status.textSize)
-            for (date in listOf("Wed 30", "Пн 30")) {
-                val total = FaceLayout.estimatedWidth(date, l.status.textSize) + 2 * (battery + 0.035f * size)
-                assertTrue("status $date on $size: $total in ${l.status.width}", total <= l.status.width)
+            // the status row (part 7e): the day and the month on each side of the centre, then the gap and a battery
+            // (icon at most 0.62 of its height wide, its gap, the number); "81" at the full gap by the generous
+            // estimate, "100" at the narrowest gap by the digits' real width (0.56 of the size, all digits alike)
+            val t = l.status.textSize
+            fun battery(number: Float) = 0.62f * l.statusIcon + FaceLayout.STATUS_ICON_GAP * size + number
+            val half = FaceLayout.DATE_GAP * size / 2f
+            for ((number, gap) in listOf(FaceLayout.estimatedWidth("81", t) to FaceLayout.STATUS_GAP,
+                    3 * 0.56f * t to FaceLayout.STATUS_MIN_GAP)) {
+                for (word in listOf("30", "ноя", "мая", "Nov", "May")) {
+                    val side = FaceLayout.estimatedWidth(word, t) + half + gap * size + battery(number)
+                    assertTrue("status $word / $number on $size: $side in ${l.status.width / 2f}", side <= l.status.width / 2f)
+                }
             }
             // three characters fit at full size even by the generous estimate; four are scaled down together, but
             // not much (measured digits and the comma are narrower, so the real scale is closer to 1)
@@ -140,16 +147,37 @@ class FaceLayoutTest {
     }
 
     @Test
-    fun theStatusRowCentresTheDateAndKeepsTheBatteriesInside() {
+    fun theStatusRowPutsTheDateGapOnTheCentreAndKeepsTheBatteriesInside() {
         val row = FaceLayout.compute(450, 450).status
-        val place = FaceLayout.placeStatus(row, 60f, 50f, 50f, 15f)
-        assertEquals(row.centerX - 30f, place.dateX, 0.01f)
-        assertEquals(place.dateX - 15f - 50f, place.phoneX, 0.01f)
-        assertEquals(place.dateX + 60f + 15f, place.watchX, 0.01f)
+        // part 7e: the day ends and the month starts half the date's gap from the centre, where the system's dot is
+        val place = FaceLayout.placeStatus(row, 28f, 40f, 50f, 50f, 8f, 22f, 11f)
+        assertEquals(row.centerX - 4f - 28f, place.dayX, 0.01f)
+        assertEquals(row.centerX + 4f, place.monthX, 0.01f)
+        assertTrue(place.dayX + 28f < row.centerX && place.monthX > row.centerX)
+        assertEquals(place.dayX - 22f - 50f, place.phoneX, 0.01f)
+        assertEquals(place.monthX + 40f + 22f, place.watchX, 0.01f)
+        // a wide battery: its gap narrows down to the least one first
+        val wider = FaceLayout.placeStatus(row, 28f, 40f, 50f, row.right - row.centerX - 4f - 40f - 15f, 8f, 22f, 11f)
+        assertEquals(place.monthX + 40f + 15f, wider.watchX, 0.01f)
+        assertEquals(row.right, wider.watchX + row.right - row.centerX - 4f - 40f - 15f, 0.01f)
+        val widest = FaceLayout.placeStatus(row, 28f, 40f, 50f, row.right - row.centerX - 4f - 40f - 11f, 8f, 22f, 11f)
+        assertEquals(place.monthX + 40f + 11f, widest.watchX, 0.01f)
         // far too wide: pushed back to the row's edges
-        val wide = FaceLayout.placeStatus(row, 60f, 400f, 400f, 15f)
+        val wide = FaceLayout.placeStatus(row, 28f, 40f, 400f, 400f, 8f, 22f, 11f)
         assertEquals(row.left, wide.phoneX, 0.01f)
         assertEquals(row.right - 400f, wide.watchX, 0.01f)
+    }
+
+    @Test
+    fun theStatusRowHoldsLargerIconsAndNumbersBelowTheHourLabels() {
+        // part 7e on 450 px: icons ~24 px, numbers ~25 px (were 21 and 20), the row taller, still under the hours
+        val l = FaceLayout.compute(450, 450)
+        assertEquals(24.3f, l.statusIcon, 0.5f)
+        assertEquals(24.75f, l.status.textSize, 0.5f)
+        assertTrue(l.statusIcon <= l.status.height && l.status.textSize <= l.status.height)
+        assertTrue(l.hours.bottom <= l.status.top)
+        // the system's dot (~0.86 of the diameter) is level with the row's top part, so the date gap is where it is
+        assertTrue(0.86f * 450 >= l.status.top - 3f && 0.86f * 450 <= l.status.centerY)
     }
 
     @Test

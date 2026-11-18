@@ -196,7 +196,7 @@ class FacePainterTest {
 
     @Test
     fun blackAroundSomethingInEveryRowAndAllInsideTheCircle() {
-        val bitmap = paint(inRange(), ambient = false, name = "7c_in_range")
+        val bitmap = paint(inRange(), ambient = false, name = "7e_in_range")
         val layout = FaceLayout.compute(size, size)
         for ((x, y) in listOf(1 to 1, size - 2 to 1, 1 to size - 2, size - 2 to size - 2, size / 2 to 2, size / 2 to size - 2)) {
             assertEquals("pixel $x,$y", FaceStyle.BLACK, bitmap.getPixel(x, y))
@@ -216,7 +216,7 @@ class FacePainterTest {
     @Test
     fun highWithTheForecastDownTheValueYellowTheArrowRed() {
         val layout = FaceLayout.compute(size, size)
-        val bitmap = paint(highForecastDown(), ambient = false, name = "7c_high_forecast_down")
+        val bitmap = paint(highForecastDown(), ambient = false, name = "7e_high_forecast_down")
         assertTrue(count(bitmap, layout.value, yellow) > 200)
         // 11.8 rising 1.6 mg/dL/min: past very high (13.9) in 30 minutes - upstream's "out" arrow
         assertTrue(count(bitmap, layout.value, red) > 20)
@@ -229,7 +229,7 @@ class FacePainterTest {
     @Test
     fun lowTheValueYellowAndRedDotsBelowTheRange() {
         val layout = FaceLayout.compute(size, size)
-        val bitmap = paint(low(), ambient = false, name = "7c_low")
+        val bitmap = paint(low(), ambient = false, name = "7e_low")
         // 3.4 is between very low (3.0) and low (3.9): yellow, as the app paints it
         assertTrue(count(bitmap, layout.value, yellow) > 200)
         assertTrue(count(bitmap, layout.graph, yellow) > 10)
@@ -247,7 +247,7 @@ class FacePainterTest {
         fun labelPixels(b: Bitmap) = count(b, box, labelColor, box.left.toInt(), box.right.toInt())
         val inEmpty = labelPixels(paint(scenario({ 6.5f }, 0f, forecast = null), ambient = false))
         assertTrue("labels $inEmpty", inEmpty > 10)
-        for ((value, name) in listOf(10.25f to "7c_labels_over_dots", 4.15f to null)) {
+        for ((value, name) in listOf(10.25f to "7e_labels_over_dots", 4.15f to null)) {
             val covered = paint(scenario({ back -> if (back >= 150) value else 6.5f }, 0f, forecast = null),
                 ambient = false, name = name)
             val inCovered = labelPixels(covered)
@@ -258,18 +258,18 @@ class FacePainterTest {
     @Test
     fun withoutAForecastNoDashedLineAndTheGraphEndsAtNow() {
         val layout = FaceLayout.compute(size, size)
-        val off = paint(scenario(::calm, 0.3f, forecast = null), ambient = false, name = "7c_no_forecast")
+        val off = paint(scenario(::calm, 0.3f, forecast = null), ambient = false, name = "7e_no_forecast")
         assertEquals(0, count(off, layout.graph, forecastColor))
         val on = paint(inRange(), ambient = false)
         assertTrue(count(on, layout.graph, forecastColor) > 10)
-        paint(scenario(::calm, 0.3f, forecast = { 6.4f }, hours = 6), ambient = false, name = "7c_six_hours")
+        paint(scenario(::calm, 0.3f, forecast = { 6.4f }, hours = 6), ambient = false, name = "7e_six_hours")
     }
 
     @Test
     fun theDimModeHasNoForecastNoLabelsNoNormalBatteriesARegularNumberAndLightsFewerPixels() {
         val layout = FaceLayout.compute(size, size)
         val normal = paint(highForecastDown(), ambient = false)
-        val ambient = paint(highForecastDown(), ambient = true, name = "7c_ambient")
+        val ambient = paint(highForecastDown(), ambient = true, name = "7e_ambient")
         assertTrue(lit(ambient) < lit(normal))
         // the number regular, not bold: fewer of its pixels lit (part 7c, critic 7, S2)
         assertTrue(lit(ambient, layout.value) < lit(normal, layout.value) * 0.9f)
@@ -286,7 +286,7 @@ class FacePainterTest {
         val step = FaceLayout.burnInOffset(1L, size.toFloat(), strong = true)
         assertTrue(step.first > 0f && step.second == 0f)
         val still = paint(highForecastDown(), ambient = true)
-        val moved = paint(highForecastDown(), ambient = true, offset = step, name = "7c_ambient_moved")
+        val moved = paint(highForecastDown(), ambient = true, offset = step, name = "7e_ambient_moved")
         val dx = step.first.toInt()
         // a column of the number: lit pixels move right by the step
         val y0 = FaceLayout.compute(size, size).value.top.toInt()
@@ -310,7 +310,7 @@ class FacePainterTest {
         val half = size / 2
         // the owner's word of part 7c: the phone at 45 % yellow, the watch at 18 % red
         val lowBatteries = inRange().copy(phoneBatteryPercent = 45, watchBatteryPercent = 18)
-        val bitmap = paint(lowBatteries, ambient = false, name = "7c_low_batteries")
+        val bitmap = paint(lowBatteries, ambient = false, name = "7e_low_batteries")
         assertTrue("phone yellow", count(bitmap, layout.status, style.batteryWarn, 0, half) > 10)
         assertEquals(0, count(bitmap, layout.status, style.batteryLow, 0, half))
         assertTrue("watch red", count(bitmap, layout.status, style.batteryLow, half) > 10)
@@ -320,7 +320,7 @@ class FacePainterTest {
         assertEquals(0, count(fine, layout.status, style.batteryLow) + count(fine, layout.status, style.batteryWarn))
         // the dim mode: only the red one, dimmed
         val dim = FaceStyle.of(true)
-        val ambient = paint(lowBatteries, ambient = true, name = "7c_low_batteries_ambient")
+        val ambient = paint(lowBatteries, ambient = true, name = "7e_low_batteries_ambient")
         assertTrue(count(ambient, layout.status, dim.batteryLow, half) > 10)
         assertEquals(0, count(ambient, layout.status, dim.batteryWarn))
         val dimNormal = paint(inRange(), ambient = true)
@@ -332,9 +332,31 @@ class FacePainterTest {
     }
 
     @Test
+    fun theSystemDotFallsBetweenTheDayAndTheMonthAndFullBatteriesStayInside() {
+        // part 7e: Wear OS draws the faint dot of upstream's ongoing activity at the centre, ~0.86 of the diameter;
+        // the date's gap is there, so no glyph is under it - also with both batteries at 100 (the widest row)
+        for (snapshot in listOf(inRange(), inRange().copy(phoneBatteryPercent = 100, watchBatteryPercent = 100))) {
+            val bitmap = paint(snapshot, ambient = false)
+            val cx = size / 2
+            val cy = (0.86f * size).toInt()
+            for (y in cy - 3..cy + 3) for (x in cx - 2..cx + 2) {
+                assertEquals("pixel $x,$y under the dot", FaceStyle.BLACK, bitmap.getPixel(x, y))
+            }
+            // the date's words on both sides of it, on the row's middle line
+            val mid = FaceLayout.compute(size, size).status.centerY.toInt()
+            val litLeft = (cx - 40 until cx - 3).count { bitmap.getPixel(it, mid) and 0xFFFFFF != 0 }
+            val litRight = (cx + 3 until cx + 40).count { bitmap.getPixel(it, mid) and 0xFFFFFF != 0 }
+            assertTrue("day $litLeft, month $litRight", litLeft > 0 && litRight > 0)
+            assertEquals(0, litOutside(bitmap, 0.01f * size))
+        }
+        paint(inRange().copy(phoneBatteryPercent = 100, watchBatteryPercent = 100), ambient = false,
+            name = "7e_full_batteries")
+    }
+
+    @Test
     fun theTrialMarkOnlyForATrialUnderTheStatusRow() {
         val layout = FaceLayout.compute(size, size)
-        val trial = paint(inRange(), ambient = false, trial = true, name = "7c_trial")
+        val trial = paint(inRange(), ambient = false, trial = true, name = "7e_trial")
         assertTrue(lit(trial, layout.mark) > 20)
         assertEquals(0, litOutside(trial, 0.01f * size))
     }
@@ -342,12 +364,12 @@ class FacePainterTest {
     @Test
     fun oldGoneAndNoDataStillPaint() {
         val layout = FaceLayout.compute(size, size)
-        val old = paint(scenario(::calm, 0.3f, forecast = { 6.4f }, ageMin = 15), ambient = false, name = "7c_old")
+        val old = paint(scenario(::calm, 0.3f, forecast = { 6.4f }, ageMin = 15), ambient = false, name = "7e_old")
         assertEquals(0, count(old, layout.graph, forecastColor))
         val gone = paint(scenario(::calm, 0.3f, forecast = null, ageMin = 25), ambient = false)
         assertTrue(lit(gone, layout.value) > 50)
         val none = paint(FaceSnapshot(now, true, true, 3, null, emptyList(), emptyList(), 3.9f, 10f, null, null),
-            ambient = true, name = "7c_no_data")
+            ambient = true, name = "7e_no_data")
         assertTrue(lit(none, layout.value) > 10)
     }
 

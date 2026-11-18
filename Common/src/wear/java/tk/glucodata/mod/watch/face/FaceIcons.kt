@@ -6,9 +6,10 @@ import android.graphics.Path
 import android.graphics.RectF
 
 /**
- * JugglucoNGmod, watch block (part 7a): the battery icons of the face, drawn on the Canvas without images - a phone
- * (an upright rounded box) and a watch (a round body with two straps), each an outline filled from the bottom up to
- * its percent. The number beside an icon is the painter's. One instance per painter, used on its thread.
+ * JugglucoNGmod, watch block (part 7a, the phone redrawn in 7e): the battery icons of the face, drawn on the Canvas
+ * without images - a phone (a narrow rounded body with a speaker slit at the top) and a watch (a round body with two
+ * straps), each filled from the bottom up to its percent. The number beside an icon is the painter's. One instance
+ * per painter, used on its thread.
  */
 internal class FaceIcons {
 
@@ -31,12 +32,19 @@ internal class FaceIcons {
         val share = fillShare(percent)
         when (kind) {
             Kind.PHONE -> {
+                // part 7e (critic of the look): a phone, not a battery - well rounded corners, a speaker slit at the
+                // top, the screen below it filled from the bottom
                 box.set(left + line / 2f, top + line / 2f, left + width - line / 2f, bottom - line / 2f)
-                val corner = width * 0.22f
+                val corner = width * 0.3f
                 canvas.drawRoundRect(box, corner, corner, stroke)
+                val speakerY = top + line * 2.4f
+                val speaker = width * 0.34f
+                box.set(left + (width - speaker) / 2f, speakerY - line * 0.45f, left + (width + speaker) / 2f,
+                    speakerY + line * 0.45f)
+                canvas.drawRoundRect(box, line, line, fill)
                 val inset = line * 1.6f
-                val innerTop = top + inset
-                val innerBottom = bottom - inset
+                val innerTop = speakerY + line * 1.4f
+                val innerBottom = bottom - inset - line * 0.6f
                 val level = innerBottom - (innerBottom - innerTop) * share
                 if (share > 0f) canvas.drawRect(left + inset, level, left + width - inset, innerBottom, fill)
             }
@@ -76,7 +84,7 @@ internal class FaceIcons {
         private const val LINE = 0.09f
 
         /** The icon's width for its [height]. */
-        fun width(kind: Kind, height: Float): Float = height * if (kind == Kind.PHONE) 0.55f else 0.62f
+        fun width(kind: Kind, height: Float): Float = height * if (kind == Kind.PHONE) 0.52f else 0.62f
 
         /** A battery has an icon: its percent is known and, in the dim mode, low. */
         fun shown(percent: Int?, ambient: Boolean): Boolean =

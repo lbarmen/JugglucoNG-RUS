@@ -13,7 +13,7 @@ import tk.glucodata.TrendProjection
  */
 data class FaceModel(
     val clock: FaceText.Clock,
-    /** The weekday and the day of the month, "Wed 18" / "Ср 18" (part 7a: beside the clock, small). */
+    /** The day of the month and the short month, "18 Nov" / "18 ноя" (part 7e; the weekday and day before). */
     val dateText: String,
     val hasValue: Boolean,
     val valueText: String,
@@ -64,7 +64,7 @@ data class FaceModel(
             }
             return FaceModel(
                 clock = FaceText.clock(now, zone, snapshot.hour24),
-                dateText = FaceText.weekdayAndDay(now, zone, labels),
+                dateText = FaceText.dayAndMonth(now, zone, labels),
                 hasValue = hasValue,
                 valueText = shown?.text ?: FaceValues.NONE,
                 valueColor = shown?.color,

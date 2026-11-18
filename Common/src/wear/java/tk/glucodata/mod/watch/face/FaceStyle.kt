@@ -50,8 +50,12 @@ data class FaceStyle(
     fun valueColor(rangeColor: Int?): Int =
         rangeColor?.let { if (ambient) dim(it, AMBIENT_VALUE_DIM) else it } ?: neutral
 
-    /** The arrow's and the change's range colour, dimmed in ambient as the rest. */
-    fun arrowColor(rangeColor: Int?): Int = rangeColor?.let { tone(it) } ?: neutral
+    /**
+     * The arrow's and the change's range colour; in ambient dimmed less than the rest, by [AMBIENT_ARROW_DIM] (part
+     * 7e: a dark red arrow sank into the black).
+     */
+    fun arrowColor(rangeColor: Int?): Int =
+        rangeColor?.let { if (ambient) dim(it, AMBIENT_ARROW_DIM) else it } ?: neutral
 
     /** A battery's colour by its percent: red when low, yellow under half, else grey (part 7c). */
     fun batteryColor(percent: Int): Int = when {
@@ -73,6 +77,9 @@ data class FaceStyle(
 
         /** How much of the number's colour the ambient mode keeps (part 7c: dimmer than the rest). */
         const val AMBIENT_VALUE_DIM = 0.45f
+
+        /** How much of the arrow's colour the ambient mode keeps (part 7e: lighter than the rest, still dimmed). */
+        const val AMBIENT_ARROW_DIM = 0.8f
 
         private const val WHITE = 0xFFFFFFFF.toInt()
         private const val GREY = 0xFFB4B4B4.toInt()

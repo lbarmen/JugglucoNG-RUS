@@ -31,6 +31,9 @@ class FaceTextTest {
         val labels = labels()
         assertEquals("Tue 17 Nov", FaceText.date(tuesday, zone, labels))
         assertEquals("Mon 4 May", FaceText.date(earlyMorning, zone, labels))
+        // the face's bottom row (part 7e): day and short month, no weekday
+        assertEquals("17 Nov", FaceText.dayAndMonth(tuesday, zone, labels))
+        assertEquals("4 May", FaceText.dayAndMonth(earlyMorning, zone, labels))
         assertEquals("64%", FaceText.battery(64, labels))
         assertEquals("2 min", FaceText.age(2, labels))
     }
@@ -41,6 +44,8 @@ class FaceTextTest {
         val labels = labels()
         assertEquals("Вт 17 ноя", FaceText.date(tuesday, zone, labels))
         assertEquals("Пн 4 мая", FaceText.date(earlyMorning, zone, labels))
+        assertEquals("17 ноя", FaceText.dayAndMonth(tuesday, zone, labels))
+        assertEquals("4 мая", FaceText.dayAndMonth(earlyMorning, zone, labels))
         assertEquals("64 %", FaceText.battery(64, labels))
         assertEquals("2 мин", FaceText.age(2, labels))
     }
@@ -84,5 +89,6 @@ class FaceTextTest {
         assertEquals("Tue 17 Nov", FaceText.date(tuesday, ZoneId.of("America/New_York"), labels()))
         val lateEvening = LocalDateTime.of(2026, 11, 17, 23, 30).atZone(zone).toInstant().toEpochMilli()
         assertEquals("Wed 18 Nov", FaceText.date(lateEvening, ZoneId.of("Asia/Tokyo"), labels()))
+        assertEquals("18 Nov", FaceText.dayAndMonth(lateEvening, ZoneId.of("Asia/Tokyo"), labels()))
     }
 }

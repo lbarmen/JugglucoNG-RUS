@@ -15,7 +15,7 @@ import kotlin.math.sqrt
  *   10.0  ·  ·· ·  ·   ··· ·  ·::  ╌ 5-minute dots, forecast dashed on the right
  *   3.9 - - - - - - - - - - - - - -
  *          18      19      20        hour labels under the hour lines
- *         [▯] 49  Wed 18  [⌚] 81     batteries as icons, the weekday and day, above the round edge
+ *        [▯] 49   18 ноя   [⌚] 81    batteries as icons, the day and month, above the round edge
  * ```
  * Every share is of the screen's diameter (the smaller side, centred); a row is as wide as the circle allows at its
  * edge farther from the centre, less a margin, so nothing reaches the round edge on any size. Part 7c (the owner's
@@ -34,16 +34,17 @@ object FaceLayout {
     /** The hour labels under the graph's hour lines (part 3c2). */
     private const val HOURS_TOP = 0.806f
     private const val HOURS_BOTTOM = 0.849f
-    /** The batteries and the date (at the bottom since part 7c). */
-    const val STATUS_TOP = 0.858f
-    const val STATUS_BOTTOM = 0.908f
+    /** The batteries and the date (at the bottom since part 7c; taller for larger icons and numbers, 7e). */
+    const val STATUS_TOP = 0.856f
+    const val STATUS_BOTTOM = 0.912f
     /** The "TEST" mark of a local trial build (part 3b), under the status row. */
-    private const val MARK_TOP = 0.914f
-    private const val MARK_BOTTOM = 0.95f
+    private const val MARK_TOP = 0.918f
+    private const val MARK_BOTTOM = 0.954f
 
     /** Text sizes, shares of the diameter. */
     const val TIME_TEXT = 0.11f
-    private const val STATUS_TEXT = 0.045f
+    /** The status row's numbers and date (part 7e: ~25 px on 450, was 20). */
+    private const val STATUS_TEXT = 0.055f
     private const val VALUE_TEXT = 0.20f
     private const val ARROW = 0.10f
     private const val SIDE_TEXT = 0.058f
@@ -56,6 +57,29 @@ object FaceLayout {
 
     /** Space kept from the round edge on each side, share of the diameter. */
     const val MARGIN = 0.04f
+
+    /**
+     * The status row keeps less (part 7e): its icons and texts are centred in it, so their corners stay well inside
+     * the circle even so, and the larger numbers need the width.
+     */
+    const val STATUS_MARGIN = 0.01f
+
+    /** A battery icon's height (part 7e: ~24 px on 450), the space between an icon and its number. */
+    const val STATUS_ICON = 0.054f
+    const val STATUS_ICON_GAP = 0.01f
+
+    /**
+     * Between the batteries and the date (part 7e: ~22 px on 450, twice as wide as before); down to [STATUS_MIN_GAP]
+     * when a "100" needs the room.
+     */
+    const val STATUS_GAP = 0.048f
+    const val STATUS_MIN_GAP = 0.024f
+
+    /**
+     * Between the day and the month (~12 px on 450). This gap sits at the screen's centre, where Wear OS draws the
+     * faint dot of upstream's ongoing activity (~0.86 of the diameter, part 7c), so the dot never lands in a word.
+     */
+    const val DATE_GAP = 0.026f
 
     /**
      * A generous average glyph width, share of the text size, for checking that a text fits without measuring it
@@ -87,10 +111,13 @@ object FaceLayout {
         val graphLabelSize: Float,
         /** The labels of the graph's hour lines (part 3c2). */
         val hours: Row,
-        /** The battery icons with their numbers and, between them, the weekday and day (part 7a; the bottom, 7c). */
+        /** The battery icons with their numbers and, between them, the day and month (7a; the bottom 7c; 7e). */
         val status: Row,
         val mark: Row,
     ) {
+        /** A battery icon's height in pixels (part 7e). */
+        val statusIcon: Float get() = STATUS_ICON * radius * 2f
+
         /** The drawn rows, top to bottom. */
         val rows: List<Row> get() = listOf(time, value, graph, hours, status, mark)
     }
@@ -105,19 +132,20 @@ object FaceLayout {
     data class ValuePlacement(val scale: Float, val valueX: Float, val arrowX: Float, val sideX: Float)
 
     /**
-     * Left edges in the status row: the date centred at [dateX], the phone's battery (icon and number) ending a gap
-     * left of it at [phoneX], the watch's starting a gap right of it at [watchX].
+     * Left edges in the status row: the day at [dayX] and the month at [monthX] with the date's gap between them on
+     * the centre, the phone's battery (icon and number) ending a gap left of the day at [phoneX], the watch's
+     * starting a gap right of the month at [watchX].
      */
-    data class StatusPlacement(val phoneX: Float, val dateX: Float, val watchX: Float)
+    data class StatusPlacement(val phoneX: Float, val dayX: Float, val monthX: Float, val watchX: Float)
 
     fun compute(widthPx: Int, heightPx: Int): Layout {
         val size = min(widthPx, heightPx).toFloat().coerceAtLeast(1f)
         val left = (widthPx - size) / 2f
         val top = (heightPx - size) / 2f
-        fun row(rowTop: Float, rowBottom: Float, text: Float): Row {
+        fun row(rowTop: Float, rowBottom: Float, text: Float, margin: Float = MARGIN): Row {
             // The edge farther from the centre is the narrower one.
             val far = maxOf(abs(rowTop - 0.5f), abs(rowBottom - 0.5f))
-            val half = (sqrt((0.25f - far * far).coerceAtLeast(0f)) - MARGIN).coerceAtLeast(0f)
+            val half = (sqrt((0.25f - far * far).coerceAtLeast(0f)) - margin).coerceAtLeast(0f)
             return Row(left + (0.5f - half) * size, top + rowTop * size, left + (0.5f + half) * size,
                 top + rowBottom * size, text * size)
         }
@@ -132,7 +160,7 @@ object FaceLayout {
             graph = row(GRAPH_TOP, GRAPH_BOTTOM, GRAPH_LABEL_TEXT),
             graphLabelSize = GRAPH_LABEL_TEXT * size,
             hours = row(HOURS_TOP, HOURS_BOTTOM, HOURS_TEXT),
-            status = row(STATUS_TOP, STATUS_BOTTOM, STATUS_TEXT),
+            status = row(STATUS_TOP, STATUS_BOTTOM, STATUS_TEXT, STATUS_MARGIN),
             mark = row(MARK_TOP, MARK_BOTTOM, MARK_TEXT),
         )
     }
@@ -181,14 +209,29 @@ object FaceLayout {
     }
 
     /**
-     * The status row of measured widths ([phoneWidth] / [watchWidth]: icon, gap and number; 0 - not shown): the date
-     * centred, the batteries [gap] beside it. A battery that would reach past the row is pushed back inside.
+     * The status row of measured widths ([phoneWidth] / [watchWidth]: icon, gap and number; 0 - not shown): the day
+     * ending and the month starting [dateGap] / 2 from the row's centre (the system's dot falls between them), the
+     * batteries [gap] beside them - narrower, down to [minGap], when a battery would reach past the row; one that
+     * still would is pushed back inside.
      */
-    fun placeStatus(row: Row, dateWidth: Float, phoneWidth: Float, watchWidth: Float, gap: Float): StatusPlacement {
-        val dateX = row.centerX - dateWidth / 2f
-        val phoneX = (dateX - gap - phoneWidth).coerceAtLeast(row.left)
-        val watchX = (dateX + dateWidth + gap).coerceAtMost(row.right - watchWidth)
-        return StatusPlacement(phoneX, dateX, watchX)
+    fun placeStatus(
+        row: Row,
+        dayWidth: Float,
+        monthWidth: Float,
+        phoneWidth: Float,
+        watchWidth: Float,
+        dateGap: Float,
+        gap: Float,
+        minGap: Float,
+    ): StatusPlacement {
+        val dayX = row.centerX - dateGap / 2f - dayWidth
+        val monthX = row.centerX + dateGap / 2f
+        val leftGap = (dayX - phoneWidth - row.left).coerceIn(minGap, gap)
+        val phoneX = (dayX - leftGap - phoneWidth).coerceAtLeast(row.left)
+        val monthEnd = monthX + monthWidth
+        val rightGap = (row.right - watchWidth - monthEnd).coerceIn(minGap, gap)
+        val watchX = (monthEnd + rightGap).coerceAtMost(row.right - watchWidth)
+        return StatusPlacement(phoneX, dayX, monthX, watchX)
     }
 
     /**

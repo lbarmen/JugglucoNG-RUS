@@ -140,9 +140,10 @@ internal class FacePainter {
     // ------------------------------------------------------------------ status row (part 7a, at the bottom since 7c)
 
     /**
-     * The weekday and day in the middle, the phone's battery left of it and the watch's right of it, each an icon
-     * and its number in the colour of its percent ([FaceStyle.batteryColor]); a battery without a known percent has
-     * neither, the dim mode shows only a low (red) one.
+     * The day and month in the middle (grey, the system's dot between the two words, part 7e), the phone's battery
+     * left of it and the watch's right of it, each an icon and its number in the colour of its percent
+     * ([FaceStyle.batteryColor]); a battery without a known percent has neither, the dim mode shows only a low (red)
+     * one.
      */
     private fun drawStatus(
         canvas: Canvas,
@@ -154,20 +155,29 @@ internal class FacePainter {
     ) {
         val row = layout.status
         if (row.width <= 0f || row.height <= 0f) return
-        val size = fitSize(model.dateText.ifEmpty { "00" }, row, row.textSize, bold = false)
+        val size = fitSize("00", row, row.textSize, bold = false)
         setText(size, style.secondary, bold = false)
-        val dateWidth = text.measureText(model.dateText)
-        val iconHeight = row.height * 0.95f
-        val iconGap = diameter * 0.01f
+        // "18 ноя": the day left of the centre, the month right of it; a date without a space is simply centred
+        val date = model.dateText
+        val cut = date.indexOf(' ')
+        val day = if (cut > 0) date.substring(0, cut) else date
+        val month = if (cut > 0) date.substring(cut + 1).trim() else ""
+        val dateGap = if (month.isEmpty()) 0f else diameter * FaceLayout.DATE_GAP
+        val dayWidth = if (month.isEmpty()) text.measureText(day) / 2f else text.measureText(day)
+        val monthWidth = if (month.isEmpty()) dayWidth else text.measureText(month)
+        val iconHeight = minOf(layout.statusIcon, row.height)
+        val iconGap = diameter * FaceLayout.STATUS_ICON_GAP
         fun groupWidth(kind: FaceIcons.Kind, percent: Int?): Float =
             if (!showData || !FaceIcons.shown(percent, style.ambient)) 0f
             else FaceIcons.width(kind, iconHeight) + iconGap + text.measureText(percent.toString())
         val phoneWidth = groupWidth(FaceIcons.Kind.PHONE, model.phoneBattery)
         val watchWidth = groupWidth(FaceIcons.Kind.WATCH, model.watchBattery)
-        val place = FaceLayout.placeStatus(row, dateWidth, phoneWidth, watchWidth, diameter * 0.035f)
+        val place = FaceLayout.placeStatus(row, dayWidth, monthWidth, phoneWidth, watchWidth, dateGap,
+            diameter * FaceLayout.STATUS_GAP, diameter * FaceLayout.STATUS_MIN_GAP)
         text.getTextBounds("0", 0, 1, bounds)
         val baseline = row.centerY - bounds.exactCenterY()
-        canvas.drawText(model.dateText, place.dateX, baseline, text)
+        canvas.drawText(day, place.dayX, baseline, text)
+        if (month.isNotEmpty()) canvas.drawText(month, place.monthX, baseline, text)
         fun group(kind: FaceIcons.Kind, percent: Int?, width: Float, left: Float) {
             if (width <= 0f || percent == null) return
             val color = style.batteryColor(percent)

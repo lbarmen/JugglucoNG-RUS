@@ -59,7 +59,10 @@ class FaceStyleTest {
         assertFalse(ambient.valueBold)
         val green = 0xFF33CC66.toInt()
         assertTrue(brightness(ambient.valueColor(green)) < brightness(ambient.arrowColor(green)))
-        assertEquals(ambient.traceColor(green), ambient.arrowColor(green))
+        // part 7e: the dim arrow lighter than the dots (a dark red one sank into the black), still dimmed
+        assertTrue(brightness(ambient.traceColor(green)) < brightness(ambient.arrowColor(green)))
+        assertTrue(brightness(ambient.arrowColor(green)) < brightness(green))
+        assertEquals(FaceStyle.dim(green, FaceStyle.AMBIENT_ARROW_DIM), ambient.arrowColor(green))
         assertEquals(green, normal.arrowColor(green))
         assertEquals(normal.neutral, normal.arrowColor(null))
     }

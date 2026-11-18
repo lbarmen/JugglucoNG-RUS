@@ -194,6 +194,6 @@ class FaceModelTest {
         val model = FaceModel.build(snapshot(2), zone, labels)
         // 1_800_000_000_000 ms is Fri 15 Jan 2027 08:00 UTC
         assertEquals("08:00", model.clock.text)
-        assertEquals("Fri 15", model.dateText)
+        assertEquals("15 Jan", model.dateText)
     }
 }
