@@ -12,6 +12,13 @@ import android.content.Context
  */
 interface FaceSource {
     fun snapshot(context: Context, nowMs: Long, graphHours: Int): FaceSnapshot
+
+    /**
+     * The same; [withForecast] false - the forecast may be left out (the dim mode never draws it, part 7c). A source
+     * without its own (the local trial source) gives the full snapshot.
+     */
+    fun snapshot(context: Context, nowMs: Long, graphHours: Int, withForecast: Boolean): FaceSnapshot =
+        snapshot(context, nowMs, graphHours)
 }
 
 /** A glucose reading in display units ([value] mmol/L or mg/dL as the app shows it). */
@@ -23,7 +30,10 @@ data class FaceReading(
     val text: String,
     /** Trend in mg/dL per minute, as every upstream arrow takes it; NaN - no arrow. */
     val rate: Float,
-    /** Upstream's range colour for [value] (ARGB). */
+    /**
+     * The colour of [value] as the app paints it (ARGB): upstream's traffic light (green in the range, yellow out of
+     * it, red past very low / very high) always, whatever their "value range colours" setting says (part 7a).
+     */
     val color: Int,
     /**
      * The newer side of the change pair: the reading on the lane of the view mode without calibration, as upstream's
@@ -31,6 +41,12 @@ data class FaceReading(
      * is never calibrated, so a calibrated [value] would show a change that is not there.
      */
     val deltaValue: Float = value,
+    /**
+     * The arrow's and the change's colour, as the app's hero arrow (part 7a): where [value] heads in 30 minutes by
+     * upstream's `TrendProjection.classify` - red past very low / very high, yellow out of the range, else [color].
+     * [FaceModel] falls back to [color] once the reading is older than upstream's forecast allows.
+     */
+    val arrowColor: Int = color,
 )
 
 /** One point of history in display units, already on the lane the user looks at (auto or raw). */
@@ -42,7 +58,9 @@ data class FacePoint(val timeMs: Long, val value: Float)
  * [current] - upstream's current reading, at most [FaceValues.SOURCE_MAX_AGE_MS] old, `null` when there is none;
  * [history] - unsmoothed history (for the change and for the time of the last reading), oldest first, at least
  * [FaceValues.HISTORY_MIN_MS] back; [graphPoints] - the same window as the user's graph smoothing draws it;
- * [low] / [high] - the user's target range in display units; batteries - percent or `null` when unknown or too old.
+ * [low] / [high] - the user's target range in display units; batteries - percent or `null` when unknown or too old;
+ * [forecast] - upstream's watch forecast from the end of [history] (`WearPrediction.forecast`, part 7a), oldest first,
+ * empty when their "Prediction" setting is off or there is too little to project from.
  */
 data class FaceSnapshot(
     val nowMs: Long,
@@ -56,6 +74,7 @@ data class FaceSnapshot(
     val high: Float,
     val phoneBatteryPercent: Int?,
     val watchBatteryPercent: Int?,
+    val forecast: List<FacePoint> = emptyList(),
 )
 
 /**

@@ -5,18 +5,19 @@ import android.graphics.DashPathEffect
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
-import android.graphics.RectF
 import android.graphics.Typeface
 import java.util.Locale
 import kotlin.math.abs
 import tk.glucodata.TrendArrowAngle
 
 /**
- * JugglucoNGmod, watch block (part 3b): paints a [FaceModel] on a canvas by [FaceLayout] and [FaceStyle]. No data
- * reading here: the renderer hands over the model; [traceColor] gives a graph point its range colour.
+ * JugglucoNGmod, watch block (part 3b, the whole circle since part 7a): paints a [FaceModel] on a canvas by
+ * [FaceLayout] and [FaceStyle]. No data reading here: the renderer hands over the model; [traceColor] gives a dot
+ * its colour as the app would paint that value.
  *
  * Every text is fitted into its row by its measured bounds and set on its baseline (critic 3a, N8: a text's real
- * height is not its size), so nothing reaches the round edge. One painter per renderer, used on its thread.
+ * height is not its size), so nothing reaches the round edge. One painter per renderer, used on its thread; it keeps
+ * its dash patterns for the screen's size instead of making them every frame (critic 7, N9).
  */
 internal class FacePainter {
 
@@ -29,11 +30,26 @@ internal class FacePainter {
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val bounds = Rect()
     private val path = Path()
-    private val box = RectF()
+    private val icons = FaceIcons()
+
+    /** The dash patterns of the target lines and of the forecast, made for [dashDiameter] (critic 7, N9). */
+    private var dashDiameter = -1f
+    private var rangeDash: DashPathEffect? = null
+    private var forecastDash: DashPathEffect? = null
+
+    private fun dashesFor(diameter: Float) {
+        if (diameter == dashDiameter && rangeDash != null && forecastDash != null) return
+        dashDiameter = diameter
+        val dash = diameter * 0.012f
+        rangeDash = DashPathEffect(floatArrayOf(dash, dash), 0f)
+        forecastDash = DashPathEffect(floatArrayOf(diameter * 0.01f, diameter * 0.012f), 0f)
+    }
 
     /**
      * Paints the face on [canvas] ([widthPx] x [heightPx]) and returns the layout used (the tap area). With
      * [showData] false (no snapshot yet) only the time and the date are drawn; [trial] adds the "TEST" mark.
+     * [offsetX] / [offsetY] move the whole picture (the dim mode's burn-in steps, [FaceLayout.burnInOffset]); the
+     * returned layout is the unmoved one.
      */
     fun draw(
         canvas: Canvas,
@@ -44,22 +60,28 @@ internal class FacePainter {
         ambient: Boolean,
         showData: Boolean,
         trial: Boolean,
-        labels: FaceLabels,
         traceColor: (Float) -> Int,
+        offsetX: Float = 0f,
+        offsetY: Float = 0f,
     ): FaceLayout.Layout {
         val style = FaceStyle.of(ambient)
         val layout = FaceLayout.compute(widthPx, heightPx)
         val d = layout.radius * 2f
+        dashesFor(d)
         canvas.drawColor(style.background)
-        drawClock(canvas, layout.time, model.clock, style)
-        drawCentred(canvas, model.dateText, layout.date, layout.date.textSize, style.secondary, bold = false)
-        if (showData) {
-            drawValueRow(canvas, layout, model, style)
-            drawGraph(canvas, layout, d, model, isMmol, style, traceColor)
-            val batteries = FaceText.batteries(model.phoneBatteryText, model.watchBatteryText, labels)
-            drawCentred(canvas, batteries, layout.battery, layout.battery.textSize, style.secondary, bold = false)
+        canvas.save()
+        canvas.translate(offsetX, offsetY)
+        try {
+            drawClock(canvas, layout.time, model.clock, style)
+            drawStatus(canvas, layout, model, style, showData, d)
+            if (showData) {
+                drawValueRow(canvas, layout, model, style)
+                drawGraph(canvas, layout, d, model, isMmol, style, traceColor)
+            }
+            if (trial) drawCentred(canvas, TRIAL_MARK, layout.mark, layout.mark.textSize, style.mark, bold = true)
+        } finally {
+            canvas.restore()
         }
-        if (trial) drawCentred(canvas, TRIAL_MARK, layout.mark, layout.mark.textSize, style.mark, bold = true)
         return layout
     }
 
@@ -115,12 +137,68 @@ internal class FacePainter {
         text.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
     }
 
+    // ------------------------------------------------------------------ status row (part 7a, at the bottom since 7c)
+
+    /**
+     * The day and month in the middle (grey, the system's dot between the two words, part 7e), the phone's battery
+     * left of it and the watch's right of it, each an icon and its number in the colour of its percent
+     * ([FaceStyle.batteryColor]); a battery without a known percent has neither, the dim mode shows only a low (red)
+     * one.
+     */
+    private fun drawStatus(
+        canvas: Canvas,
+        layout: FaceLayout.Layout,
+        model: FaceModel,
+        style: FaceStyle,
+        showData: Boolean,
+        diameter: Float,
+    ) {
+        val row = layout.status
+        if (row.width <= 0f || row.height <= 0f) return
+        val size = fitSize("00", row, row.textSize, bold = false)
+        setText(size, style.secondary, bold = false)
+        // "18 ноя": the day left of the centre, the month right of it; a date without a space is simply centred
+        val date = model.dateText
+        val cut = date.indexOf(' ')
+        val day = if (cut > 0) date.substring(0, cut) else date
+        val month = if (cut > 0) date.substring(cut + 1).trim() else ""
+        val dateGap = if (month.isEmpty()) 0f else diameter * FaceLayout.DATE_GAP
+        val dayWidth = if (month.isEmpty()) text.measureText(day) / 2f else text.measureText(day)
+        val monthWidth = if (month.isEmpty()) dayWidth else text.measureText(month)
+        val iconHeight = minOf(layout.statusIcon, row.height)
+        val iconGap = diameter * FaceLayout.STATUS_ICON_GAP
+        fun groupWidth(kind: FaceIcons.Kind, percent: Int?): Float =
+            if (!showData || !FaceIcons.shown(percent, style.ambient)) 0f
+            else FaceIcons.width(kind, iconHeight) + iconGap + text.measureText(percent.toString())
+        val phoneWidth = groupWidth(FaceIcons.Kind.PHONE, model.phoneBattery)
+        val watchWidth = groupWidth(FaceIcons.Kind.WATCH, model.watchBattery)
+        val place = FaceLayout.placeStatus(row, dayWidth, monthWidth, phoneWidth, watchWidth, dateGap,
+            diameter * FaceLayout.STATUS_GAP, diameter * FaceLayout.STATUS_MIN_GAP)
+        text.getTextBounds("0", 0, 1, bounds)
+        val baseline = row.centerY - bounds.exactCenterY()
+        canvas.drawText(day, place.dayX, baseline, text)
+        if (month.isNotEmpty()) canvas.drawText(month, place.monthX, baseline, text)
+        fun group(kind: FaceIcons.Kind, percent: Int?, width: Float, left: Float) {
+            if (width <= 0f || percent == null) return
+            val color = style.batteryColor(percent)
+            icons.draw(canvas, kind, percent, left, row.centerY, iconHeight, color)
+            text.color = color
+            canvas.drawText(percent.toString(), left + FaceIcons.width(kind, iconHeight) + iconGap, baseline, text)
+        }
+        group(FaceIcons.Kind.PHONE, model.phoneBattery, phoneWidth, place.phoneX)
+        group(FaceIcons.Kind.WATCH, model.watchBattery, watchWidth, place.watchX)
+    }
+
     // ------------------------------------------------------------------ value row
 
     private fun drawValueRow(canvas: Canvas, layout: FaceLayout.Layout, model: FaceModel, style: FaceStyle) {
         val row = layout.value
         val valueColor = if (model.hasValue) style.valueColor(model.valueColor) else style.neutral
-        setText(row.textSize, valueColor, bold = true)
+        // the arrow and the change: where the value heads in 30 minutes, as the app's arrow (part 7a)
+        val arrowColor = if (model.hasValue) style.arrowColor(model.arrowColor) else style.neutral
+        // bold, but in the dim mode regular (part 7c, critic 7, S2)
+        val bold = style.valueBold
+        setText(row.textSize, valueColor, bold)
         val valueWidth = text.measureText(model.valueText)
         val arrowWidth = if (model.rate.isFinite()) layout.arrowSize else 0f
         setText(layout.sideTextSize, style.secondary, bold = false)
@@ -131,18 +209,18 @@ internal class FacePainter {
         val centerY = row.top + row.height / 2f
 
         // the number, its digits centred on the row
-        setText(row.textSize * place.scale, valueColor, bold = true)
+        setText(row.textSize * place.scale, valueColor, bold)
         text.getTextBounds(model.valueText, 0, model.valueText.length, bounds)
         canvas.drawText(model.valueText, place.valueX, centerY - bounds.exactCenterY(), text)
 
         if (arrowWidth > 0f) {
             val size = layout.arrowSize * place.scale
-            drawArrow(canvas, place.arrowX, centerY - size / 2f, size, model.rate, valueColor, style.arrowStroke)
+            drawArrow(canvas, place.arrowX, centerY - size / 2f, size, model.rate, arrowColor, style.arrowStroke)
         }
 
         // change over age, one above the other beside the number
         val sideSize = layout.sideTextSize * place.scale
-        setText(sideSize, style.secondary, bold = false)
+        setText(sideSize, arrowColor, bold = false)
         text.getTextBounds("0", 0, 1, bounds)
         val capHeight = bounds.height().toFloat()
         val lineGap = capHeight * 0.6f
@@ -153,7 +231,7 @@ internal class FacePainter {
             text.color = ageColor
             canvas.drawText(age, place.sideX, upper + lineGap + capHeight, text)
         } else if (delta != null || age != null) {
-            text.color = if (age != null) ageColor else style.secondary
+            text.color = if (age != null) ageColor else arrowColor
             canvas.drawText(age ?: delta!!, place.sideX, centerY + capHeight / 2f, text)
         }
     }
@@ -208,34 +286,15 @@ internal class FacePainter {
         traceColor: (Float) -> Int,
     ) {
         val row = layout.graph
-        val labelSize = layout.graphLabelSize
         val plot = model.graph
         if (row.width <= 0f || row.height <= 0f) return
-        val locale = Locale.getDefault()
-        val highText = FaceStyle.rangeLabel(plot.high, isMmol, locale)
-        val lowText = FaceStyle.rangeLabel(plot.low, isMmol, locale)
-        setText(labelSize, style.secondary, bold = false)
-        val labelGap = diameter * 0.012f
-        val labelWidth = maxOf(text.measureText(highText), text.measureText(lowText))
         val plotLeft = row.left
-        val plotRight = (row.right - labelWidth - labelGap).coerceAtLeast(plotLeft + 1f)
+        val plotRight = row.right
         val plotWidth = plotRight - plotLeft
         fun x(timeMs: Long) = plotLeft + FaceGraph.xFraction(plot, timeMs) * plotWidth
         fun y(value: Float) = row.top + FaceGraph.yFraction(plot, value) * row.height
         val yHigh = y(plot.high)
         val yLow = y(plot.low)
-
-        style.rangeFill?.let {
-            fill.color = it
-            canvas.drawRect(plotLeft, minOf(yHigh, yLow), plotRight, maxOf(yHigh, yLow), fill)
-        }
-        style.frame?.let {
-            stroke.pathEffect = null
-            stroke.strokeWidth = (diameter * style.frameWidth).coerceAtLeast(1f)
-            stroke.color = it
-            box.set(plotLeft, row.top, plotRight, row.bottom)
-            canvas.drawRoundRect(box, diameter * 0.01f, diameter * 0.01f, stroke)
-        }
 
         // thin lines at full hours of local time, their hours under the graph (not in the dim mode)
         val hourLines = FaceLayout.hourLines(plot, model.hourMarks, plotLeft, plotRight)
@@ -245,39 +304,76 @@ internal class FacePainter {
         for (line in hourLines) canvas.drawLine(line.x, row.top, line.x, row.bottom, stroke)
         style.hourLabel?.let { color -> drawHourLabels(canvas, layout.hours, hourLines, color, diameter) }
 
-        // target lines, dashed, their values at the right end
+        // target lines, dashed, from round edge to round edge at their height (part 7a)
         stroke.strokeWidth = (diameter * style.rangeLineWidth).coerceAtLeast(1f)
         stroke.color = style.rangeLine
-        val dash = diameter * 0.012f
-        stroke.pathEffect = DashPathEffect(floatArrayOf(dash, dash), 0f)
-        canvas.drawLine(plotLeft, yHigh, plotRight, yHigh, stroke)
-        canvas.drawLine(plotLeft, yLow, plotRight, yLow, stroke)
+        stroke.pathEffect = rangeDash
+        val edgeInset = diameter * 0.03f
+        for (yLine in listOf(yHigh, yLow)) {
+            val half = FaceLayout.halfWidthAt(layout, yLine, edgeInset)
+            canvas.drawLine(layout.centerX - half, yLine, layout.centerX + half, yLine, stroke)
+        }
         stroke.pathEffect = null
-        setText(labelSize, style.secondary, bold = false)
-        text.getTextBounds("0", 0, 1, bounds)
-        val half = bounds.height() / 2f
-        val labelX = plotRight + labelGap
-        canvas.drawText(highText, labelX, (yHigh + half).coerceIn(row.top + 2 * half, row.bottom), text)
-        canvas.drawText(lowText, labelX, (yLow + half).coerceIn(row.top + 2 * half, row.bottom), text)
 
-        // the trace: a step crossing a target line is cut there (part 3c2), so what lies above the high line or below
-        // the low one has the colour the number would have out of range - always, even with upstream's range colours
-        // off (part 5b, [FaceGraph.traceColor] in [traceColor]) - the rest as before; gaps stay open
-        stroke.strokeWidth = (diameter * style.traceWidth).coerceAtLeast(1f)
-        for (segment in FaceGraph.segments(plot.points, FaceGraph.MAX_GAP_MS)) {
-            if (segment.size == 1) {
-                val p = segment[0]
-                fill.color = style.traceColor(traceColor(p.value))
-                canvas.drawCircle(x(p.timeMs), y(p.value), stroke.strokeWidth / 2f, fill)
-                continue
+        // upstream's forecast, dashed, from the newest reading on (not in the dim mode)
+        style.forecast?.let { color ->
+            if (plot.forecast.isEmpty()) return@let
+            path.reset()
+            val start = plot.points.lastOrNull()
+            if (start != null) path.moveTo(x(start.timeMs), y(start.value))
+            plot.forecast.forEachIndexed { i, p ->
+                if (i == 0 && start == null) path.moveTo(x(p.timeMs), y(p.value)) else path.lineTo(x(p.timeMs), y(p.value))
             }
-            for (i in 1 until segment.size) {
-                for (piece in FaceGraph.splitByRange(segment[i - 1], segment[i], plot.low, plot.high)) {
-                    stroke.color = style.traceColor(traceColor(piece.colorValue))
-                    canvas.drawLine(x(piece.from.timeMs), y(piece.from.value), x(piece.to.timeMs), y(piece.to.value),
-                        stroke)
-                }
-            }
+            stroke.strokeWidth = (diameter * style.forecastWidth).coerceAtLeast(1f)
+            stroke.color = color
+            stroke.pathEffect = forecastDash
+            canvas.drawPath(path, stroke)
+            stroke.pathEffect = null
+        }
+
+        // the 5-minute dots, each in the colour the number would have at its value (part 7a, as xDrip's face);
+        // closer dots (6 h) are smaller so they never run into each other
+        val step = plotWidth * FaceGraph.BUCKET_MS / (plot.toMs - plot.fromMs).coerceAtLeast(1L)
+        val radius = minOf(diameter * style.dotRadius, step * 0.42f).coerceAtLeast(1.2f)
+        for (dot in plot.dots) {
+            fill.color = style.traceColor(traceColor(dot.value))
+            canvas.drawCircle(x(dot.timeMs), y(dot.value), radius, fill)
+        }
+
+        // the target lines' values small at the left end, just above each line, over the dots with a black edge
+        // round each glyph so a dot never hides them (part 7c; not in the dim mode)
+        if (style.hourLabel != null) drawRangeLabels(canvas, layout, diameter, plot, isMmol, style, yHigh, yLow, edgeInset)
+    }
+
+    private fun drawRangeLabels(
+        canvas: Canvas,
+        layout: FaceLayout.Layout,
+        diameter: Float,
+        plot: FaceGraph.Plot,
+        isMmol: Boolean,
+        style: FaceStyle,
+        yHigh: Float,
+        yLow: Float,
+        edgeInset: Float,
+    ) {
+        val row = layout.graph
+        val locale = Locale.getDefault()
+        setText(layout.graphLabelSize, style.secondary, bold = false)
+        text.getTextBounds("0", 0, 1, bounds)
+        val capHeight = bounds.height().toFloat()
+        val lift = diameter * 0.008f
+        for ((value, yLine) in listOf(plot.high to yHigh, plot.low to yLow)) {
+            val label = FaceStyle.rangeLabel(value, isMmol, locale)
+            val baseline = (yLine - lift).coerceIn(row.top + capHeight, row.bottom)
+            val left = maxOf(row.left, layout.centerX - FaceLayout.halfWidthAt(layout, baseline - capHeight, edgeInset))
+            text.style = Paint.Style.STROKE
+            text.strokeWidth = diameter * LABEL_EDGE
+            text.strokeJoin = Paint.Join.ROUND
+            text.color = style.background
+            canvas.drawText(label, left, baseline, text)
+            text.style = Paint.Style.FILL
+            text.color = style.secondary
+            canvas.drawText(label, left, baseline, text)
         }
     }
 
@@ -302,5 +398,8 @@ internal class FacePainter {
     companion object {
         /** Marks a local trial build with made-up values; never shown with the real source. */
         const val TRIAL_MARK = "TEST"
+
+        /** The black edge round a range label's glyphs, share of the diameter (part 7c). */
+        const val LABEL_EDGE = 0.014f
     }
 }

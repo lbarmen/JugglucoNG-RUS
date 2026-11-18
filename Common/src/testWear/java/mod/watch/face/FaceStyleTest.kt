@@ -2,10 +2,12 @@ package mod.watch.face
 
 import java.util.Locale
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import tk.glucodata.mod.watch.face.FaceIcons
 import tk.glucodata.mod.watch.face.FaceStyle
 
 /** JugglucoNGmod, watch block (part 3b): the face's colours and line weights, normal and dim (ambient). */
@@ -23,15 +25,16 @@ class FaceStyleTest {
     }
 
     @Test
-    fun ambientKeepsThePictureWithoutFillsAndWithThinnerLines() {
-        assertNotNull(normal.rangeFill)
-        assertNotNull(normal.frame)
-        assertNull(ambient.rangeFill)
-        assertNull(ambient.frame)
-        assertTrue(ambient.traceWidth < normal.traceWidth)
+    fun ambientKeepsThePictureWithoutForecastOrLabelsAndWithThinnerLines() {
+        // part 7a: the forecast and the graph's labels only in the normal mode
+        assertNotNull(normal.forecast)
+        assertNotNull(normal.hourLabel)
+        assertNull(ambient.forecast)
+        assertNull(ambient.hourLabel)
+        assertTrue(ambient.dotRadius < normal.dotRadius)
         assertTrue(ambient.rangeLineWidth < normal.rangeLineWidth)
         assertTrue(ambient.arrowStroke < normal.arrowStroke)
-        assertTrue(ambient.traceWidth > 0f && ambient.rangeLineWidth > 0f && ambient.arrowStroke > 0f)
+        assertTrue(ambient.dotRadius > 0f && ambient.rangeLineWidth > 0f && ambient.arrowStroke > 0f)
     }
 
     @Test
@@ -40,6 +43,7 @@ class FaceStyleTest {
             normal.time to ambient.time, normal.secondary to ambient.secondary, normal.age to ambient.age,
             normal.ageAlarm to ambient.ageAlarm, normal.neutral to ambient.neutral,
             normal.rangeLine to ambient.rangeLine, normal.mark to ambient.mark,
+            normal.battery to ambient.battery, normal.batteryLow to ambient.batteryLow,
         )
         pairs.forEach { (n, a) -> assertTrue("$n vs $a", brightness(a) < brightness(n)) }
         val green = 0xFF33CC66.toInt()
@@ -49,9 +53,46 @@ class FaceStyleTest {
     }
 
     @Test
-    fun theAgeAlarmIsRed() {
-        val c = normal.ageAlarm
-        assertTrue(((c shr 16) and 0xFF) > 200 && ((c shr 8) and 0xFF) < 120 && (c and 0xFF) < 120)
+    fun theDimNumberIsRegularAndDimmerThanTheRest() {
+        // part 7c, critic 7, S2: the largest lit area of the always-on screen
+        assertTrue(normal.valueBold)
+        assertFalse(ambient.valueBold)
+        val green = 0xFF33CC66.toInt()
+        assertTrue(brightness(ambient.valueColor(green)) < brightness(ambient.arrowColor(green)))
+        // part 7e: the dim arrow lighter than the dots (a dark red one sank into the black), still dimmed
+        assertTrue(brightness(ambient.traceColor(green)) < brightness(ambient.arrowColor(green)))
+        assertTrue(brightness(ambient.arrowColor(green)) < brightness(green))
+        assertEquals(FaceStyle.dim(green, FaceStyle.AMBIENT_ARROW_DIM), ambient.arrowColor(green))
+        assertEquals(green, normal.arrowColor(green))
+        assertEquals(normal.neutral, normal.arrowColor(null))
+    }
+
+    @Test
+    fun batteriesRedUnder30YellowUnder50ElseGrey() {
+        // part 7c, the owner's word
+        for (style in listOf(normal, ambient)) {
+            assertEquals(style.batteryLow, style.batteryColor(0))
+            assertEquals(style.batteryLow, style.batteryColor(29))
+            assertEquals(style.batteryWarn, style.batteryColor(30))
+            assertEquals(style.batteryWarn, style.batteryColor(49))
+            assertEquals(style.battery, style.batteryColor(50))
+            assertEquals(style.battery, style.batteryColor(100))
+        }
+        assertTrue(brightness(ambient.batteryWarn) < brightness(normal.batteryWarn))
+        val warn = normal.batteryWarn
+        assertTrue(((warn shr 16) and 0xFF) > 200 && ((warn shr 8) and 0xFF) > 150 && (warn and 0xFF) < 120)
+        // the dim mode shows a battery only when it is red
+        assertTrue(FaceIcons.shown(29, ambient = true))
+        assertFalse(FaceIcons.shown(30, ambient = true))
+        assertTrue(FaceIcons.shown(30, ambient = false) && FaceIcons.shown(100, ambient = false))
+        assertFalse(FaceIcons.shown(null, ambient = false))
+    }
+
+    @Test
+    fun theAgeAlarmAndALowBatteryAreRed() {
+        for (c in listOf(normal.ageAlarm, normal.batteryLow)) {
+            assertTrue(((c shr 16) and 0xFF) > 200 && ((c shr 8) and 0xFF) < 120 && (c and 0xFF) < 120)
+        }
     }
 
     @Test

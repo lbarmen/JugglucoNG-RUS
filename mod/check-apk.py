@@ -220,6 +220,29 @@ def check_watchface_name(apk):
     check_resource_string(out, 'mod_watch_face_name', MOD_WATCHFACE_NAME, 'our watch face name')
 
 
+def novalue_fill_colors(apk):
+    """The fill colours of the vector `drawable/novalue` in [apk] (its anydpi file; paths may be shortened)."""
+    out = run([build_tool('aapt2'), 'dump', 'resources', apk])
+    m = re.search(r'drawable/novalue\n((?:\s+\(.*\n)+)', out)
+    files = re.findall(r'\(anydpi[^)]*\) \(file\) (\S+) type=XML', m.group(1)) if m else []
+    if not files:
+        return None
+    tree = run([build_tool('aapt2'), 'dump', 'xmltree', '--file', files[0], apk])
+    return set(c.lower() for c in re.findall(r'fillColor\([^)]*\)=(#[0-9a-fA-F]+)', tree))
+
+
+def check_novalue(wear, phone):
+    """Watch part 7c: the icon of upstream's ongoing activity, drawn by Wear OS at the bottom of every face, is our
+    faint dot in the wear APK (Common/src/wearMod/res/drawable-anydpi-v24/novalue.xml overrides theirs); the phone
+    keeps upstream's."""
+    ours = set(c.lower() for c in re.findall(r'android:fillColor="(#[0-9A-Fa-f]+)"',
+               open('Common/src/wearMod/res/drawable-anydpi-v24/novalue.xml', encoding='utf-8').read()))
+    in_wear = novalue_fill_colors(wear)
+    check(in_wear == ours, f'wear APK: novalue is our faint dot {sorted(ours)}' + ('' if in_wear == ours else f' (got {in_wear})'))
+    in_phone = novalue_fill_colors(phone)
+    check(in_phone is not None and in_phone != ours, "phone APK: novalue is upstream's" + (f' (got {in_phone})' if in_phone == ours or in_phone is None else ''))
+
+
 def check_wear_components(apk):
     """Our watch components are in the wear APK's manifest; our face is a wallpaper service without an editor action
     (upstream's WATCH_FACE_EDITOR would open their WatchFaceConfigActivity, any other value hides the face), and our
@@ -561,6 +584,7 @@ def main():
     check_icon()
     check_native()
     check_watchface_name(a.wear)
+    check_novalue(a.wear, a.phone)
     check_wear_components(a.wear)
     check_phone_components(a.phone)
     check_watchface_resources(a.wear)

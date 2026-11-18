@@ -115,8 +115,8 @@ class FaceHoursAndRangeTest {
                     assertTrue(left >= layout.hours.left && left + widths[i] <= layout.hours.right)
                 }
             }
-            // the hour labels' row is between the graph and the batteries, the range labels' column is in the graph
-            assertTrue(layout.graph.bottom <= layout.hours.top && layout.hours.bottom <= layout.battery.top)
+            // the hour labels' row is between the graph and the status row (part 7c)
+            assertTrue(layout.graph.bottom <= layout.hours.top && layout.hours.bottom <= layout.status.top)
         }
     }
 
@@ -209,31 +209,6 @@ class FaceHoursAndRangeTest {
         assertEquals(2, FaceGraph.splitByRange(p(0, 150f), p(5, 200f), 70f, 180f).size)
     }
 
-    @Test
-    fun outOfTheRangeTheTraceIsAlwaysColouredEvenWithTheRangeColoursOff() {
-        // part 5b, decision of 18.11: upstream's value range colours off - the setting gives the neutral tone
-        val neutral = 0xFFE3E2DE.toInt()
-        val high = 0xFFD0A23A.toInt()
-        val low = 0xFFC97970.toInt()
-        val off: (Float) -> Int = { neutral }
-        val out: (Float) -> Int = { if (it > 10f) high else low }
-        fun colour(value: Float) = FaceGraph.traceColor(value, 3.9f, 10f, off, out)
-        assertEquals(high, colour(12f))
-        assertEquals(low, colour(3.5f))
-        assertEquals(neutral, colour(6f))
-        // the lines belong to the range
-        assertEquals(neutral, colour(10f))
-        assertEquals(neutral, colour(3.9f))
-        // every piece of a step from below to above: the ends out of the range coloured, the middle by the setting
-        val pieces = FaceGraph.splitByRange(p(0, 3f), p(10, 11f), 3.9f, 10f)
-        assertEquals(listOf(low, neutral, high), pieces.map { colour(it.colorValue) })
-        // with the range colours on, the setting's colour stays in the range
-        val on: (Float) -> Int = { 0xFF4E8A55.toInt() }
-        assertEquals(0xFF4E8A55.toInt(), FaceGraph.traceColor(6f, 3.9f, 10f, on, out))
-        // limits given high first: the same zones
-        assertEquals(high, FaceGraph.traceColor(12f, 10f, 3.9f, off, out))
-    }
-
     // ------------------------------------------------------------------ read pacing (critic 3c, N1/N2/N7)
 
     @Test
@@ -282,6 +257,27 @@ class FaceHoursAndRangeTest {
     fun theStaleReadOfAFrameNeverBreaksThePause() {
         assertTrue(ModFaceRenderer.STALE_MS >= ModFaceRenderer.MIN_READ_MS)
         assertTrue(ModFaceRenderer.STALE_MS < ModFaceRenderer.FRAME_MS)
+        // the dim mode reads again only every few frames (part 7c, critic 7, N8)
+        assertEquals(ModFaceRenderer.STALE_MS, ModFaceRenderer.staleAfter(false))
+        assertEquals(ModFaceRenderer.AMBIENT_STALE_MS, ModFaceRenderer.staleAfter(true))
+        assertTrue(ModFaceRenderer.AMBIENT_STALE_MS >= 5 * ModFaceRenderer.FRAME_MS)
+    }
+
+    @Test
+    fun theSystemIconOfOurWatchBuildIsAFaintDotOfUpstreamsSize() {
+        // part 7c, the owner's word: Wear OS draws upstream's `novalue` (their ongoing activity's icon) at the bottom
+        // of every face; our watch build overrides it with a faint dot of the same box, the phone keeps theirs
+        fun file(path: String) = listOf(File("src/$path"), File("Common/src/$path")).first { it.isFile }.readText()
+        val ours = file("wearMod/res/drawable-anydpi-v24/novalue.xml")
+        val theirs = file("main/res/drawable-anydpi-v24/novalue.xml")
+        for (attr in listOf("width", "height", "viewportWidth", "viewportHeight")) {
+            val pattern = Regex("android:$attr=\"([^\"]+)\"")
+            assertEquals(attr, pattern.find(theirs)?.groupValues?.get(1), pattern.find(ours)?.groupValues?.get(1))
+        }
+        val colors = Regex("android:fillColor=\"#([0-9A-Fa-f]{8})\"").findAll(ours).map { it.groupValues[1] }.toList()
+        assertTrue(colors.isNotEmpty())
+        colors.forEach { assertTrue("alpha of #$it", it.substring(0, 2).toInt(16) <= 0x50) }
+        assertFalse(ours.contains("android:tint"))
     }
 
     @Test

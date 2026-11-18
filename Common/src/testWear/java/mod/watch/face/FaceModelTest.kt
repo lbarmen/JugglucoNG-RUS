@@ -58,8 +58,8 @@ class FaceModelTest {
         assertEquals(2, model.ageMinutes)
         assertEquals("2 min", model.ageText)
         assertFalse(model.ageAlarm)
-        assertEquals("64%", model.phoneBatteryText)
-        assertEquals("81%", model.watchBatteryText)
+        assertEquals(64, model.phoneBattery)
+        assertEquals(81, model.watchBattery)
         assertEquals(3.9f, model.graph.low)
         assertEquals(10f, model.graph.high)
     }
@@ -94,15 +94,15 @@ class FaceModelTest {
     }
 
     @Test
-    fun nothingAtAllNoAgeAndDashesForTheBatteries() {
+    fun nothingAtAllNoAgeAndNoBatteries() {
         val empty = FaceSnapshot(now, true, true, 3, null, emptyList(), emptyList(), 3.9f, 10f, null, null)
         val model = FaceModel.build(empty, zone, labels)
         assertFalse(model.hasValue)
         assertNull(model.ageMinutes)
         assertNull(model.ageText)
         assertFalse(model.ageAlarm)
-        assertEquals(FaceValues.NONE, model.phoneBatteryText)
-        assertEquals(FaceValues.NONE, model.watchBatteryText)
+        assertNull(model.phoneBattery)
+        assertNull(model.watchBattery)
         assertTrue(model.graph.points.isEmpty())
     }
 
@@ -146,11 +146,54 @@ class FaceModelTest {
         assertTrue(model.ageAlarm)
     }
 
+    // ------------------------------------------------------------------ part 7a
+
+    private val yellow = 0xFFFFD54F.toInt()
+
+    @Test
+    fun theArrowAndTheChangeHaveTheForecastColourWhileTheReadingIsYoung() {
+        val heading = snapshot(2).copy(current = FaceReading(now - 2 * minute, 9.6f, "9.6", 2f, color, arrowColor = yellow))
+        val model = FaceModel.build(heading, zone, labels)
+        assertEquals(color, model.valueColor)
+        assertEquals(yellow, model.arrowColor)
+        // upstream's projection stops after 5 minutes: then the value's colour
+        val old = heading.copy(current = heading.current!!.copy(timeMs = now - 6 * minute))
+        assertEquals(color, FaceModel.build(old, zone, labels).arrowColor)
+        // no value, no colour
+        assertNull(FaceModel.build(snapshot(21), zone, labels).arrowColor)
+    }
+
+    @Test
+    fun aBatteryOutside0To100IsUnknown() {
+        val model = FaceModel.build(snapshot(2, phone = 101, watch = -1), zone, labels)
+        assertNull(model.phoneBattery)
+        assertNull(model.watchBattery)
+        assertEquals(0, FaceModel.build(snapshot(2, phone = 0), zone, labels).phoneBattery)
+    }
+
+    private val forecast = (5..60 step 5).map { FacePoint(now + it * minute, 6.4f - it * 0.03f) }
+
+    @Test
+    fun theForecastOnlyFromAValueOnTheScreenThatIsNotOld() {
+        val fresh = FaceModel.build(snapshot(2).copy(forecast = forecast), zone, labels)
+        assertTrue(fresh.hasForecast)
+        assertEquals(now + 45 * minute, fresh.graph.toMs)
+        for (age in listOf(11, 21)) {
+            val old = FaceModel.build(snapshot(age).copy(forecast = forecast), zone, labels)
+            assertFalse("age $age", old.hasForecast)
+            assertEquals(now, old.graph.toMs)
+        }
+        val noValue = FaceModel.build(snapshot(null).copy(forecast = forecast), zone, labels)
+        assertFalse(noValue.hasForecast)
+        // their setting off: the source gives none
+        assertFalse(FaceModel.build(snapshot(2), zone, labels).hasForecast)
+    }
+
     @Test
     fun clockAndDate() {
         val model = FaceModel.build(snapshot(2), zone, labels)
         // 1_800_000_000_000 ms is Fri 15 Jan 2027 08:00 UTC
         assertEquals("08:00", model.clock.text)
-        assertEquals("Fri 15 Jan", model.dateText)
+        assertEquals("15 Jan", model.dateText)
     }
 }

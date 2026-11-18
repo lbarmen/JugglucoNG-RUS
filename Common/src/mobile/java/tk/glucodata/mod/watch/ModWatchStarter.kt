@@ -39,6 +39,8 @@ class ModWatchStarter : ContentProvider() {
                 // on our own thread (database, Data Layer, shortcut service)
                 ModWatchStore.drainAsync(app)
                 ModWatchShortcut.publishAsync(app)
+                // part 7b: an alert sound setting changed here goes to the watch at once, not with the next tick
+                WatchAlertSettings.watchChanges(app)
             }
         } catch (_: Throwable) {
             // our code must not take upstream's app down

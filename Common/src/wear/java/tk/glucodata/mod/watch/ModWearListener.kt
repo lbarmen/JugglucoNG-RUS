@@ -11,6 +11,10 @@ import com.google.android.gms.wearable.WearableListenerService
  *
  * `/mod/tick` (part 2): the phone battery goes to [PhoneBatteryStore] with the watch's time of receipt, and the tick
  * wakes the heart rate and steps hand-over ([HealthTick], filled by part 4).
+ *
+ * `/mod/alerts` (parts 7b, 7d): the phone's alert settings, written into upstream's alert preferences and native
+ * thresholds of the watch unless overtaken ([WatchAlertStore]) - their Notify and AlertRepository read them at the
+ * next alarm.
  */
 class ModWearListener : WearableListenerService() {
 
@@ -36,6 +40,7 @@ class ModWearListener : WearableListenerService() {
                     HealthTick.onTick(context, nowMs)
                     return true
                 }
+                ModWatchMessages.PATH_ALERTS -> return WatchAlertStore.onMessage(context, data)
                 ModWatchMessages.PATH_SNOOZE_DONE -> {
                     val done = ModWatchMessages.decodeSnoozeDone(data)
                     if (done == null) {
