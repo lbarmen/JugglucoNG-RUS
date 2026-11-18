@@ -22,10 +22,13 @@ import tk.glucodata.ui.AlarmActivityAccess
  * [AlertStateTracker.isDismissed] - the check upstream's Notify.isActivePresentedRecoveryBlocker adds, because "a
  * notification can outlive its condition". The presented mark alone stays after the sound and the condition are over,
  * and snoozing that stale kind would silence its next real alert. Without a live episode the presented kind is still
- * going on while an alarm sound is on ([Natives.getisalarm]): LOSS never opens an episode (the native side calls
- * Notify.lossalarm directly), and any kind's sound may outlive its episode by up to a minute. Not
- * `Notify.resolveAlertKind`: that one can return the last alert after it was over. Custom (user) alerts are not
- * covered: upstream has no public "which custom alert is ringing".
+ * going on while its own alarm sound is on: LOSS never opens an episode (the native side calls Notify.lossalarm
+ * directly), and any kind's sound may outlive its episode by up to a minute. "Its own" matters: other sounds set the
+ * same native flag ([Natives.getisalarm]) and leave the mark alone - the "amount not entered" reminder (kind AMOUNT),
+ * a melody tried in the settings. Which kind sounds is [Notify.resolveAlertKind]: the kind of a running repeat
+ * session, otherwise the kind upstream's playringhier set together with the flag (cleared with it), otherwise the
+ * presented one. Left open: trying the melody of the very kind whose stale mark is up, while pressing the button.
+ * Custom (user) alerts are not covered: upstream has no public "which custom alert is ringing".
  *
  * The snooze is what upstream's "Snooze" button does: [AlertActions.handle] with the alert's default minutes (it
  * also sends their `/alertack` to the other device), then [AlarmActivityAccess.acknowledge] - `handle` stops the sound
@@ -47,21 +50,27 @@ object OngoingAlert {
     fun find(): Int? = AlertType.settingsEntries.firstOrNull { isGoingOn(it) }?.id
 
     /**
-     * [type] is presented now and its episode is live or an alarm sound is still on (see the class comment). The
-     * sound counts for every kind: when the next reading clears the condition while the sound plays, upstream's
+     * [type] is presented now and its episode is live or its own alarm sound is still on (see the class comment).
+     * The sound counts for every kind: when the next reading clears the condition while the sound plays, upstream's
      * runtime resets the episode but lets the sound finish (up to a minute), and their own "Snooze" still works then.
-     * A stale mark without a sound still snoozes nothing.
+     * A stale mark without a sound, or with another kind's sound, snoozes nothing.
      */
     fun isGoingOn(type: AlertType): Boolean {
         if (!Notify.isCurrentStandardAlert(type.id)) return false
         if (AlertStateTracker.isEpisodeActive(type) && !AlertStateTracker.isDismissed(type)) return true
-        return soundOn()
+        return soundOn() && soundingKind() == type.id
     }
 
     private fun soundOn(): Boolean = try {
         Natives.getisalarm()
     } catch (_: Throwable) {
         false
+    }
+
+    private fun soundingKind(): Int = try {
+        Notify.resolveAlertKind(-1)
+    } catch (_: Throwable) {
+        -1
     }
 
     /** Snoozes [kind] as upstream's "Snooze" does. Main thread only: elsewhere refuses and returns false. */

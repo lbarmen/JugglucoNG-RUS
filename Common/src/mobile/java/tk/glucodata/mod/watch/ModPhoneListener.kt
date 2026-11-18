@@ -27,7 +27,7 @@ class ModPhoneListener : WearableListenerService() {
     override fun onCapabilityChanged(capabilityInfo: CapabilityInfo) {
         try {
             if (capabilityInfo.name != ModWatchMessages.CAPABILITY_WATCH || capabilityInfo.nodes.isEmpty()) return
-            WatchTicker.onWatchAppeared(applicationContext, System.currentTimeMillis())
+            WatchTicker.onWatchAppeared(applicationContext) // on our own thread: /mod/snooze is not held up
         } catch (t: Throwable) {
             ModWatchLog.w("phone listener: capability failed: ${t.javaClass.simpleName}")
         }

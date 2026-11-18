@@ -20,10 +20,10 @@ import tk.glucodata.MessageSender
  *
  * Sent by the 5-minute cycle ([WatchTickWorker]), at the app's start ([ModWatchStarter]), when our watch app appears
  * ([ModPhoneListener]) and when the battery moved [BATTERY_STEP] points from the last tick sent (at most once a
- * [MIN_EXTRA_GAP_MS], while the process lives). The watch is every reachable node with the watch app's capability:
- * the Data Layer links only apps of the same package and signature, so a node found is our watch app. Nothing goes
- * while the user has the watch companion switched off on the phone (as upstream's own sender). The log has counts
- * and reason codes only, never the battery.
+ * [MIN_EXTRA_GAP_MS], while the process lives, and not while no watch answered - [WatchTickMemory]). The watch is every
+ * reachable node with the watch app's capability: the Data Layer links only apps of the same package and signature, so
+ * a node found is our watch app. Nothing goes while the user has the watch companion switched off on the phone (as
+ * upstream's own sender). The log has counts and reason codes only, never the battery.
  */
 object WatchTicker {
 
@@ -35,20 +35,14 @@ object WatchTicker {
 
     private const val WAIT_SECONDS = 10L
 
-    /** Battery percent of the last tick that reached a watch; `null` before the first one in this process. */
-    @Volatile
-    private var lastSentPercent: Int? = null
-
-    /** Time of the last tick attempt of any reason. */
-    @Volatile
-    private var lastTickAtMs = 0L
+    private val memory = WatchTickMemory()
 
     private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "ModWatchTick").apply { isDaemon = true } }
 
     /**
-     * Sends a tick with [reason] to our watch app; blocks up to a few seconds (a worker or listener thread, never the
-     * main thread). Returns true when a watch was found, false when none is reachable, the companion is off or the
-     * lookup failed. Never throws.
+     * Sends a tick with [reason] to our watch app; blocks up to a few seconds (a worker thread, never the main thread
+     * or the listener's). Returns true when a watch was found, false when none is reachable, the companion is off or
+     * the lookup failed. Never throws.
      */
     fun send(
         context: Context,
@@ -56,9 +50,10 @@ object WatchTicker {
         nowMs: Long,
         battery: ModBattery.Reading? = ModBattery.read(context),
     ): Boolean {
-        lastTickAtMs = nowMs
+        memory.attempted(nowMs)
         try {
             if (!MessageSender.outgoingAllowed()) {
+                memory.noWatch()
                 ModWatchLog.i("tick $reason: watch companion off")
                 return false
             }
@@ -68,9 +63,11 @@ object WatchTicker {
                 WAIT_SECONDS, TimeUnit.SECONDS,
             ).nodes
             if (nodes.isEmpty()) {
+                memory.noWatch()
                 ModWatchLog.i("tick $reason: no watch")
                 return false
             }
+            memory.watchFound()
             val data = ModWatchMessages.encodeTick(
                 ModWatchMessages.Tick(battery?.percent, battery?.charging == true, nowMs, reason)
             )
@@ -84,7 +81,7 @@ object WatchTicker {
                     ModWatchLog.w("tick $reason: node failed: ${t.javaClass.simpleName}")
                 }
             }
-            if (sent > 0) lastSentPercent = battery?.percent
+            if (sent > 0) memory.delivered(nowMs, battery?.percent)
             ModWatchLog.i("tick $reason: $sent of ${nodes.size}")
             return true
         } catch (t: Throwable) {
@@ -108,7 +105,9 @@ object WatchTicker {
 
     /**
      * The app's process started (posted to the main thread by [ModWatchStarter], so after Application.onCreate): a
-     * start tick on our thread, then the cycle - started afresh when a watch answered, kept as it is otherwise.
+     * start tick on our thread, then the cycle - started afresh only when a watch answered and the queued step waits
+     * the long hour ([WatchTickWorker.replaceOnStart]), kept as it is otherwise: a step that woke the process is
+     * running now and queues the next itself.
      */
     fun onAppStart(context: Context) {
         val app = context.applicationContext ?: context
@@ -116,7 +115,9 @@ object WatchTicker {
             worker.execute {
                 try {
                     val found = send(app, ModWatchMessages.REASON_START, System.currentTimeMillis())
-                    if (found) WatchTickWorker.restart(app) else WatchTickWorker.ensureScheduled(app)
+                    val waitsLong = if (found) WatchTickWorker.queuedWaitsLong(app) else null
+                    if (WatchTickWorker.replaceOnStart(found, waitsLong)) WatchTickWorker.restart(app)
+                    else WatchTickWorker.ensureScheduled(app)
                 } catch (t: Throwable) {
                     ModWatchLog.w("start tick failed: ${t.javaClass.simpleName}")
                 }
@@ -127,19 +128,36 @@ object WatchTicker {
     }
 
     /**
-     * Our watch app became reachable (ModPhoneListener's CAPABILITY_CHANGED, a listener thread): an extra tick unless
-     * one went within [MIN_EXTRA_GAP_MS], and the cycle back to every 5 minutes if it was waiting the long hour.
+     * Our watch app became reachable (ModPhoneListener's CAPABILITY_CHANGED): on our own thread, so the listener's
+     * single thread stays free for `/mod/snooze` - an extra tick unless one reached a watch within [MIN_EXTRA_GAP_MS],
+     * and the cycle back to every 5 minutes unless a 5-minute step is already waiting
+     * ([WatchTickWorker.replaceOnWatchAppeared]). Returns at once.
      */
-    fun onWatchAppeared(context: Context, nowMs: Long) {
-        if (gapPassed(nowMs, lastTickAtMs)) send(context, ModWatchMessages.REASON_WATCH, nowMs)
-        if (WatchTickWorker.waitingLong != false) WatchTickWorker.restart(context)
+    fun onWatchAppeared(context: Context) {
+        val app = context.applicationContext ?: context
+        memory.watchAppeared()
+        try {
+            worker.execute {
+                try {
+                    val now = System.currentTimeMillis()
+                    if (memory.watchTickDue(now)) send(app, ModWatchMessages.REASON_WATCH, now)
+                    if (WatchTickWorker.replaceOnWatchAppeared(WatchTickWorker.queuedWaitsLong(app))) {
+                        WatchTickWorker.restart(app)
+                    }
+                } catch (t: Throwable) {
+                    ModWatchLog.w("watch tick failed: ${t.javaClass.simpleName}")
+                }
+            }
+        } catch (t: Throwable) {
+            ModWatchLog.w("watch tick not queued: ${t.javaClass.simpleName}")
+        }
     }
 
-    /** A battery broadcast (main thread): an extra tick when [shouldSendForBattery] says so. */
+    /** A battery broadcast (main thread): an extra tick when [WatchTickMemory.batteryTickDue] says so. */
     fun onBatteryChanged(context: Context, battery: ModBattery.Reading?, nowMs: Long) {
         if (battery == null) return
-        if (!shouldSendForBattery(battery.percent, lastSentPercent, nowMs, lastTickAtMs)) return
-        lastTickAtMs = nowMs // claimed now: broadcasts that come before the send runs queue no second tick
+        if (!memory.batteryTickDue(battery.percent, nowMs)) return
+        memory.attempted(nowMs) // claimed now: broadcasts that come before the send runs queue no second tick
         sendAsync(context, ModWatchMessages.REASON_BATTERY, battery)
     }
 
@@ -165,12 +183,6 @@ object WatchTicker {
         )
     }
 
-    /** Tests only: a process that sent nothing yet. */
-    internal fun resetForTest() {
-        lastSentPercent = null
-        lastTickAtMs = 0L
-    }
-
     private class BatteryReceiver : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent?) {
             try {
@@ -180,4 +192,66 @@ object WatchTicker {
             }
         }
     }
+}
+
+/**
+ * What [WatchTicker] remembers in this process and its rules for the extra ticks, apart from the Data Layer (tests
+ * drive it directly). Fields are read and written from the main thread (battery) and our worker thread; a race costs
+ * at most one extra tick.
+ */
+class WatchTickMemory {
+
+    /** Battery percent of the last tick that reached a watch; `null` before the first one in this process. */
+    @Volatile
+    var lastSentPercent: Int? = null
+        private set
+
+    /** Time of the last tick attempt of any reason, or of a battery tick claimed before it runs. */
+    @Volatile
+    var lastAttemptAtMs = 0L
+        private set
+
+    /** Time of the last tick that reached a watch. */
+    @Volatile
+    var lastDeliveredAtMs = 0L
+        private set
+
+    /** The last attempt found no watch (or the companion off): battery ticks wait for a watch. */
+    @Volatile
+    var watchMissing = false
+        private set
+
+    fun attempted(nowMs: Long) {
+        lastAttemptAtMs = nowMs
+    }
+
+    fun noWatch() {
+        watchMissing = true
+    }
+
+    /** A watch answered the lookup, whether or not the message then reached it. */
+    fun watchFound() {
+        watchMissing = false
+    }
+
+    /** Our watch app's capability appeared (CAPABILITY_CHANGED). */
+    fun watchAppeared() {
+        watchMissing = false
+    }
+
+    fun delivered(nowMs: Long, percent: Int?) {
+        lastDeliveredAtMs = nowMs
+        lastSentPercent = percent
+        watchMissing = false
+    }
+
+    /**
+     * A battery extra tick is due: a watch was there at the last attempt and [WatchTicker.shouldSendForBattery] (the
+     * gap counts from any attempt, so a tick claimed and not yet run holds the next broadcasts back).
+     */
+    fun batteryTickDue(percent: Int, nowMs: Long): Boolean =
+        !watchMissing && WatchTicker.shouldSendForBattery(percent, lastSentPercent, nowMs, lastAttemptAtMs)
+
+    /** The "watch appeared" tick is due: none reached a watch within [WatchTicker.MIN_EXTRA_GAP_MS] - failed attempts do not count. */
+    fun watchTickDue(nowMs: Long): Boolean = WatchTicker.gapPassed(nowMs, lastDeliveredAtMs)
 }

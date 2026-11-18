@@ -61,7 +61,14 @@ class OngoingAlertTest {
                 calls += "notification"
                 OngoingAlertTest.presented = -1
             }
-            @JvmStatic @Implementation fun resolveAlertKind(fallback: Int) = fallback
+            /** Upstream's private kind of the sound on (their playringhier sets it with the native flag); -1 = none. */
+            var lastAlarm = -1
+            /** As the real one without a repeat session: the kind of the sound on, else the presented one. */
+            @JvmStatic @Implementation fun resolveAlertKind(fallback: Int) = when {
+                lastAlarm >= 0 -> lastAlarm
+                OngoingAlertTest.presented >= 0 -> OngoingAlertTest.presented
+                else -> fallback
+            }
         }
     }
 
@@ -92,6 +99,12 @@ class OngoingAlertTest {
             presented = type.id
         }
 
+        /** An alarm sound of [kind] is on: upstream sets the native flag and its kind together. */
+        fun soundOf(kind: Int) {
+            NativeSink.soundOn = true
+            AlarmSink.lastAlarm = kind
+        }
+
         /**
          * Upstream's alert state as a fresh install, before and after each test. SnoozeManager keeps the preferences
          * of the first test application it saw (`by lazy`), so clearing the current application's file is not
@@ -107,6 +120,7 @@ class OngoingAlertTest {
                 AlertStateTracker.consumeManualTestAction(it)
             }
             AlarmSink.calls.clear()
+            AlarmSink.lastAlarm = -1
             NativeSink.soundOn = false
             presented = -1
             Log.doLog = false
@@ -185,13 +199,43 @@ class OngoingAlertTest {
         alarmScreenOpenFor(AlertType.VERY_LOW.id)
         alertGoingOn(AlertType.VERY_LOW)
         AlertStateTracker.resetState(AlertType.VERY_LOW)
-        NativeSink.soundOn = true
+        soundOf(AlertType.VERY_LOW.id)
         assertFalse(AlertStateTracker.isEpisodeActive(AlertType.VERY_LOW))
         assertEquals(AlertType.VERY_LOW.id, OngoingAlert.find())
         assertEquals(AlertType.VERY_LOW.id, OngoingAlert.snoozeOngoing())
         assertTrue(SnoozeManager.isSnoozed(AlertType.VERY_LOW))
         assertTrue(AlarmSink.calls.contains("stop"))
         assertEquals(listOf(AlertType.VERY_LOW.id), acknowledged)
+    }
+
+    @Test
+    fun presentedWithoutAnyEpisodeFindsNothingEvenWithASoundOn() {
+        // a night LOW nobody touched left its mark; in the morning the "amount not entered" reminder rings
+        alarmScreenOpenFor(AlertType.LOW.id)
+        alertGoingOn(AlertType.LOW)
+        AlertStateTracker.resetState(AlertType.LOW)
+        soundOf(AlertType.AMOUNT.id)
+        assertNull(OngoingAlert.find())
+        assertNull(OngoingAlert.snoozeOngoing())
+        assertNothingSnoozedOrCalled()
+    }
+
+    @Test
+    fun anotherStandardKindsSoundDoesNotSnoozeAStaleMark() {
+        // e.g. the HIGH melody tried in the settings while a stale LOW mark is up
+        alertGoingOn(AlertType.LOW)
+        AlertStateTracker.resetState(AlertType.LOW)
+        soundOf(AlertType.HIGH.id)
+        assertNull(OngoingAlert.find())
+        assertNull(OngoingAlert.snoozeOngoing())
+        assertNothingSnoozedOrCalled()
+    }
+
+    @Test
+    fun aLiveEpisodeIsGoingOnWhateverSoundPlays() {
+        alertGoingOn(AlertType.HIGH)
+        soundOf(AlertType.AMOUNT.id)
+        assertEquals(AlertType.HIGH.id, OngoingAlert.find())
     }
 
     @Test
@@ -209,7 +253,7 @@ class OngoingAlertTest {
         presented = AlertType.LOSS.id
         assertFalse(AlertStateTracker.isEpisodeActive(AlertType.LOSS))
         assertNull(OngoingAlert.find())
-        NativeSink.soundOn = true
+        soundOf(AlertType.LOSS.id)
         assertEquals(AlertType.LOSS.id, OngoingAlert.find())
         assertEquals(AlertType.LOSS.id, OngoingAlert.snoozeOngoing())
         assertTrue(SnoozeManager.isSnoozed(AlertType.LOSS))
@@ -221,7 +265,7 @@ class OngoingAlertTest {
         assertTrue(AlertStateTracker.shouldTrigger(AlertType.LOW, AlertRepository.loadConfig(AlertType.LOW)))
         assertTrue(AlertStateTracker.isManualTestActive(AlertType.LOW))
         presented = AlertType.LOW.id
-        NativeSink.soundOn = true
+        soundOf(AlertType.LOW.id)
         assertNull(OngoingAlert.find())
     }
 

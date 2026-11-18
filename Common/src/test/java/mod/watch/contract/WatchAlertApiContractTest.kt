@@ -129,10 +129,44 @@ class WatchAlertApiContractTest {
 
     @Test
     fun theNativeSoundFlagIsAStaticBoolean() {
-        // LOSS has no episode; OngoingAlert reads "its sound is on" from here
+        // LOSS has no episode and a sound may outlive one; OngoingAlert reads "a sound is on" from here
         val m = Natives::class.java.getMethod("getisalarm")
         assertTrue(Modifier.isStatic(m.modifiers))
         assertEquals(java.lang.Boolean.TYPE, m.returnType)
+    }
+
+    @Test
+    fun resolveAlertKindIsTheSoundingKindBeforeThePresentedOne() {
+        // OngoingAlert tells "this kind's own sound is on" from here (the amount reminder sounds as AMOUNT and leaves
+        // the presented mark alone). Their private fields; renamed - read Notify.resolveAlertKind and playringhier
+        // (it sets the kind together with the native flag, runstopalarm clears both) again and fix these lines.
+        val m = Notify::class.java.getMethod("resolveAlertKind", Int::class.javaPrimitiveType)
+        assertTrue(Modifier.isStatic(m.modifiers))
+        assertEquals(Int::class.javaPrimitiveType, m.returnType)
+        fun field(name: String) = Notify::class.java.getDeclaredField(name).apply { isAccessible = true }
+        val lock = field("retrySessionLock")
+        val session = field("activeRetrySession")
+        val sounding = field("lastalarm")
+        val presented = field("presentedStandardAlertKind")
+        assertEquals(Int::class.javaPrimitiveType, sounding.type)
+        assertTrue(Modifier.isStatic(sounding.modifiers))
+        try {
+            lock.set(null, Any()) // their static setup is skipped here, and with it the lock
+            session.set(null, null)
+            sounding.setInt(null, -1)
+            presented.setInt(null, -1)
+            assertEquals(-1, Notify.resolveAlertKind(-1))
+            assertEquals(AlertType.HIGH.id, Notify.resolveAlertKind(AlertType.HIGH.id))
+            presented.setInt(null, AlertType.LOW.id)
+            assertEquals(AlertType.LOW.id, Notify.resolveAlertKind(-1))
+            sounding.setInt(null, AlertType.AMOUNT.id)
+            assertEquals(AlertType.AMOUNT.id, Notify.resolveAlertKind(-1))
+            sounding.setInt(null, AlertType.LOW.id)
+            assertEquals(AlertType.LOW.id, Notify.resolveAlertKind(-1))
+        } finally {
+            sounding.setInt(null, -1)
+            presented.setInt(null, -1)
+        }
     }
 
     @Test
