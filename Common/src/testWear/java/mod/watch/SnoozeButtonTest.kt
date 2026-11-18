@@ -205,7 +205,7 @@ class SnoozeButtonTest {
     // --- the status text: the pure rule ---
 
     private fun status(event: Event, at: Long, lastShown: Long = 0L, lastWatchSnooze: Long = 0L) =
-        SnoozeButton.statusFor(event, at, lastShown, lastWatchSnooze)
+        SnoozeButton.statusFor(event, at, lastShown, lastWatchSnooze) // lastWatchSnooze: the last "Alarm snoozed" shown
 
     @Test
     fun statusTheWatchsOwnSnoozeAlwaysShowsAndNoAlertOnTheWatchShowsNothing() {
@@ -229,7 +229,18 @@ class SnoozeButtonTest {
         assertNull(status(Event.PHONE_NO_ALERT, 11_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
         // a "no phone" text of the same press does not hide the phone's answer of a later press
         assertEquals(Status.NO_ALARM, status(Event.PHONE_NO_ALERT, 11_000L, lastShown = 10_000L))
-        assertEquals(Status.NO_ALARM, status(Event.PHONE_NO_ALERT, 15_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
+        assertNull(status(Event.PHONE_NO_ALERT, 34_999L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
+        assertEquals(Status.NO_ALARM, status(Event.PHONE_NO_ALERT, 35_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
+    }
+
+    @Test
+    fun statusNoContradictionAfterAnAlarmSnoozedEvenWhenThePhoneIsSlowOrThePressIsDouble() {
+        // critic of part 6, C6-1: the phone's answer may come 10-20 s after the press that snoozed the watch
+        assertNull(status(Event.PHONE_NO_ALERT, 22_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
+        assertNull(status(Event.PHONE_UNREACHABLE, 10_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
+        // a double press: the phone's "snoozed" answer of the first one was shown, the second one gets "no alert"
+        assertNull(status(Event.PHONE_NO_ALERT, 11_500L, lastShown = 10_500L, lastWatchSnooze = 10_500L))
+        assertEquals(SnoozeButton.TEXT_QUIET_MS, 25_000L)
     }
 
     @Test
@@ -243,7 +254,7 @@ class SnoozeButtonTest {
         assertEquals(Status.PHONE_NOT_CONNECTED, status(Event.PHONE_UNREACHABLE, 10_000L))
         assertNull(status(Event.PHONE_UNREACHABLE, 10_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
         assertEquals(Status.PHONE_NOT_CONNECTED,
-            status(Event.PHONE_UNREACHABLE, 20_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
+            status(Event.PHONE_UNREACHABLE, 35_000L, lastShown = 10_000L, lastWatchSnooze = 10_000L))
     }
 
     // --- the status text: what a press really shows ---
