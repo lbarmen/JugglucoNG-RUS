@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="mod_watch_snooze_label">Отложить тревогу</string>
+    <string name="mod_watch_snooze_done">Тревога отложена</string>
+    <string name="mod_watch_snooze_no_alarm">Тревоги нет</string>
+    <string name="mod_watch_snooze_no_phone">Телефон не на связи</string>
 
     <string-array name="mod_watch_face_days">
         <item>Пн</item>

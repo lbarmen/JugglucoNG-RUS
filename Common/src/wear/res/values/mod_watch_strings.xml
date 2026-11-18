@@ -3,6 +3,10 @@
 <resources>
     <!-- Launcher name of the screenless entry the user puts on a hardware button -->
     <string name="mod_watch_snooze_label">Snooze alarm</string>
+    <!-- Short texts after a press of that button: snoozed on the watch or the phone / no alarm anywhere / no phone reached -->
+    <string name="mod_watch_snooze_done">Alarm snoozed</string>
+    <string name="mod_watch_snooze_no_alarm">No alarm</string>
+    <string name="mod_watch_snooze_no_phone">Phone not connected</string>
 
     <!-- Our watch face (part 3a): the date line "Tue 17 Nov" - weekdays from Monday, months from January -->
     <string-array name="mod_watch_face_days">

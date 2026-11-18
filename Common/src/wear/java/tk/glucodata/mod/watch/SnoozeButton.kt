@@ -3,11 +3,15 @@ package tk.glucodata.mod.watch
 import android.content.Context
 import android.media.AudioAttributes
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.widget.Toast
+import tk.glucodata.R
 
 /**
  * JugglucoNGmod, watch block: what the "Snooze alarm" button does (watch plan, decision 3; user's decision
@@ -18,28 +22,47 @@ import android.os.VibratorManager
  * answers `/mod/snooze/done`. A "snoozed" answer buzzes once, unless the watch buzzed itself within [BUZZ_DEDUP_MS] -
  * so one press is never two buzzes; "no alert" and "late" (the phone did not get to it) are silent. A repeated press
  * is harmless: upstream's action times drop a second acknowledgement. The log never names the alert kind.
+ *
+ * A short text says what happened ([statusFor]; user's request 18.11: a press showed nothing): "Alarm snoozed" when
+ * the watch or the phone snoozed, "No alarm" when neither had one, "Phone not connected" when [WatchPhoneLink] reached
+ * no phone and the watch had nothing to snooze. One press is never two texts, by the same window as the buzz.
  */
 object SnoozeButton {
 
     /** The confirmation buzz, ms. */
     const val BUZZ_MS = 80L
-    /** No buzz for the phone's answer when the watch buzzed itself this recently. */
+    /** No buzz for the phone's answer when the watch buzzed itself this recently; the same window for the texts. */
     const val BUZZ_DEDUP_MS = 5_000L
 
     /** [SystemClock.elapsedRealtime] of the last buzz: a wall clock set back must not change the dedup. */
     @Volatile
     private var lastBuzzElapsedMs = 0L
 
+    /** Both elapsedRealtime, 0 - never; read and written under [statusLock] (main thread, listener, link worker). */
+    private var lastShownElapsedMs = 0L
+    private var lastWatchSnoozeElapsedMs = 0L
+    private val statusLock = Any()
+
+    /** What happened, as far as the text is concerned. */
+    enum class Event { WATCH_SNOOZED, WATCH_NO_ALERT, PHONE_SNOOZED, PHONE_NO_ALERT, PHONE_LATE, PHONE_UNREACHABLE }
+
+    /** The text shown. */
+    enum class Status(val text: Int) {
+        SNOOZED(R.string.mod_watch_snooze_done),
+        NO_ALARM(R.string.mod_watch_snooze_no_alarm),
+        PHONE_NOT_CONNECTED(R.string.mod_watch_snooze_no_phone),
+    }
+
     /**
-     * The press, on the main thread (the button activity's onCreate). [send] gets the application context and the
-     * press time ([pressedAtMs], wall clock) and must not block. Returns the kind snoozed on the watch, `null` when no
-     * alert was going on here.
+     * The press, on the main thread (the button activity's onCreate). [send] gets the application context, the
+     * press time ([pressedAtMs], wall clock) and what to call when no phone was reached; it must not block. Returns
+     * the kind snoozed on the watch, `null` when no alert was going on here.
      */
     fun press(
         context: Context,
         pressedAtMs: Long = System.currentTimeMillis(),
         elapsedMs: Long = SystemClock.elapsedRealtime(),
-        send: (Context, Long) -> Unit = WatchPhoneLink::sendSnooze,
+        send: (Context, Long, () -> Unit) -> Unit = WatchPhoneLink::sendSnooze,
     ): Int? {
         val app = context.applicationContext ?: context
         var kind: Int? = null
@@ -50,13 +73,26 @@ object SnoozeButton {
         } catch (t: Throwable) {
             ModWatchLog.w("button: local snooze failed: ${t.javaClass.simpleName}")
         }
+        show(app, if (kind != null) Event.WATCH_SNOOZED else Event.WATCH_NO_ALERT, elapsedMs, elapsedMs)
         try {
-            send(app, pressedAtMs)
+            send(app, pressedAtMs) { onPhoneUnreachable(app, elapsedMs) }
         } catch (t: Throwable) {
             ModWatchLog.w("button: send failed: ${t.javaClass.simpleName}")
+            onPhoneUnreachable(app, elapsedMs)
         }
         return kind
     }
+
+    /**
+     * [WatchPhoneLink] reached no phone for the press made at [pressElapsedMs] (no reachable node, or every send
+     * failed); any thread. The rule counts from the press: the link may take its whole timeout to find out.
+     * Returns true when a text was shown.
+     */
+    fun onPhoneUnreachable(
+        context: Context,
+        pressElapsedMs: Long,
+        elapsedMs: Long = SystemClock.elapsedRealtime(),
+    ): Boolean = show(context, Event.PHONE_UNREACHABLE, pressElapsedMs, elapsedMs)
 
     /** The phone's `/mod/snooze/done`. Returns true when it buzzed. */
     fun onPhoneAnswer(
@@ -66,13 +102,16 @@ object SnoozeButton {
     ): Boolean {
         if (done.late) {
             ModWatchLog.i("phone: late")
+            show(context, Event.PHONE_LATE, elapsedMs, elapsedMs)
             return false
         }
         if (done.snoozedKind == null) {
             ModWatchLog.i("phone: no alert")
+            show(context, Event.PHONE_NO_ALERT, elapsedMs, elapsedMs)
             return false
         }
         ModWatchLog.i("phone: snoozed")
+        show(context, Event.PHONE_SNOOZED, elapsedMs, elapsedMs)
         if (!shouldBuzzForPhone(elapsedMs, lastBuzzElapsedMs)) return false
         buzz(context, elapsedMs, Buzz.PHONE_ANSWER)
         return true
@@ -82,8 +121,58 @@ object SnoozeButton {
     fun shouldBuzzForPhone(elapsedMs: Long, lastBuzzElapsedMs: Long): Boolean =
         lastBuzzElapsedMs <= 0L || elapsedMs < lastBuzzElapsedMs || elapsedMs - lastBuzzElapsedMs >= BUZZ_DEDUP_MS
 
+    /**
+     * The text for [event] at [elapsedMs], `null` - none. [lastShownElapsedMs] - the last text shown,
+     * [lastWatchSnoozeElapsedMs] - the last press that snoozed the watch's own alert (all elapsedRealtime, 0 - never).
+     * The watch's own snooze always shows; the phone's "snoozed" only when no text was shown within [BUZZ_DEDUP_MS]
+     * (the buzz rule); the phone's "no alert" and "no phone" not when the watch has just snoozed its own alert - that
+     * press is done, and one press is one text; "late" never (the phone did not get to it: the log says so).
+     */
+    fun statusFor(event: Event, elapsedMs: Long, lastShownElapsedMs: Long, lastWatchSnoozeElapsedMs: Long): Status? =
+        when (event) {
+            Event.WATCH_SNOOZED -> Status.SNOOZED
+            Event.WATCH_NO_ALERT, Event.PHONE_LATE -> null
+            Event.PHONE_SNOOZED -> if (within(elapsedMs, lastShownElapsedMs)) null else Status.SNOOZED
+            Event.PHONE_NO_ALERT -> if (within(elapsedMs, lastWatchSnoozeElapsedMs)) null else Status.NO_ALARM
+            Event.PHONE_UNREACHABLE ->
+                if (within(elapsedMs, lastWatchSnoozeElapsedMs)) null else Status.PHONE_NOT_CONNECTED
+        }
+
+    /** [sinceMs] is within [BUZZ_DEDUP_MS] before [elapsedMs] (never, or a restarted clock - not within). */
+    private fun within(elapsedMs: Long, sinceMs: Long): Boolean = !shouldBuzzForPhone(elapsedMs, sinceMs)
+
+    /**
+     * Decides and records under one lock, then posts the text to the main thread. [eventElapsedMs] - the time the
+     * rule counts from, [nowElapsedMs] - the time recorded as shown. Returns true when a text was posted.
+     */
+    private fun show(context: Context, event: Event, eventElapsedMs: Long, nowElapsedMs: Long): Boolean {
+        val status = synchronized(statusLock) {
+            if (event == Event.WATCH_SNOOZED) lastWatchSnoozeElapsedMs = eventElapsedMs
+            val decided = statusFor(event, eventElapsedMs, lastShownElapsedMs, lastWatchSnoozeElapsedMs)
+            if (decided != null) lastShownElapsedMs = nowElapsedMs
+            decided
+        } ?: return false
+        try {
+            Handler(Looper.getMainLooper()).post {
+                try {
+                    Toast.makeText(context, status.text, Toast.LENGTH_SHORT).show()
+                } catch (t: Throwable) {
+                    ModWatchLog.w("status text failed: ${t.javaClass.simpleName}")
+                }
+            }
+        } catch (t: Throwable) {
+            ModWatchLog.w("status text failed: ${t.javaClass.simpleName}")
+            return false
+        }
+        return true
+    }
+
     internal fun resetForTest() {
         lastBuzzElapsedMs = 0L
+        synchronized(statusLock) {
+            lastShownElapsedMs = 0L
+            lastWatchSnoozeElapsedMs = 0L
+        }
     }
 
     /**
