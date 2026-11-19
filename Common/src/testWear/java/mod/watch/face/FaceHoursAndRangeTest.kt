@@ -135,11 +135,12 @@ class FaceHoursAndRangeTest {
     }
 
     @Test
-    fun theDimModeKeepsTheLinesFainterAndDropsTheLabels() {
+    fun theDimModeKeepsTheLinesAndTheLabelsFainter() {
         val normal = FaceStyle.of(ambient = false)
         val dim = FaceStyle.of(ambient = true)
+        // part 7l, the owner glances at the dim mode all day: the labels there too, dimmed
         assertNotNull(normal.hourLabel)
-        assertNull(dim.hourLabel)
+        assertTrue((dim.hourLabel!! and 0xFF) < (normal.hourLabel!! and 0xFF))
         assertTrue((dim.hourLine and 0xFF) < (normal.hourLine and 0xFF))
         assertTrue(dim.hourLineWidth < normal.hourLineWidth)
         // fainter than the target lines, so the range stays the main thing

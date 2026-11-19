@@ -146,23 +146,6 @@ class FaceModelTest {
         assertTrue(model.ageAlarm)
     }
 
-    // ------------------------------------------------------------------ part 7a
-
-    private val yellow = 0xFFFFD54F.toInt()
-
-    @Test
-    fun theArrowAndTheChangeHaveTheForecastColourWhileTheReadingIsYoung() {
-        val heading = snapshot(2).copy(current = FaceReading(now - 2 * minute, 9.6f, "9.6", 2f, color, arrowColor = yellow))
-        val model = FaceModel.build(heading, zone, labels)
-        assertEquals(color, model.valueColor)
-        assertEquals(yellow, model.arrowColor)
-        // upstream's projection stops after 5 minutes: then the value's colour
-        val old = heading.copy(current = heading.current!!.copy(timeMs = now - 6 * minute))
-        assertEquals(color, FaceModel.build(old, zone, labels).arrowColor)
-        // no value, no colour
-        assertNull(FaceModel.build(snapshot(21), zone, labels).arrowColor)
-    }
-
     @Test
     fun aBatteryOutside0To100IsUnknown() {
         val model = FaceModel.build(snapshot(2, phone = 101, watch = -1), zone, labels)

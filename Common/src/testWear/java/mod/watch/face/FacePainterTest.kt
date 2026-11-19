@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Typeface
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import java.time.LocalDateTime
@@ -37,8 +38,8 @@ import tk.glucodata.mod.watch.face.ModFaceSource
  * with real pixels (Robolectric native graphics) and the real colours (upstream's traffic light through
  * [ModFaceSource], their default limits 3.9 / 10.0, very low 3.0, very high 13.9 mmol/L). Black around, something in
  * every row, the whole picture inside the circle, the date and batteries at the bottom, the forecast only when there
- * is one and not in the dim mode, batteries yellow and red, the dim number moved a step a minute. Made-up values,
- * Russian labels as on the watch.
+ * is one (in the dim mode too, dimmed, part 7l), the arrow and the change in the number's colour (part 7l), batteries
+ * yellow and red, the dim number moved a step a minute. Made-up values, Russian labels as on the watch.
  *
  * With MOD_FACE_PREVIEW_DIR set, every scenario is also saved there as PNG: round mask and, where Wear OS draws the
  * icon of upstream's ongoing activity, the faint dot our watch build makes of it (part 7c) - to look at before
@@ -88,7 +89,7 @@ class FacePainterTest {
         val last = history.last()
         val color = ModFaceSource.trafficColor(last.value, true)
         val current = FaceReading(last.timeMs, last.value, String.format(Locale.forLanguageTag("ru-RU"), "%.1f", last.value),
-            rate, color, arrowColor = ModFaceSource.arrowColor(last.value, rate, true, color))
+            rate, color)
         val ahead = forecast?.let { f -> (5..120 step 5).map { FacePoint(now + it * minute, f(it)) } }.orEmpty()
         return FaceSnapshot(now, true, true, hours, current, history, history, 3.9f, 10f, phone, watch, ahead)
     }
@@ -192,6 +193,24 @@ class FacePainterTest {
 
     private val forecastColor = FaceStyle.of(false).forecast!!
 
+    /**
+     * The left edge of the arrow in the value row (the change and the age follow it), placed as [FacePainter] places
+     * the row: right of it only the arrow, the change and the age, none of the number.
+     */
+    private fun arrowX(snapshot: FaceSnapshot, layout: FaceLayout.Layout, bold: Boolean): Int {
+        val model = FaceModel.build(snapshot, zone, labels())
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+        paint.textSize = layout.value.textSize
+        val valueWidth = paint.measureText(model.valueText)
+        paint.typeface = Typeface.DEFAULT
+        paint.textSize = layout.sideTextSize
+        val sideWidth = maxOf(model.deltaText?.let { paint.measureText(it) } ?: 0f,
+            model.ageText?.let { paint.measureText(it) } ?: 0f)
+        return FaceLayout.placeValueRow(layout.value, valueWidth, layout.arrowSize, sideWidth, layout.radius * 0.04f)
+            .arrowX.toInt()
+    }
+
     // ------------------------------------------------------------------ tests
 
     @Test
@@ -206,7 +225,7 @@ class FacePainterTest {
         }
         assertEquals(0, lit(bitmap, layout.mark))
         assertEquals(0, litOutside(bitmap, 0.01f * size))
-        // in range: the number and the dots green, the arrow too (heading nowhere out of the range)
+        // in range: the number, the arrow and the dots green
         assertTrue(count(bitmap, layout.value, green) > 200)
         assertTrue(count(bitmap, layout.graph, green) > 50)
         // the face list's preview, as before part 7a
@@ -214,12 +233,14 @@ class FacePainterTest {
     }
 
     @Test
-    fun highWithTheForecastDownTheValueYellowTheArrowRed() {
+    fun highWithTheForecastDownTheValueTheArrowAndTheChangeYellow() {
         val layout = FaceLayout.compute(size, size)
         val bitmap = paint(highForecastDown(), ambient = false, name = "7e_high_forecast_down")
         assertTrue(count(bitmap, layout.value, yellow) > 200)
-        // 11.8 rising 1.6 mg/dL/min: past very high (13.9) in 30 minutes - upstream's "out" arrow
-        assertTrue(count(bitmap, layout.value, red) > 20)
+        // 11.8 rising 1.6 mg/dL/min would pass very high (13.9) in 30 minutes, yet the arrow and the change keep the
+        // number's yellow: they change colour only with the number (part 7l, the owner)
+        assertEquals(0, count(bitmap, layout.value, red))
+        assertTrue(count(bitmap, layout.value, yellow, arrowX(highForecastDown(), layout, bold = true)) > 20)
         // the forecast dashed in the right fifth of the graph, only there
         val rightFifth = (layout.graph.left + 0.79f * layout.graph.width).toInt()
         assertTrue(count(bitmap, layout.graph, forecastColor, rightFifth) > 10)
@@ -266,7 +287,7 @@ class FacePainterTest {
     }
 
     @Test
-    fun theDimModeHasNoForecastNoLabelsNoNormalBatteriesARegularNumberAndLightsFewerPixels() {
+    fun theDimModeShowsEverythingDimmedWithARegularNumberAndLightsFewerPixels() {
         val layout = FaceLayout.compute(size, size)
         val normal = paint(highForecastDown(), ambient = false)
         val ambient = paint(highForecastDown(), ambient = true, name = "7e_ambient")
@@ -274,9 +295,23 @@ class FacePainterTest {
         // the number regular, not bold: fewer of its pixels lit (part 7c, critic 7, S2)
         assertTrue(lit(ambient, layout.value) < lit(normal, layout.value) * 0.9f)
         assertEquals(FaceStyle.BLACK, ambient.getPixel(1, 1))
+        // part 7l, the owner: the forecast in the dim mode too, dimmed as the rest, in the right fifth only
+        val dimForecast = FaceStyle.of(true).forecast!!
+        val rightFifth = (layout.graph.left + 0.79f * layout.graph.width).toInt()
         assertEquals(0, count(ambient, layout.graph, forecastColor))
-        assertEquals(0, count(ambient, layout.graph, FaceStyle.dim(forecastColor, FaceStyle.AMBIENT_DIM)))
-        assertEquals(0, lit(ambient, layout.hours))
+        assertTrue(count(ambient, layout.graph, dimForecast, rightFifth) > 10)
+        assertEquals(count(ambient, layout.graph, dimForecast, rightFifth), count(ambient, layout.graph, dimForecast))
+        // the arrow and the change in the number's yellow, dimmed by AMBIENT_ARROW_DIM; nothing red (part 7l)
+        val dimYellow = FaceStyle.dim(yellow, FaceStyle.AMBIENT_ARROW_DIM)
+        assertTrue(count(ambient, layout.value, dimYellow, arrowX(highForecastDown(), layout, bold = false)) > 20)
+        assertEquals(0, count(ambient, layout.value, FaceStyle.dim(red, FaceStyle.AMBIENT_ARROW_DIM)))
+        // part 7l: the hour labels under the graph and the range labels at its left end, dimmed
+        val dim = FaceStyle.of(true)
+        assertEquals(0, count(ambient, layout.hours, FaceStyle.of(false).hourLabel!!))
+        assertTrue(count(ambient, layout.hours, dim.hourLabel!!) > 10)
+        val box = FaceLayout.Row(layout.graph.left, layout.graph.top, layout.graph.left + 0.12f * size,
+            layout.graph.bottom, 0f)
+        assertTrue(count(ambient, box, dim.secondary, box.left.toInt(), box.right.toInt()) > 10)
         // the date stays at the bottom
         assertTrue(lit(ambient, layout.status) > 20)
     }
