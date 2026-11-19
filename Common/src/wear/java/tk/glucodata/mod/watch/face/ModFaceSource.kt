@@ -11,7 +11,6 @@ import tk.glucodata.GlucoseValueTone
 import tk.glucodata.LiveReadingLanes
 import tk.glucodata.Natives
 import tk.glucodata.NotificationHistorySource
-import tk.glucodata.TrendProjection
 import tk.glucodata.glucosecomplication.ComplicationRenderer
 import tk.glucodata.mod.watch.ModBattery
 import tk.glucodata.mod.watch.PhoneBatteryStore
@@ -29,21 +28,18 @@ import tk.glucodata.ui.WearSensorSelection
  * - the change: the uncalibrated lane value of that reading against history ([FaceReading.deltaValue]);
  * - history: `NotificationHistorySource.getDisplayHistory` for our window (their sparkline is fixed at 90 minutes),
  *   on the lane of the sensor's view mode, smoothed for the graph as their sparkline is;
- * - sensor `WearSensorSelection.resolve()`, units `ComplicationRenderer.isMmol()`, colour [trafficColor] and
- *   [arrowColor] (as the app, part 7a), range `Natives.targetlow/targethigh` with `GlucoseRangeColors` defaults
- *   (as `ComplicationRenderer.drawSparkline`), clock mode `Applic.hour24` (as `WatchRenderer.watchtime`);
+ * - sensor `WearSensorSelection.resolve()`, units `ComplicationRenderer.isMmol()`, colour [trafficColor] (as the
+ *   app, part 7a; the arrow and the change take it too, part 7l), range `Natives.targetlow/targethigh` with
+ *   `GlucoseRangeColors` defaults (as `ComplicationRenderer.drawSparkline`), clock mode `Applic.hour24` (as `WatchRenderer.watchtime`);
  * - batteries: [PhoneBatteryStore] (from `/mod/tick`) and [ModBattery] (this watch);
  * - forecast: upstream's `WearPrediction.forecast` of the lane, only with their "Prediction" setting on (as their
- *   chart screen on the watch, `ChartScreen`), and not for the dim mode, which never draws it (part 7c).
+ *   chart screen on the watch, `ChartScreen`); the dim mode draws it as well (part 7l).
  *
  * Every upstream call is guarded: a failure there leaves that part empty, never the face crashed.
  */
 internal object ModFaceSource : FaceSource {
 
-    override fun snapshot(context: Context, nowMs: Long, graphHours: Int): FaceSnapshot =
-        snapshot(context, nowMs, graphHours, withForecast = true)
-
-    override fun snapshot(context: Context, nowMs: Long, graphHours: Int, withForecast: Boolean): FaceSnapshot {
+    override fun snapshot(context: Context, nowMs: Long, graphHours: Int): FaceSnapshot {
         val hours = FaceGraph.sanitizeHours(graphHours)
         val isMmol = ComplicationRenderer.isMmol()
         val sensor = guard { WearSensorSelection.resolve() }
@@ -55,7 +51,7 @@ internal object ModFaceSource : FaceSource {
         val history = lane.map { FacePoint(it.timestamp, it.value) }
         val graph = smoothed(context, lane, nowMs).map { FacePoint(it.timestamp, it.value) }
         // the lane's own value is in `value`, so upstream projects the lane the user looks at
-        val forecast = if (withForecast && guard { WearPrediction.isEnabled() } == true) {
+        val forecast = if (guard { WearPrediction.isEnabled() } == true) {
             guard { WearPrediction.forecast(lane, isMmol) }.orEmpty()
                 .filter { FaceValues.usable(it.value) }
                 .map { FacePoint(it.timestamp, it.value) }
@@ -96,8 +92,7 @@ internal object ModFaceSource : FaceSource {
         val shown = live ?: synced(sensor, nowMs, newest?.let { points[it] }) ?: return null
         val color = guard { trafficColor(shown.primaryValue, isMmol, limits) } ?: NEUTRAL
         return FaceReading(shown.timeMillis, shown.primaryValue, shown.primaryStr, shown.rate, color,
-            deltaValue = FaceValues.laneValue(shown.autoValue, shown.rawValue, shown.viewMode),
-            arrowColor = guard { arrowColor(shown.primaryValue, shown.rate, isMmol, color, limits) } ?: color)
+            deltaValue = FaceValues.laneValue(shown.autoValue, shown.rawValue, shown.viewMode))
     }
 
     /** Index of the newest usable point of the [lane]. */
@@ -176,28 +171,6 @@ internal object ModFaceSource : FaceSource {
             enabled = true,
         )
     }
-
-    /**
-     * The arrow's colour as the app's hero arrow (`DashboardComponents`, forecast colours): upstream's
-     * `TrendProjection.classify` of [value] moving at [rateMgdlPerMin] for 30 minutes - beyond very low / very high
-     * their "out" colour, out of the range their "borderline" colour, else [valueColor]. The age gate is
-     * [FaceModel]'s (it knows the time of the frame).
-     */
-    fun arrowColor(value: Float, rateMgdlPerMin: Float, isMmol: Boolean, valueColor: Int): Int =
-        arrowColor(value, rateMgdlPerMin, isMmol, valueColor, limits(isMmol))
-
-    private fun arrowColor(value: Float, rateMgdlPerMin: Float, isMmol: Boolean, valueColor: Int, l: Limits): Int {
-        val k = if (isMmol) MGDL_PER_MMOL else 1f
-        return when (TrendProjection.classify(value * k, rateMgdlPerMin, TrendProjection.DEFAULT_HORIZON_MINUTES,
-            l.low * k, l.high * k, l.veryLow * k, l.veryHigh * k)) {
-            TrendProjection.OUT -> GlucoseRangeColors.valueOut(true)
-            TrendProjection.BORDERLINE -> GlucoseRangeColors.valueBorderline(true)
-            else -> valueColor
-        }
-    }
-
-    /** Upstream's conversion (`WearPrediction`). */
-    private const val MGDL_PER_MMOL = 18.0182f
 
     /** Upstream's neutral value tone on a dark face (their renderer's fallback). */
     private const val NEUTRAL = 0xFFE3E2DE.toInt()

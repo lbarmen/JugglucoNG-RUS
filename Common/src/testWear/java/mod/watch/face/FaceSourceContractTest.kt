@@ -25,7 +25,6 @@ import tk.glucodata.GlucosePoint
 import tk.glucodata.Natives
 import tk.glucodata.Notify
 import tk.glucodata.NotificationHistorySource
-import tk.glucodata.TrendProjection
 import tk.glucodata.ui.WearPrediction
 import tk.glucodata.mod.watch.face.FaceLabels
 import tk.glucodata.mod.watch.face.FaceModel
@@ -185,20 +184,11 @@ class FaceSourceContractTest {
         // the change: upstream's 5-minute "Δ" and its walk-back gap
         assertEquals(5, GlucoseDelta.DEFAULT_INTERVAL_MINUTES)
         assertEquals(270_000L, GlucoseDelta.minGapMillis(FaceValues.DELTA_INTERVAL_MINUTES))
-        // part 7a: the watch forecast (their chart's call), the arrow's 30-minute projection and its age gate
+        // part 7a: the watch forecast (their chart's call); the arrow's 30-minute projection is gone (part 7l)
         val forecast = WearPrediction::class.java.getMethod("forecast", List::class.java,
             Boolean::class.javaPrimitiveType, Boolean::class.javaPrimitiveType)
         assertEquals(List::class.java, forecast.returnType)
         assertEquals(Boolean::class.javaPrimitiveType, WearPrediction::class.java.getMethod("isEnabled").returnType)
-        val f = Float::class.javaPrimitiveType
-        val classify = TrendProjection::class.java.getMethod("classify", f, f, Int::class.javaPrimitiveType, f, f, f, f)
-        assertTrue(Modifier.isStatic(classify.modifiers))
-        assertEquals(30, TrendProjection.DEFAULT_HORIZON_MINUTES)
-        assertEquals(5 * 60_000L, TrendProjection.MAX_DATA_AGE_MILLIS)
-        // a rise of 2 mg/dL/min from 9.6 mmol/L (173 mg/dL) leaves the range of 70..180 in 30 minutes
-        assertEquals(TrendProjection.BORDERLINE, TrendProjection.classify(173f, 2f, 30, 70f, 180f, 54f, 250f))
-        assertEquals(TrendProjection.OUT, TrendProjection.classify(173f, 3f, 30, 70f, 180f, 54f, 250f))
-        assertEquals(TrendProjection.NONE, TrendProjection.classify(120f, 0f, 30, 70f, 180f, 54f, 250f))
     }
 
     companion object {

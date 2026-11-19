@@ -20,25 +20,38 @@ import tk.glucodata.OngoingNotificationAccess
  * face still opens their app.
  *
  * Timing, without a hook: our process-start provider ([tk.glucodata.mod.health.hs.ModHealthStarter]) runs before
- * `Applic.onCreate`, so it posts [claim] to the main thread - it runs after their registration and, on a normal start,
- * before their service is created. A service the system restarts by itself is created before that post and keeps their
- * ongoing activity until the next start of the process; [claim] again on each phone tick keeps the slot ours.
+ * `Applic.onCreate`, so it puts [claim] at the front of the main thread's queue - it runs right after the application
+ * is bound (their registration done) and before any service creation already queued, also when the system starts the
+ * process for their restarted service (critic 7l-7m, M1). [claim] again on each phone tick keeps the slot ours.
+ * Should theirs still be attached (a start this order did not cover), [updateStatus] goes on to it, so its value does
+ * not freeze; with nothing attached their update finds no ongoing activity and does nothing.
  */
 object NoOngoingActivity : OngoingNotification {
+
+    /** Upstream's, as it was in the slot when ours took it; only for [updateStatus]. */
+    @Volatile
+    private var displaced: OngoingNotification? = null
 
     /** The notification as upstream gives it, ongoing, with no ongoing activity attached. */
     override fun attach(context: Context, notification: Notification, notificationId: Int): Notification =
         notification.also { it.flags = it.flags or Notification.FLAG_ONGOING_EVENT }
 
-    /** No ongoing activity, no status to update. */
-    override fun updateStatus(context: Context?, notificationId: Int) {}
+    /** Their status update, should their ongoing activity still be attached (it does nothing otherwise). */
+    override fun updateStatus(context: Context?, notificationId: Int) {
+        try {
+            displaced?.updateStatus(context, notificationId)
+        } catch (_: Throwable) {
+        }
+    }
 
     /** Puts ours in upstream's slot unless it is there; true when it replaced another. Never throws. */
     fun claim(): Boolean = try {
-        if (OngoingNotificationAccess.get() === this) {
+        val current = OngoingNotificationAccess.get()
+        if (current === this) {
             false
         } else {
-            val had = OngoingNotificationAccess.isRegistered()
+            val had = current != null
+            if (current != null) displaced = current
             OngoingNotificationAccess.register(this)
             ModWatchLog.i("ongoing activity: none (${if (had) "replaced upstream's" else "slot was empty"})")
             true
@@ -48,10 +61,13 @@ object NoOngoingActivity : OngoingNotification {
         false
     }
 
-    /** [claim] on the main thread after the current message (from a provider: after `Application.onCreate`). */
+    /**
+     * [claim] on the main thread as the next message, ahead of any queued one (from a provider: right after
+     * `Application.onCreate`, before a service creation the system queued with the process start).
+     */
     fun claimAfterStart() {
         try {
-            Handler(Looper.getMainLooper()).post { claim() }
+            Handler(Looper.getMainLooper()).postAtFrontOfQueue { claim() }
         } catch (t: Throwable) {
             ModWatchLog.w("ongoing activity claim not posted: ${t.javaClass.simpleName}")
         }

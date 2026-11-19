@@ -1,7 +1,6 @@
 package tk.glucodata.mod.watch.face
 
 import java.time.ZoneId
-import tk.glucodata.TrendProjection
 
 /**
  * JugglucoNGmod, watch block (part 3a): what the face draws, made from a [FaceSnapshot] by pure rules - the renderer
@@ -32,11 +31,6 @@ data class FaceModel(
     val watchBattery: Int?,
     /** The full hours of local time in the graph's window, for its thin hour lines (part 3c2). */
     val hourMarks: List<FaceGraph.HourMark> = emptyList(),
-    /**
-     * The arrow's and the change's colour ([FaceReading.arrowColor]) while the reading is young enough for upstream's
-     * 30-minute projection (`TrendProjection.MAX_DATA_AGE_MILLIS`), else [valueColor]; `null` without a value.
-     */
-    val arrowColor: Int? = valueColor,
 ) {
     /** The graph has a forecast to draw. */
     val hasForecast: Boolean get() = graph.forecast.isNotEmpty()
@@ -59,9 +53,6 @@ data class FaceModel(
             val forecast = if (hasValue && age != null && !FaceValues.isAgeAlarm(age)) snapshot.forecast else emptyList()
             val graph = FaceGraph.plot(snapshot.graphPoints, now, snapshot.graphHours, snapshot.low, snapshot.high,
                 snapshot.isMmol, forecast)
-            val arrowColor = shown?.let {
-                if (now - it.timeMs <= TrendProjection.MAX_DATA_AGE_MILLIS) it.arrowColor else it.color
-            }
             return FaceModel(
                 clock = FaceText.clock(now, zone, snapshot.hour24),
                 dateText = FaceText.dayAndMonth(now, zone, labels),
@@ -77,7 +68,6 @@ data class FaceModel(
                 phoneBattery = snapshot.phoneBatteryPercent?.takeIf { it in 0..100 },
                 watchBattery = snapshot.watchBatteryPercent?.takeIf { it in 0..100 },
                 hourMarks = FaceGraph.hourMarks(graph.fromMs, graph.toMs, zone, snapshot.hour24),
-                arrowColor = arrowColor,
             )
         }
     }

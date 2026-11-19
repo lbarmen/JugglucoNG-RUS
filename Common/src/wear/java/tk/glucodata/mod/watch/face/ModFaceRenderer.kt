@@ -40,10 +40,10 @@ import tk.glucodata.mod.watch.ModWatchLog
  * moving on, so the dim mode keeps one frame a minute. Our failure never takes the watch face process down: every
  * step is guarded and the coroutines have a handler that swallows what escapes.
  *
- * The dim mode (part 7c, critic 7, S2 and N8): no forecast is read for it, a kept snapshot there is read again only
- * after [AMBIENT_STALE_MS] (new readings still come through [request]), the picture moves one step a minute
- * ([FaceLayout.burnInOffset]). Leaving it reads a snapshot with the forecast at once. The dots' colours come from the
- * limits kept with the snapshot, not from native calls in every frame (critic 7, N7).
+ * The dim mode (part 7c, critic 7, S2 and N8): a kept snapshot there is read again only after [AMBIENT_STALE_MS]
+ * (new readings still come through [request]), the picture moves one step a minute ([FaceLayout.burnInOffset]). Its
+ * snapshots hold the forecast as well (part 7l: the dim mode draws it). The dots' colours come from the limits kept
+ * with the snapshot, not from native calls in every frame (critic 7, N7).
  */
 internal class ModFaceRenderer(
     private val context: Context,
@@ -64,15 +64,11 @@ internal class ModFaceRenderer(
 
     override suspend fun createSharedAssets(): Assets = Assets()
 
-    /**
-     * A snapshot with the labels of its time, when it was read (the watch's clock), whether its forecast was asked for
-     * and the traffic light's limits read with it.
-     */
+    /** A snapshot with the labels of its time, when it was read (the watch's clock) and the traffic light's limits. */
     private class Kept(
         val snapshot: FaceSnapshot,
         val labels: FaceLabels,
         val readAtMs: Long,
-        val withForecast: Boolean,
         val limits: ModFaceSource.Limits?,
     )
 
@@ -104,12 +100,8 @@ internal class ModFaceRenderer(
 
     init {
         guarded {
-            // leaving the dim mode: its snapshot has no forecast, so read one now; else as new data
-            scope.launch {
-                watchState.isAmbient.collect { ambient ->
-                    if (ambient == false) { if (kept?.withForecast == false) refresh() else request() }
-                }
-            }
+            // leaving the dim mode: as new data (its snapshot may be up to AMBIENT_STALE_MS old)
+            scope.launch { watchState.isAmbient.collect { ambient -> if (ambient == false) request() } }
             scope.launch { watchState.isVisible.collect { visible -> if (visible == true && dirty) request() } }
             scope.launch { UiRefreshBus.revision.drop(1).collect { request() } }
             guarded { FaceSettings.prefs(context).registerOnSharedPreferenceChangeListener(settingsListener) }
@@ -150,11 +142,9 @@ internal class ModFaceRenderer(
         val now = System.currentTimeMillis()
         val hours = FaceSettings.hours(context)
         graphHours = hours
-        val withForecast = watchState.isAmbient.value != true
         val next = guarded {
-            val snapshot = FaceSources.get().snapshot(context, now, hours, withForecast)
-            Kept(snapshot, FaceLabels.from(context), now, withForecast,
-                guarded { ModFaceSource.limits(snapshot.isMmol) })
+            val snapshot = FaceSources.get().snapshot(context, now, hours)
+            Kept(snapshot, FaceLabels.from(context), now, guarded { ModFaceSource.limits(snapshot.isMmol) })
         } ?: return
         val old = kept
         kept = next
