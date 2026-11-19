@@ -19,8 +19,10 @@ import kotlin.math.sqrt
  * ```
  * Every share is of the screen's diameter (the smaller side, centred); a row is as wide as the circle allows at its
  * edge farther from the centre, less a margin, so nothing reaches the round edge on any size. Part 7c (the owner's
- * word) gave up the free band at the bottom that was kept for the system's ongoing-activity icon: our watch build
- * makes that icon a faint speck (`wearMod/res/drawable-anydpi-v24/novalue.xml`) and the status row takes the room.
+ * word) gave up the free band at the bottom that was kept for the system's ongoing-activity icon and the status row
+ * takes the room; since part 7j our watch build has no ongoing activity at all (`NoOngoingActivity`), so no icon.
+ * Batteries show in the dim mode too (7j): at the strongest burn-in shift their group may touch the round edge by a
+ * few pixels (critic 7l-7m, L2; accepted).
  */
 object FaceLayout {
 

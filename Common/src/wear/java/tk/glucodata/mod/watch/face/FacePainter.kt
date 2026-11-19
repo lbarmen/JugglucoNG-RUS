@@ -142,8 +142,8 @@ internal class FacePainter {
     /**
      * The day and month in the middle (grey, the system's dot between the two words, part 7e), the phone's battery
      * left of it and the watch's right of it, each an icon and its number in the colour of its percent
-     * ([FaceStyle.batteryColor]); a battery without a known percent has neither, the dim mode shows only a low (red)
-     * one.
+     * ([FaceStyle.batteryColor]); a battery without a known percent has neither; the dim mode shows both, dimmed
+     * (part 7j).
      */
     private fun drawStatus(
         canvas: Canvas,
