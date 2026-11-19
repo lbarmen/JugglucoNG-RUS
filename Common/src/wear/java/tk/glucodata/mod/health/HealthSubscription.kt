@@ -17,15 +17,27 @@ object HealthSubscription {
     /** Subscribe again at least this often (a subscription might be lost without a word). */
     const val REREGISTER_MS = 12 * 60 * 60_000L
 
+    /**
+     * No subscription in place and the last attempt failed (Watch 7i; watch log 19.11.2026: after the watch was
+     * switched on, heart rate came only with `registered reason=new` about 15 minutes after the boot attempt -
+     * Health Services may not answer yet right after boot): the next attempt may come this soon, so every tick
+     * (every 5 minutes, at most one a minute) tries again instead of waiting [SILENT_MS].
+     */
+    const val RETRY_FAILED_MS = 60_000L
+
+    /** [HealthState.registerError] when permissions allow heart rate or steps but Health Services offered neither. */
+    const val ERROR_NO_TYPES = "NoTypes"
+
     fun supported(sdk: Int): Boolean = sdk >= MIN_SDK
 
     /**
      * Why to subscribe at [nowMs], or `null` - not now. Nothing without a permission and a subscription ([permsNow]
      * has neither heart rate nor activity; with a subscription in place the change of permissions drops it) or within
-     * [SILENT_MS] of the last attempt ([attemptAt]; a failing or empty subscription is not
-     * retried on every tick). Then: `new` - none in place ([registered] false); `perms` - the permissions changed since
-     * it was made; `stale` - older than [REREGISTER_MS] (or made "in the future": the clock went back); `silent` - no
-     * delivery ([lastDataAt]) and no subscription for over [SILENT_MS].
+     * [SILENT_MS] of the last attempt ([attemptAt]; a subscription in place or one with nothing to subscribe is not
+     * retried on every tick) - within [RETRY_FAILED_MS] when none is in place and that attempt failed ([attemptFailed]:
+     * without a subscription no data comes at all). Then: `new` - none in place ([registered] false); `perms` - the
+     * permissions changed since it was made; `stale` - older than [REREGISTER_MS] (or made "in the future": the clock
+     * went back); `silent` - no delivery ([lastDataAt]) and no subscription for over [SILENT_MS].
      */
     fun registerReason(
         nowMs: Long,
@@ -35,9 +47,11 @@ object HealthSubscription {
         registeredAt: Long,
         lastDataAt: Long,
         attemptAt: Long,
+        attemptFailed: Boolean = false,
     ): String? {
         if (!permsNow.any && !registered) return null
-        if (attemptAt > 0 && nowMs - attemptAt in 0 until SILENT_MS) return null
+        val gap = if (!registered && attemptFailed) RETRY_FAILED_MS else SILENT_MS
+        if (attemptAt > 0 && nowMs - attemptAt in 0 until gap) return null
         return when {
             !registered -> "new"
             permsNow.short() != permsAtRegistration -> "perms"

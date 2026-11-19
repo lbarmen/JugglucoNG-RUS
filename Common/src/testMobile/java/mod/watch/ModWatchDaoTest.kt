@@ -89,6 +89,23 @@ class ModWatchDaoTest {
     }
 
     @Test
+    fun oneMinuteRowsAreStoredBesideFiveMinuteOnesAndLateOnesMerge() {
+        val hr1 = hr(64f, 50, 58, 72).copy(kind = ModHealthBatch.KIND_HR1)
+        val late = hr(70f, 10, 66, 75).copy(kind = ModHealthBatch.KIND_HR1)
+        val stored = dao.store(batch(1, t0 + minute, hr(70f, 3, 60, 80), hr1), t0 + minute)
+        assertEquals(2, stored.inserted) // hr5 and hr1 of the same start: two rows
+        assertEquals(1, dao.store(batch(2, t0 + 2 * minute, late), t0 + 2 * minute).merged)
+        assertEquals(0, dao.store(batch(3, t0 + 3 * minute, hr1, late), t0 + 3 * minute).let { it.inserted + it.merged })
+        val row = dao.find(ModHealthBatch.KIND_HR1, t0)!!
+        assertEquals(65.0, row.value, 0.0001)
+        assertEquals("n=60;min=58;max=75", row.extra)
+        assertEquals("n=3;min=60;max=80", dao.find(ModHealthBatch.KIND_HR5, t0)!!.extra)
+        dao.store(batch(4, t0 + 4 * minute, hr(66f, 60, 60, 72, time = t0 + 3 * minute).copy(kind = ModHealthBatch.KIND_HR1)), t0 + 4 * minute)
+        assertEquals(t0 + 3 * minute, dao.latest(ModHealthBatch.KIND_HR1)!!.at)
+        assertEquals(3, dao.count())
+    }
+
+    @Test
     fun theNewestOfAKindAndOfAWindow() {
         dao.store(batch(1, t0, Sample(ModHealthBatch.KIND_STEPS_DAY, t0, 1000f, "0"),
             Sample(ModHealthBatch.KIND_STEPS_DAY, t0 + 10 * minute, 1500f, "0"),

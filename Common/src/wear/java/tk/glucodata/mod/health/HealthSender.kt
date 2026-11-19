@@ -37,13 +37,20 @@ object HealthSender {
         )
     }
 
-    /** After a delivery: send unless a send or attempt was less than [HealthConfig.SEND_PERIOD_MS] ago. */
+    /**
+     * After a delivery: send unless a send or attempt was less than [HealthConfig.SEND_AFTER_DATA_GAP_MS] ago. The
+     * attempt counts too: a failing link is not hammered on every delivery, and a tick's hand-over (which marks its
+     * attempt before its flush) keeps the delivery answering that flush from sending on its own.
+     */
     fun sendIfDue(core: HealthCore, source: HealthSource?, sink: Sink, nowMs: Long): Result? {
         val state = core.state
-        val last = maxOf(state.lastSentAt, state.lastAttemptAt)
-        if (last > 0 && nowMs - last in 0 until HealthConfig.SEND_PERIOD_MS) return null
+        if (!dueAfterData(maxOf(state.lastSentAt, state.lastAttemptAt), nowMs)) return null
         return send(core, source, sink, nowMs)
     }
+
+    /** A delivery at [nowMs] sends: nothing went yet, the last send or attempt [lastMs] is a minute or more ago, or the clock went back. */
+    fun dueAfterData(lastMs: Long, nowMs: Long): Boolean =
+        lastMs <= 0 || nowMs - lastMs !in 0 until HealthConfig.SEND_AFTER_DATA_GAP_MS
 
     /**
      * Sends all that waits: the service rows due ([HealthStatus]), then every outbox file, oldest first, cut into
