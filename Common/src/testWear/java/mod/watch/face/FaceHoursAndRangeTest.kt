@@ -245,50 +245,69 @@ class FaceHoursAndRangeTest {
         return reads
     }
 
+    /** One minute's signals at [t]: the calibration, the values a moment later, the echo of upstream's alert path. */
+    private fun minute(t: Long) = listOf(t, t + 400L, t + 410L)
+
     @Test
     fun aNormalMinuteReadsTheValuesAtOnce() {
         val t = 1_000_000L
-        // calibration, then the values a moment later: both read at once, the new value with no pause
-        assertEquals(listOf(t, t + 400L), simulateReads(listOf(t, t + 400L)))
+        // all three read at once, the new value with no pause
+        assertEquals(minute(t), simulateReads(minute(t)))
         // minute after minute the same
-        val minutes = (0 until 10).flatMap { listOf(t + it * 60_000L, t + it * 60_000L + 400L) }
+        val minutes = (0 until 10).flatMap { minute(t + it * 60_000L) }
         assertEquals(minutes, simulateReads(minutes))
+        // critic 7o, S1: two wrist raises in the 20 s before the data still leave room for the values
+        val raised = listOf(t - 15_000L, t - 5_000L) + minute(t)
+        assertEquals(raised, simulateReads(raised))
     }
 
     @Test
     fun historyCatchingUpKeepsToTheBudget() {
         val t = 1_000_000L
+        val budget = ModFaceRenderer.READS_PER_WINDOW
         val signals = (0 until 60).map { t + it * 100L } // 60 pieces in 6 s
         val reads = simulateReads(signals)
         // never more than the budget in any window
         for (r in reads) {
-            assertTrue(reads.count { it >= r && it < r + ModFaceRenderer.READ_WINDOW_MS } <= ModFaceRenderer.READS_PER_WINDOW)
+            assertTrue(reads.count { it >= r && it < r + ModFaceRenderer.READ_WINDOW_MS } <= budget)
         }
         // the first ones at once, the last piece read once the oldest read leaves the window
-        assertEquals(listOf(t, t + 100L, t + 200L), reads.take(3))
+        assertEquals((0 until budget).map { t + it * 100L }, reads.take(budget))
         assertEquals(t + ModFaceRenderer.READ_WINDOW_MS, reads.last())
-        assertEquals(4, reads.size)
+        assertEquals(budget + 1, reads.size)
     }
 
     @Test
     fun aReadWaitsUntilTheOldestLeavesTheWindow() {
         val t = 1_000_000L
-        val reads = longArrayOf(t, t + 1_000L, t + 2_000L)
-        assertEquals(ModFaceRenderer.READ_WINDOW_MS - 5_000L, ModFaceRenderer.readWait(true, reads, t + 5_000L))
-        assertEquals(0L, ModFaceRenderer.readWait(true, reads, t + ModFaceRenderer.READ_WINDOW_MS))
-        assertEquals(0L, ModFaceRenderer.readWait(true, reads, t + 10 * ModFaceRenderer.READ_WINDOW_MS))
-        // two reads in the window: the third at once
-        assertEquals(0L, ModFaceRenderer.readWait(true, longArrayOf(SignalBudget.NEVER, t, t + 1_000L), t + 2_000L))
+        val n = ModFaceRenderer.READS_PER_WINDOW
+        assertEquals(5, n)
+        val full = LongArray(n) { t + it * 1_000L }
+        assertEquals(ModFaceRenderer.READ_WINDOW_MS - 5_000L, ModFaceRenderer.readWait(true, full, t + 5_000L))
+        assertEquals(0L, ModFaceRenderer.readWait(true, full, t + ModFaceRenderer.READ_WINDOW_MS))
+        assertEquals(0L, ModFaceRenderer.readWait(true, full, t + 10 * ModFaceRenderer.READ_WINDOW_MS))
+        // one read short of the budget in the window: the next at once
+        val short = LongArray(n) { if (it == 0) SignalBudget.NEVER else t + it * 1_000L }
+        assertEquals(0L, ModFaceRenderer.readWait(true, short, t + 6_000L))
         // never read yet: at once
-        assertEquals(0L, ModFaceRenderer.readWait(true, LongArray(3) { SignalBudget.NEVER }, t))
+        assertEquals(0L, ModFaceRenderer.readWait(true, LongArray(n) { SignalBudget.NEVER }, t))
     }
 
     @Test
     fun anInvisibleFaceReadsNothing() {
         val t = 1_000_000L
-        assertNull(ModFaceRenderer.readWait(visible = false, LongArray(3) { SignalBudget.NEVER }, t))
-        assertNull(ModFaceRenderer.readWait(false, longArrayOf(t, t, t), t + 999_999L))
-        assertTrue(simulateReads(listOf(t, t + 400L), visible = false).isEmpty())
+        val n = ModFaceRenderer.READS_PER_WINDOW
+        assertNull(ModFaceRenderer.readWait(visible = false, LongArray(n) { SignalBudget.NEVER }, t))
+        assertNull(ModFaceRenderer.readWait(false, LongArray(n) { t }, t + 999_999L))
+        assertTrue(simulateReads(minute(t), visible = false).isEmpty())
+    }
+
+    @Test
+    fun aLastingReadFailureIsJournalledOnceAMinute() {
+        val t = 1_000_000L
+        assertTrue(ModFaceRenderer.shouldLogFailure(SignalBudget.NEVER, t))
+        assertFalse(ModFaceRenderer.shouldLogFailure(t, t + ModFaceRenderer.FAILURE_LOG_MS - 1L))
+        assertTrue(ModFaceRenderer.shouldLogFailure(t, t + ModFaceRenderer.FAILURE_LOG_MS))
     }
 
     @Test

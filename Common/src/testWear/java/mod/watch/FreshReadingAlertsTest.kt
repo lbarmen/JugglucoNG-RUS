@@ -4,11 +4,13 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.watch.CoalescedRunner
+import tk.glucodata.mod.watch.RevisionGate
 import tk.glucodata.mod.watch.SignalBudget
 
 /** Part 7o: the read budget and the early alert check of the watch. */
@@ -94,16 +96,87 @@ class FreshReadingAlertsTest {
     }
 
     @Test
+    fun ourOwnEchoMakesNoSecondCheck() {
+        // critic 7o, S1: a check that hands a reading on bumps the revision itself (upstream's dowithglucose)
+        val revision = AtomicLong()
+        val gate = RevisionGate()
+        val checks = AtomicInteger()
+        lateinit var runner: CoalescedRunner
+        runner = CoalescedRunner("test", SignalBudget(3, 20_000L), ::now, due = { gate.due(revision.get()) }) {
+            checks.incrementAndGet()
+            revision.incrementAndGet() // the echo, during the check, on its thread
+            runner.signal()
+            gate.checked(revision.get())
+        }
+        fun dataArrives() {
+            revision.incrementAndGet()
+            runner.signal()
+        }
+        dataArrives()
+        Thread.sleep(300L)
+        assertEquals(1, checks.get())
+        // more data - each new revision checked, each echo not; the skipped echoes cost no budget, or the third check
+        // (the budget is 3 in 20 s) would wait 20 s
+        dataArrives()
+        Thread.sleep(300L)
+        dataArrives()
+        Thread.sleep(300L)
+        assertEquals(3, checks.get())
+    }
+
+    @Test
+    fun theGateKeepsTheHighestRevisionSeenAfterACheck() {
+        val gate = RevisionGate()
+        assertTrue(gate.due(0L))
+        gate.checked(5L)
+        assertFalse(gate.due(5L))
+        assertTrue(gate.due(6L))
+        gate.checked(3L) // never back
+        assertFalse(gate.due(5L))
+    }
+
+    @Test
     fun theWatchStartsTheCheckFromOurProviderAndCallsOnlyUpstreamsPublicEntry() {
-        fun file(path: String) = listOf(File("src/$path"), File("Common/src/$path")).first { it.isFile }.readText()
         val starter = file("wearMod/java/tk/glucodata/mod/health/hs/ModHealthStarter.kt")
         assertTrue(starter.contains("FreshReadingAlerts.startAfterApplication()"))
         val alerts = file("wear/java/tk/glucodata/mod/watch/FreshReadingAlerts.kt")
         assertTrue(alerts.contains("AlertRuntimeManager.ensureMonitoring()"))
         assertTrue(alerts.contains("UiRefreshBus.revision"))
-        // no value or time of an event in the journal
-        val lines = Regex("""ModWatchLog\.[iw]\("([^"]*)"""").findAll(alerts).map { it.groupValues[1] }.toList()
-        assertTrue(lines.isNotEmpty())
-        lines.forEach { assertFalse(it, it.contains("value") || it.contains("glucose")) }
     }
+
+    @Test
+    fun ourJournalLinesCarryNoValueAndNoTimeOfAnEvent() {
+        // critic 7o, N7: every journal line of part 7o's files - only ages, durations, flags and failure classes
+        val sources = listOf(
+            "wear/java/tk/glucodata/mod/watch/FreshReadingAlerts.kt",
+            "wear/java/tk/glucodata/mod/watch/SignalBudget.kt",
+            "wear/java/tk/glucodata/mod/watch/face/ModFaceRenderer.kt",
+            "wearMod/java/tk/glucodata/mod/health/hs/ModHealthStarter.kt",
+        )
+        val allowed = Regex(
+            """ageText\([^()]*\)|SystemClock\.elapsedRealtime\(\) - begin|watchState\.isAmbient\.value == true|""" +
+                """t\.javaClass\.simpleName|changed|ambient""",
+        )
+        val interpolation = Regex("""\$\{([^}]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)""")
+        val forbidden = listOf("value", "glucose", "sugar", "mmol", "mg/dl", "mgdl", "time=", "timems", "reading=")
+        var calls = 0
+        for (path in sources) {
+            // a call's argument runs to the ")" that ends its line
+            for (call in Regex("""ModWatchLog\.[iw]\(([\s\S]*?)\)\s*\n""").findAll(file(path))) {
+                calls++
+                val argument = call.groupValues[1]
+                interpolation.findAll(argument).forEach {
+                    val expr = it.groupValues[1].ifEmpty { it.groupValues[2] }
+                    assertTrue("$path: \${$expr}", allowed.matches(expr))
+                }
+                val text = interpolation.replace(argument, "").lowercase()
+                forbidden.forEach { assertFalse("$path: $argument", text.contains(it)) }
+            }
+        }
+        // the lines of part 7o are all found: face read (+ failed), face frame, alerts checked (+ failed)
+        assertTrue("calls $calls", calls >= 6)
+    }
+
+    private fun file(path: String) =
+        listOf(File("src/$path"), File("Common/src/$path")).first { it.isFile }.readText()
 }

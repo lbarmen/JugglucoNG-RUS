@@ -2,10 +2,12 @@ package tk.glucodata.mod.watch
 
 /**
  * JugglucoNGmod, watch block (part 7o): at most [count] runs in any [windowMs] - the pace of our reactions to new data
- * (the face's read, the early check of the alerts). A normal minute brings two signals a moment apart (the phone's
- * calibration, then the values): both go through at once. History catching up brings dozens: the first [count] go
- * through, the rest wait until the oldest run leaves the window - never more often than the old "one read, then a
- * pause of 20 s" allowed in a window. Keeps only the last [count] run times; thread-safe.
+ * (the face's read, the early check of the alerts). A normal minute brings up to three signals a moment apart (the
+ * phone's calibration, then the values, then the echo of upstream's alert path handing the new reading on): they go
+ * through at once. History catching up brings dozens: the first [count] go through, the rest wait until the oldest run
+ * leaves the window. That is more than the old "one read, then a pause of 20 s" allowed (one read plus one at the end
+ * of the pause, 3 a minute): up to [count] x 3 a minute - 15 for the face's budget of 5, 9 for the alerts' 3 (critic
+ * 7o, N1); bounded, and only while history catches up. Keeps only the last [count] run times; thread-safe.
  */
 internal class SignalBudget(val count: Int = COUNT, val windowMs: Long = WINDOW_MS) {
     init {

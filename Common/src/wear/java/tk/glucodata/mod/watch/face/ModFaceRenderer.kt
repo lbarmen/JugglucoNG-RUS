@@ -107,6 +107,7 @@ internal class ModFaceRenderer(
     private val reads = AtomicLong()
     private val keptLock = Any()
     private val budget = SignalBudget(READS_PER_WINDOW, READ_WINDOW_MS)
+    private val failureLoggedAt = AtomicLong(SignalBudget.NEVER)
     private val pause = ReadPause(scope)
 
     /** The time of the reading the journal's last `face frame` line was about. */
@@ -172,13 +173,16 @@ internal class ModFaceRenderer(
         val begin = SystemClock.elapsedRealtime()
         budget.record(begin)
         val now = System.currentTimeMillis()
-        val hours = FaceSettings.hours(context)
-        graphHours = hours
-        val next = guarded {
+        val next = try {
+            val hours = FaceSettings.hours(context)
+            graphHours = hours
             val snapshot = FaceSources.get().snapshot(context, now, hours)
             Kept(snapshot, FaceLabels.from(context), now, guarded { ModFaceSource.limits(snapshot.isMmol) }, signal,
                 order)
-        } ?: return
+        } catch (t: Throwable) {
+            readFailed(t, begin)
+            return
+        }
         val old = synchronized(keptLock) {
             val prev = kept
             // a read that began later (the frame's own, or the next background one) is kept already
@@ -190,6 +194,14 @@ internal class ModFaceRenderer(
         ModWatchLog.i("face read age=${ageText(next.snapshot.current, now)} took=${SystemClock.elapsedRealtime() - begin}" +
             " ms changed=$changed amb=${watchState.isAmbient.value == true}" + if (inFrame) " in-frame" else "")
         if (changed && !inFrame) guarded { postInvalidate() }
+    }
+
+    /** A failed read in the journal, at most once per [FAILURE_LOG_MS] (critic 7o, N3: a lasting failure stays quiet). */
+    private fun readFailed(t: Throwable, atMs: Long) {
+        val last = failureLoggedAt.get()
+        if (shouldLogFailure(last, atMs) && failureLoggedAt.compareAndSet(last, atMs)) {
+            ModWatchLog.w("face read failed: ${t.javaClass.simpleName}")
+        }
     }
 
     /** A request came after the read of [data] began: it may not hold the newest data. */
@@ -279,10 +291,11 @@ internal class ModFaceRenderer(
 
         /**
          * The read budget (part 7o): at most [READS_PER_WINDOW] reads in any [READ_WINDOW_MS] - history arrives in
-         * dozens of pieces while it catches up; a normal minute (calibration, then values) takes two.
+         * dozens of pieces while it catches up; a normal minute takes up to three (calibration, values, the echo of
+         * upstream's alert path), so 5 leaves room for a wrist raise or a stale read before the values (critic 7o, S1).
          */
         const val READ_WINDOW_MS = SignalBudget.WINDOW_MS
-        const val READS_PER_WINDOW = SignalBudget.COUNT
+        const val READS_PER_WINDOW = 5
 
         /**
          * What a request for new data does: `null` - nothing until the face is [visible] again (the request stays
@@ -292,6 +305,12 @@ internal class ModFaceRenderer(
          */
         internal fun readWait(visible: Boolean, lastReadsMs: LongArray, nowMs: Long): Long? =
             if (!visible) null else SignalBudget.waitFor(lastReadsMs, nowMs, READ_WINDOW_MS)
+
+        /** A failed read is written to the journal at most this often. */
+        const val FAILURE_LOG_MS = 60_000L
+
+        /** A failure at [nowMs] goes to the journal: none was written within [FAILURE_LOG_MS] before ([lastMs]). */
+        internal fun shouldLogFailure(lastMs: Long, nowMs: Long): Boolean = nowMs - lastMs >= FAILURE_LOG_MS
 
         /** The age of [reading] at [nowMs] for the journal: whole seconds, or `none`. */
         internal fun ageText(reading: FaceReading?, nowMs: Long): String =
