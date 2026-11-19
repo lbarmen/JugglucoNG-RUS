@@ -41,6 +41,10 @@ import tk.glucodata.alerts.AlertType
  * there [askRetryMs] after a request is checked and asked again, at most [MAX_ASKS] requests per [ASK_WINDOW_MS]; and
  * since every accepted message runs the check, the phone's hourly resend brings a lost one back within the hour
  * (critic M1 of part 7f).
+ *
+ * Vibration only (owner's rule, part 7h): an alert on the watch never sounds - whatever the phone has, the watch
+ * writes the sound off and the vibration on ([vibrationOnly]); duration, pattern, repeat and the rest come from the
+ * phone. Upstream's Notify.mksound reads exactly these two keys, and their alert channels carry no sound of their own.
  */
 object WatchAlertStore {
 
@@ -168,7 +172,7 @@ object WatchAlertStore {
                     ModWatchLog.i("alerts: an overtaken message dropped")
                     return true
                 }
-                val changed = ModAlertSettings.apply(alertPrefs(context), message.settings, thresholds)
+                val changed = ModAlertSettings.apply(alertPrefs(context), vibrationOnly(message.settings), thresholds)
                 val editor = ours.edit().putString(KEY_MESSAGE, Base64.encodeToString(data, Base64.NO_WRAP))
                 message.sentAtMs?.let { editor.putLong(KEY_SENT_AT, it) }
                 editor.apply()
@@ -195,12 +199,16 @@ object WatchAlertStore {
         synchronized(lock) {
             val kept = PhoneBatteryStore.prefs(context).getString(KEY_MESSAGE, null)
             val settings = kept?.let { ModAlertSettings.decode(Base64.decode(it, Base64.NO_WRAP)) }
-            if (settings == null) 0 else ModAlertSettings.apply(alertPrefs(context), settings, thresholds)
+            if (settings == null) 0 else ModAlertSettings.apply(alertPrefs(context), vibrationOnly(settings), thresholds)
         }
     } catch (t: Throwable) {
         ModWatchLog.w("alerts: not written again: ${t.javaClass.simpleName}")
         0
     }
+
+    /** The phone's settings as the watch keeps them: the sound off and the vibration on, all else as sent. */
+    fun vibrationOnly(settings: List<ModAlertSettings.Settings>): List<ModAlertSettings.Settings> =
+        settings.map { it.copy(soundEnabled = false, vibrationEnabled = true) }
 
     /**
      * Compares every native alert's on/off on the watch with what the phone last sent; on a difference asks the phone

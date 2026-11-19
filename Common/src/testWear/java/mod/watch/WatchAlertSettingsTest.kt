@@ -23,8 +23,8 @@ import tk.glucodata.mod.watch.PhoneBatteryStore
 import tk.glucodata.mod.watch.WatchAlertStore
 
 /**
- * JugglucoNGmod, watch block (parts 7b, 7d, 7f, 7g): `/mod/alerts` arriving on the watch - written into upstream's
- * alert file, or not at all; never an alert's on/off; an overtaken message dropped, a change after a phone clock set
+ * JugglucoNGmod, watch block (parts 7b, 7d, 7f, 7g, 7h): `/mod/alerts` arriving on the watch - written into upstream's
+ * alert file, or not at all; never an alert's on/off; never a sound, always the vibration; an overtaken message dropped, a change after a phone clock set
  * back not; the kept message written again after upstream's toggle sync; after every message the on/off checked
  * against the phone's, a lost state request asked again up to a limit. Made-up values.
  */
@@ -80,6 +80,9 @@ class WatchAlertSettingsTest {
         assertEquals(7, alerts.getInt(low + "endHour", -1))
         assertFalse(alerts.contains(low + "endMin"))
         assertEquals(15, alerts.getInt("alert_${AlertType.MISSED_READING.id}_alarmDur", 5))
+        // the watch only vibrates (owner's rule, part 7h): the phone's sound on lands as off
+        assertFalse(alerts.getBoolean(low + "sound", true))
+        assertTrue(alerts.getBoolean(low + "vibration", false))
         // no alert's on/off is ever written by the watch, native-backed or prefs-only
         assertFalse(alerts.contains(low + "enabled"))
         assertFalse(alerts.contains("alert_${AlertType.MISSED_READING.id}_enabled"))
@@ -87,6 +90,25 @@ class WatchAlertSettingsTest {
         assertFalse(alerts.contains(low + "soundUri"))
         assertFalse(alerts.contains(low + "flash"))
         assertFalse(alerts.contains(low + "dnd"))
+    }
+
+    @Test
+    fun theWatchOnlyVibratesWhateverThePhoneHas() {
+        val high = "alert_${AlertType.HIGH.id}_"
+        // the phone sounds without vibration; the watch: no sound, vibration on, the duration as the phone's
+        val phone = settings(AlertType.HIGH.id, 30).copy(soundEnabled = true, vibrationEnabled = false)
+        assertTrue(WatchAlertStore.onMessage(context, ModAlertSettings.encode(listOf(phone), 1_000L), Levels(), NoToggles))
+        assertFalse(alerts.getBoolean(high + "sound", true))
+        assertTrue(alerts.getBoolean(high + "vibration", false))
+        assertEquals(30, alerts.getInt(high + "alarmDur", 5))
+        // someone turns the sound on in the watch's file: written back to off with the kept message
+        alerts.edit().putBoolean(high + "sound", true).commit()
+        assertEquals(1, WatchAlertStore.reapply(context, Levels()))
+        assertFalse(alerts.getBoolean(high + "sound", true))
+        assertEquals(
+            listOf(phone.copy(soundEnabled = false, vibrationEnabled = true)),
+            WatchAlertStore.vibrationOnly(listOf(phone)),
+        )
     }
 
     @Test
