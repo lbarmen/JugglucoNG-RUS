@@ -16,7 +16,8 @@ import tk.glucodata.mod.watch.ModWatchLog
  * JugglucoNGmod, watch block (part 4b): Health Services as the source of heart rate and steps - the only code with
  * the library (seen by the `mod` build alone, which adds `androidx.health:health-services-client` through
  * mod/mod-init.gradle). Passive monitoring, as Glucove on the same watch: the watch's own measuring hands what it
- * collected to [ModHealthListenerService] about every 5 minutes; a `/mod/tick` asks for it at once ([flush]).
+ * collected to [ModHealthListenerService] when it decides (every 1.5-3.5 minutes on the Galaxy Watch 5 Pro, watch log
+ * 19.11.2026); a `/mod/tick` asks for it at once ([flush]).
  *
  * Every decision lives in plain code the tests see ([HealthPermissions], [HealthSubscription]); here are only the
  * calls. Every call waits at most [CALL_TIMEOUT_S] and never runs on the main thread (the hand-over, the page and
@@ -46,6 +47,7 @@ object ModHealthServicesSource : HealthSource {
             registeredAt = state.registeredAt,
             lastDataAt = state.lastDataAt,
             attemptAt = state.registerAttemptAt,
+            failures = state.registerFailures,
         ) ?: return
         register(context, reason)
     }
@@ -67,6 +69,12 @@ object ModHealthServicesSource : HealthSource {
                 hr = DataType.HEART_RATE_BPM in types,
                 steps = DataType.STEPS_DAILY in types,
             )
+            val missing = HealthSubscription.missingTypes(
+                perms,
+                offeredHr = DataType.HEART_RATE_BPM in supported,
+                offeredSteps = DataType.STEPS_DAILY in supported,
+            )
+            if (missing.isNotEmpty()) ModWatchLog.w("health types not offered reason=$reason missing=$missing offered=${names.ifEmpty { "-" }}")
             if (types.isEmpty()) {
                 // Nothing allowed or nothing the watch can give: drop an old subscription so it never runs unseen.
                 if (state.registeredTypes.isNotEmpty()) {
@@ -74,8 +82,10 @@ object ModHealthServicesSource : HealthSource {
                 }
                 state.registeredTypes = ""
                 state.registeredPerms = perms.short()
-                state.registerError = ""
-                ModWatchLog.i("health register skipped reason=$reason perms=${perms.short()}")
+                // Allowed but nothing offered (Health Services not ready yet after boot, Watch 7i): a failure, tried
+                // again; nothing allowed: no error, nothing to retry.
+                HealthSubscription.noteAttempt(state, HealthSubscription.errorForNoTypes(perms.any))
+                ModWatchLog.i("health register skipped reason=$reason perms=${perms.short()} supported=${supported.size}")
                 return@synchronized false
             }
             val config = PassiveListenerConfig.Builder().setDataTypes(types).build()
@@ -84,11 +94,11 @@ object ModHealthServicesSource : HealthSource {
             state.registeredAt = core.clock()
             state.registeredTypes = names
             state.registeredPerms = perms.short()
-            state.registerError = ""
+            HealthSubscription.noteAttempt(state, "")
             ModWatchLog.i("health registered reason=$reason types=$names perms=${perms.short()}")
             true
         } catch (t: Throwable) {
-            state.registerError = t.javaClass.simpleName
+            HealthSubscription.noteAttempt(state, t.javaClass.simpleName)
             ModWatchLog.w("health register failed reason=$reason: ${t.javaClass.simpleName}")
             false
         }

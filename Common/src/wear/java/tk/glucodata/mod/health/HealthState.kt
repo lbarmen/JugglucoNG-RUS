@@ -31,8 +31,14 @@ class HealthState(context: Context) {
     /** When the source last delivered data (the source's "silent for 15 min" check reads it, part 4b). */
     var lastDataAt by long("lastDataAt")
 
-    /** Open 5-minute heart rate windows ([HrAggregator.encode]). */
-    var hrBuckets by string("hrBuckets")
+    /** Open 1-minute heart rate windows ([HrAggregator.encode]; Watch 7i). */
+    var hrBuckets by string("hrBuckets1")
+
+    /**
+     * Open 5-minute windows a watch app before Watch 7i left under the old key: [HealthCore] queues them once as
+     * `hr5` rows and empties this, so they are never read as 1-minute windows.
+     */
+    var hrBucketsOld5 by string("hrBuckets")
 
     /** End of the latest closed heart rate window, and how many readings came for a closed window since install. */
     var hrClosedUntil by long("hrClosedUntil")
@@ -58,6 +64,9 @@ class HealthState(context: Context) {
     var registeredPerms by string("registeredPerms")
     var registerAttemptAt by long("registerAttemptAt")
     var registerError by string("registerError")
+
+    /** Failed subscription attempts in a row (0 after a good one): the pause before the next grows with it. */
+    var registerFailures by int("registerFailures", 0)
 
     /** The page asked for the background permission once (the next time it opens the app settings instead). */
     var askedBackground by boolean("askedBackground")

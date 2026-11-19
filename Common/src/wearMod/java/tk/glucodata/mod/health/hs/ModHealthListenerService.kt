@@ -13,8 +13,9 @@ import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (part 4b): Health Services hands the collected heart rate and day step counts here
- * (when it decides, about every 5 minutes, and at once after a flush). The data goes to [HealthIntake.deliver], which
- * writes it to our queue before this callback returns. Times of Health Services count from the watch's boot; they
+ * (when it decides - every 1.5-3.5 minutes on the Galaxy Watch 5 Pro, watch log 19.11.2026 - and at once after a
+ * flush). The data goes to [HealthIntake.deliver], which writes it to our queue before this callback returns and then
+ * sends on our thread when no batch went for a minute ([tk.glucodata.mod.health.HealthSender.sendIfDue]). Times of Health Services count from the watch's boot; they
  * become ordinary times here, as Glucove did ([HealthSubscription.bootEpochMs]).
  *
  * Declared only in the `mod` build's manifest, bound by Health Services alone (its binding permission). Never throws.

@@ -11,7 +11,8 @@ import tk.glucodata.mod.watch.db.ModWatchSample
  * without the database or Google Play services ([ModWatchStore] does the work). The rules of the format are in
  * [ModHealthBatch.Sample]: a batch taken before is dropped whole (by number and send time, in
  * [tk.glucodata.mod.watch.db.ModWatchDao.store]), a row equal in every field to one taken is a repeat, a late
- * [ModHealthBatch.KIND_HR5] row is merged by the counts ([ModHealthBatch.mergeHr5]).
+ * heart rate row ([ModHealthBatch.KIND_HR1], or [ModHealthBatch.KIND_HR5] from an older watch app) is merged by the
+ * counts ([ModHealthBatch.mergeHeartRate]).
  */
 object ModWatchIntake {
 
@@ -35,24 +36,25 @@ object ModWatchIntake {
     /**
      * The row [incoming] of batch [seq] against the [existing] row of the same kind and time: a new time is inserted;
      * a row equal to one already in it (the existing row itself or any row merged into it) is a repeat and dropped;
-     * a [ModHealthBatch.KIND_HR5] row with other numbers is merged into the existing one; any other kind keeps the
-     * first row of a time.
+     * a heart rate row ([ModHealthBatch.HR_KINDS]) with other numbers is merged into the existing one; any other kind
+     * keeps the first row of a time.
      */
     fun decide(existing: ModWatchSample?, incoming: ModHealthBatch.Sample, seq: Long, receivedAt: Long): Action {
         val signature = signature(incoming)
+        val heartRate = ModHealthBatch.isHeartRate(incoming.kind)
         if (existing == null) {
             return Action.Insert(
                 ModWatchSample(
                     kind = incoming.kind, at = incoming.timeMs, value = incoming.value.toDouble(), extra = incoming.extra,
                     batchSeq = seq, receivedAt = receivedAt,
-                    parts = if (incoming.kind == ModHealthBatch.KIND_HR5) signature else "",
+                    parts = if (heartRate) signature else "",
                 ),
             )
         }
         val parts = partsOf(existing)
         if (signature in parts) return Action.Drop
-        if (incoming.kind != ModHealthBatch.KIND_HR5) return Action.Drop
-        val merged = ModHealthBatch.mergeHr5(existing.sample(), incoming) ?: return Action.Drop
+        if (!heartRate) return Action.Drop
+        val merged = ModHealthBatch.mergeHeartRate(existing.sample(), incoming) ?: return Action.Drop
         return Action.Replace(
             existing.copy(
                 value = merged.value.toDouble(), extra = merged.extra, batchSeq = seq, receivedAt = receivedAt,
@@ -107,7 +109,7 @@ object ModWatchIntake {
 
     /** What the check screen shows; `null` fields - no data of that kind. */
     data class Summary(
-        /** The last 5-minute mean, beats per minute, and its window start. */
+        /** The newest heart rate mean (1 minute; 5 minutes from an older watch app), beats per minute, and its window start. */
         val heartRate: Int?,
         val heartRateAt: Long?,
         /** Today's steps: the last day total of today. */
@@ -140,14 +142,26 @@ object ModWatchIntake {
     }
 
     /**
-     * The check screen from the newest rows: [latestHr5] and [latestBattery] whenever they were, [latestSteps] - the
+     * The newest heart rate row of the two kinds ([ModHealthBatch.KIND_HR1] of this watch app, [ModHealthBatch.KIND_HR5]
+     * of an older one) by window start; on the same start the 1-minute row (the newer app's).
+     */
+    fun newestHeartRate(latestHr1: ModWatchSample?, latestHr5: ModWatchSample?): ModWatchSample? = when {
+        latestHr1 == null -> latestHr5
+        latestHr5 == null -> latestHr1
+        latestHr5.at > latestHr1.at -> latestHr5
+        else -> latestHr1
+    }
+
+    /**
+     * The check screen from the newest rows: [latestHeartRate] (of either heart rate kind, [newestHeartRate]) and
+     * [latestBattery] whenever they were, [latestSteps] - the
      * newest day total with its time inside today ([dayBounds]). The day total is already the sum since the watch's
      * day start, so it is shown as it is (the differences of totals are for later graphs). A total whose watch day
      * started a whole day before today still counts yesterday (the watch has not passed its midnight yet) and is not
      * today's - the shared rule [ModHealthBatch.countsDayOf], which also holds across a time zone change.
      */
     fun summary(
-        latestHr5: ModWatchSample?,
+        latestHeartRate: ModWatchSample?,
         latestSteps: ModWatchSample?,
         latestBattery: ModWatchSample?,
         lastBatchAt: Long?,
@@ -157,7 +171,7 @@ object ModWatchIntake {
         val (dayStart, dayEnd) = dayBounds(nowMs, zone)
         val steps = latestSteps?.takeIf { it.kind == ModHealthBatch.KIND_STEPS_DAY && it.at in dayStart until dayEnd }
             ?.takeIf { row -> ModHealthBatch.StepsTotal.of(row.sample())?.let { ModHealthBatch.countsDayOf(it, dayStart) } != false }
-        val hr = latestHr5?.takeIf { it.kind == ModHealthBatch.KIND_HR5 && it.value.isFinite() && it.value > 0.0 }
+        val hr = latestHeartRate?.takeIf { ModHealthBatch.isHeartRate(it.kind) && it.value.isFinite() && it.value > 0.0 }
         val battery = latestBattery?.takeIf { it.kind == ModHealthBatch.KIND_BATTERY && it.value in 0.0..100.0 }
         return Summary(
             heartRate = hr?.value?.let { Math.round(it).toInt() },

@@ -5,16 +5,21 @@ import kotlin.math.roundToInt
 import tk.glucodata.mod.health.ModHealthBatch.Sample
 
 /**
- * JugglucoNGmod, watch block (part 4): heart rate as 5-minute means on the watch (as Glucove did, decision of its
- * user 21.10.2026): the sensor gives a reading about every second, the phone gets one mean per window with the count,
- * minimum and maximum. Windows are aligned to the clock; readings without skin contact and zeros are skipped. Open
+ * JugglucoNGmod, watch block (part 4; 1 minute from Watch 7i): heart rate as means per window on the watch: the
+ * sensor gives a reading about every second, the phone gets one mean per window with the count, minimum and maximum -
+ * a [ModHealthBatch.KIND_HR1] row per minute (the owner's decision of 19.11.2026; Glucove and watch apps before 7i
+ * sent 5-minute [ModHealthBatch.KIND_HR5] rows - [windowMs] and [kind] still build those, for the open windows an
+ * older app left behind). Windows are aligned to the clock; readings without skin contact and zeros are skipped. Open
  * windows are kept as a line ([encode] / [decode]) so they survive a restart of the watch process.
  *
- * A reading that comes after its window was closed (a late delivery) opens the window again: it goes as a second
- * [ModHealthBatch.KIND_HR5] row with the same start, which the phone merges by the counts (part 5, rule in
- * [ModHealthBatch.Sample]). [add] tells such readings apart so the watch can count them ([closedUntil]).
+ * A reading that comes after its window was closed (a late delivery) opens the window again: it goes as a second row
+ * of the same kind with the same start, which the phone merges by the counts (part 5, rule in [ModHealthBatch.Sample]).
+ * [add] tells such readings apart so the watch can count them ([closedUntil]).
  */
-class HrAggregator(private val windowMs: Long = HealthConfig.HR_WINDOW_MS) {
+class HrAggregator(
+    private val windowMs: Long = HealthConfig.HR_WINDOW_MS,
+    private val kind: String = ModHealthBatch.KIND_HR1,
+) {
 
     private data class Bucket(val start: Long, val sum: Double, val count: Int, val min: Float, val max: Float)
 
@@ -43,17 +48,20 @@ class HrAggregator(private val windowMs: Long = HealthConfig.HR_WINDOW_MS) {
     }
 
     /**
-     * Closes the windows that ended at or before [nowMs] - [graceMs] (no more data comes for them): one
-     * [ModHealthBatch.KIND_HR5] row each - time = window start, value = mean, extra = `n=..;min=..;max=..`.
+     * Closes the windows no more data comes for: those ended at or before [nowMs] - [graceMs], and those ended at or
+     * before [coveredUntilMs] - the newest reading time of the delivery just added (Health Services hands its readings
+     * over in time order, so a window ended before that is complete; [Long.MIN_VALUE] - no such time). One row of
+     * [kind] each - time = window start, value = mean, extra = `n=..;min=..;max=..`.
      */
-    fun close(nowMs: Long, graceMs: Long): List<Sample> {
+    fun close(nowMs: Long, graceMs: Long, coveredUntilMs: Long = Long.MIN_VALUE): List<Sample> {
+        val until = maxOf(nowMs - graceMs, coveredUntilMs)
         val out = mutableListOf<Sample>()
         val iterator = open.entries.iterator()
         while (iterator.hasNext()) {
             val b = iterator.next().value
-            if (b.start + windowMs > nowMs - graceMs) break
+            if (b.start + windowMs > until) break
             val extra = ModHealthBatch.hr5Extra(b.count, b.min.roundToInt(), b.max.roundToInt())
-            out += Sample(ModHealthBatch.KIND_HR5, b.start, (b.sum / b.count).toFloat(), extra)
+            out += Sample(kind, b.start, (b.sum / b.count).toFloat(), extra)
             closedUntil = maxOf(closedUntil, b.start + windowMs)
             iterator.remove()
         }
@@ -65,8 +73,13 @@ class HrAggregator(private val windowMs: Long = HealthConfig.HR_WINDOW_MS) {
 
     companion object {
         /** Open windows from [encode] and the [closedUntil] kept beside them; broken parts are skipped. */
-        fun decode(text: String, closedUntil: Long = 0L, windowMs: Long = HealthConfig.HR_WINDOW_MS): HrAggregator {
-            val a = HrAggregator(windowMs)
+        fun decode(
+            text: String,
+            closedUntil: Long = 0L,
+            windowMs: Long = HealthConfig.HR_WINDOW_MS,
+            kind: String = ModHealthBatch.KIND_HR1,
+        ): HrAggregator {
+            val a = HrAggregator(windowMs, kind)
             a.closedUntil = closedUntil.coerceAtLeast(0L)
             if (text.isEmpty()) return a
             for (part in text.split('|')) {

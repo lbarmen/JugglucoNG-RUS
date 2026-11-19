@@ -100,6 +100,30 @@ class ModWatchIntakeTest {
     }
 
     @Test
+    fun aLateOneMinuteRowIsMergedLikeAFiveMinuteOne() {
+        val t = Table()
+        val first = hr(64f, 50, 58, 72).copy(kind = ModHealthBatch.KIND_HR1)
+        val late = hr(70f, 10, 66, 75).copy(kind = ModHealthBatch.KIND_HR1)
+        t.apply(1, first)
+        t.apply(2, late)
+        t.apply(3, first, late) // the outbox file sent again
+        val row = t.rows[ModHealthBatch.KIND_HR1 to at(10, 0)]!!
+        assertEquals(65.0, row.value, 0.0001)
+        assertEquals("n=60;min=58;max=75", row.extra)
+        assertEquals(1, t.rows.size)
+    }
+
+    @Test
+    fun aOneMinuteAndAFiveMinuteRowOfOneStartAreTwoRows() {
+        // an older watch app's 5-minute window and the updated app's first minute may start at the same moment
+        val t = Table()
+        t.apply(1, hr(70f, 300, 60, 80))
+        t.apply(2, hr(90f, 60, 85, 95).copy(kind = ModHealthBatch.KIND_HR1))
+        assertEquals("n=300;min=60;max=80", t.hr(at(10, 0)).extra)
+        assertEquals("n=60;min=85;max=95", t.rows[ModHealthBatch.KIND_HR1 to at(10, 0)]!!.extra)
+    }
+
+    @Test
     fun otherKindsKeepTheFirstRowOfATime() {
         val t = Table()
         val b1 = Sample(ModHealthBatch.KIND_BATTERY, at(10, 0), 81f, "")
@@ -138,6 +162,24 @@ class ModWatchIntakeTest {
     }
 
     @Test
+    fun aVersion2BatchWithOneMinuteRowsAndAVersion1BatchAreBothStored() {
+        // critic 7k, C1: the watch from 7i writes version 2; watch apps before it wrote version 1
+        val hr1 = hr(64f, 58, 60, 70).copy(kind = ModHealthBatch.KIND_HR1)
+        for ((version, row) in listOf(2 to hr1, 1 to hr(72f, 50, 60, 85))) {
+            val batch = ModHealthBatch(5, received, listOf(row), version)
+            val map = DataMap()
+            ModHealthDataMap.write(batch, map)
+            var stored: ModHealthBatch? = null
+            assertEquals(ModWatchIntake.Outcome.DELETE, ModWatchIntake.outcome(ModHealthDataMap.read(map)) { stored = it; true })
+            assertEquals(listOf(row), stored!!.knownSamples())
+            assertEquals(version, stored!!.version)
+        }
+        // a version above this phone's is kept in the Data Layer, never stored
+        assertEquals(ModWatchIntake.Outcome.KEEP,
+            ModWatchIntake.outcome(ModHealthBatch.Decoded.Newer(ModHealthBatch.VERSION + 1)) { true })
+    }
+
+    @Test
     fun theListenerHandsTheItemsOverAndReturnsWithoutWriting() {
         val queued = mutableListOf<Runnable>()
         val later = Executor { queued += it }
@@ -167,7 +209,7 @@ class ModWatchIntakeTest {
     fun todayIsTheLastTotalOfTodayTheLastHeartRateAndBattery() {
         val now = at(12, 0)
         val s = ModWatchIntake.summary(
-            latestHr5 = row(ModHealthBatch.KIND_HR5, at(11, 50), 71.6, "n=40;min=60;max=80"),
+            latestHeartRate = row(ModHealthBatch.KIND_HR5, at(11, 50), 71.6, "n=40;min=60;max=80"),
             latestSteps = row(ModHealthBatch.KIND_STEPS_DAY, at(11, 55), 5432.0, at(0, 0).toString()),
             latestBattery = row(ModHealthBatch.KIND_BATTERY, at(11, 55), 81.0, ModHealthBatch.CHARGING),
             lastBatchAt = at(11, 56), nowMs = now, zone = zone,
@@ -179,6 +221,24 @@ class ModWatchIntakeTest {
         assertTrue(s.watchCharging)
         assertEquals(at(11, 56), s.lastBatchAt)
         assertFalse(s.empty)
+    }
+
+    @Test
+    fun theLastHeartRateIsTheNewestOneMinuteOrFiveMinuteRow() {
+        val hr1 = row(ModHealthBatch.KIND_HR1, at(11, 58), 64.4, "n=60;min=60;max=70")
+        val hr5 = row(ModHealthBatch.KIND_HR5, at(11, 50), 71.6, "n=40;min=60;max=80")
+        assertEquals(hr1, ModWatchIntake.newestHeartRate(hr1, hr5))
+        assertEquals(hr5, ModWatchIntake.newestHeartRate(hr1.copy(at = at(11, 45)), hr5)) // an older watch app again
+        val sameStart = hr1.copy(at = at(11, 50))
+        assertEquals(sameStart, ModWatchIntake.newestHeartRate(sameStart, hr5)) // same start: the new kind
+        assertEquals(hr5, ModWatchIntake.newestHeartRate(null, hr5))
+        assertEquals(hr1, ModWatchIntake.newestHeartRate(hr1, null))
+        assertNull(ModWatchIntake.newestHeartRate(null, null))
+        val s = ModWatchIntake.summary(hr1, null, null, null, at(12, 0), zone)
+        assertEquals(64, s.heartRate)
+        assertEquals(at(11, 58), s.heartRateAt)
+        // a row of another kind is never shown as heart rate
+        assertNull(ModWatchIntake.summary(row(ModHealthBatch.KIND_BATTERY, at(11, 58), 64.0), null, null, null, at(12, 0), zone).heartRate)
     }
 
     @Test

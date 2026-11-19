@@ -53,12 +53,15 @@ class FaceStyleTest {
     }
 
     @Test
-    fun theDimNumberIsRegularAndDimmerThanTheRest() {
-        // part 7c, critic 7, S2: the largest lit area of the always-on screen
+    fun theDimNumberIsRegularAndAsLightAsTheArrow() {
+        // part 7c, critic 7, S2: the largest lit area of the always-on screen - regular weight
         assertTrue(normal.valueBold)
         assertFalse(ambient.valueBold)
         val green = 0xFF33CC66.toInt()
-        assertTrue(brightness(ambient.valueColor(green)) < brightness(ambient.arrowColor(green)))
+        // part 7j, the owner on the watch: "too dim" - the number as light as the arrow, lighter than the dots
+        assertEquals(FaceStyle.dim(green, FaceStyle.AMBIENT_VALUE_DIM), ambient.valueColor(green))
+        assertEquals(brightness(ambient.arrowColor(green)), brightness(ambient.valueColor(green)))
+        assertTrue(brightness(ambient.traceColor(green)) < brightness(ambient.valueColor(green)))
         // part 7e: the dim arrow lighter than the dots (a dark red one sank into the black), still dimmed
         assertTrue(brightness(ambient.traceColor(green)) < brightness(ambient.arrowColor(green)))
         assertTrue(brightness(ambient.arrowColor(green)) < brightness(green))
@@ -81,11 +84,13 @@ class FaceStyleTest {
         assertTrue(brightness(ambient.batteryWarn) < brightness(normal.batteryWarn))
         val warn = normal.batteryWarn
         assertTrue(((warn shr 16) and 0xFF) > 200 && ((warn shr 8) and 0xFF) > 150 && (warn and 0xFF) < 120)
-        // the dim mode shows a battery only when it is red
-        assertTrue(FaceIcons.shown(29, ambient = true))
-        assertFalse(FaceIcons.shown(30, ambient = true))
+        // a known battery is shown in both modes (part 7j), an unknown one in neither
+        assertTrue(FaceIcons.shown(29, ambient = true) && FaceIcons.shown(30, ambient = true))
+        assertTrue(FaceIcons.shown(100, ambient = true))
         assertTrue(FaceIcons.shown(30, ambient = false) && FaceIcons.shown(100, ambient = false))
         assertFalse(FaceIcons.shown(null, ambient = false))
+        assertFalse(FaceIcons.shown(null, ambient = true))
+        assertFalse(FaceIcons.shown(101, ambient = true))
     }
 
     @Test

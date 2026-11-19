@@ -10,8 +10,8 @@ import tk.glucodata.mod.watch.ModWatchMessages
  *
  * A batch is four arrays of one length - kind, time (ms of the epoch, watch clock), value, extra - plus the format
  * version ([VERSION]), the batch number [seq] (grows from 1 and survives a restart of the watch process) and the watch
- * time it was sent. The watch puts only the kinds in [KINDS] (5-minute heart rate means, the day's step count, the
- * watch battery and the status line): Data Layer items may travel through Google's servers when the phone is far
+ * time it was sent. The watch puts only the kinds in [KINDS] (1-minute heart rate means - 5-minute ones from an older
+ * watch app -, the day's step count, the watch battery and the status line): Data Layer items may travel through Google's servers when the phone is far
  * away (watch plan, "Risks"). A batch stays under [MAX_BYTES] (a Data Layer item holds 100 KB); [chunks] cuts a queue
  * into such pieces.
  */
@@ -23,8 +23,9 @@ data class ModHealthBatch(
 ) {
 
     /**
-     * One row of a batch. [KIND_HR5]: [timeMs] - start of the 5-minute window (aligned to the clock), [value] - mean
-     * beats per minute, [extra] - `n=<count>;min=<bpm>;max=<bpm>`. [KIND_STEPS_DAY]: [timeMs] - end of the count,
+     * One row of a batch. [KIND_HR1]: [timeMs] - start of the 1-minute window (aligned to the clock), [value] - mean
+     * beats per minute, [extra] - `n=<count>;min=<bpm>;max=<bpm>`. [KIND_HR5]: the same for a 5-minute window (watch
+     * apps before Watch 7i; still read, never mixed with [KIND_HR1] - another kind is another row). [KIND_STEPS_DAY]: [timeMs] - end of the count,
      * [value] - steps since the start of the watch's day, [extra] - that start (ms of the epoch). [KIND_BATTERY]:
      * [value] - watch battery percent, [extra] - [CHARGING] or empty. [KIND_STATUS]: [value] 0, [extra] -
      * `key=value;...` (app version, sdk, permissions, subscription, ages of the last delivery; never heart rate or
@@ -35,10 +36,11 @@ data class ModHealthBatch(
      *   dropped whole before its rows are read;
      * - a row equal to one already taken in every field (kind, time, value, extra) is a repeat - an outbox file sent
      *   again after a failed send goes out under new batch numbers - and is dropped;
-     * - two [KIND_HR5] rows with the same start but other numbers are one window: the second holds readings that came
-     *   after the watch closed it (counted in the status as `late=`); they are merged by their counts ([mergeHr5]:
-     *   mean = (m1*n1 + m2*n2) / (n1 + n2), min and max of both). Other kinds keep the first row of a time.
-     *   A late [KIND_HR5] row equal in every field to one already taken (likely with `n=1` and a whole bpm) is taken
+     * - two heart rate rows ([HR_KINDS]) of one kind with the same start but other numbers are one window: the second
+     *   holds readings that came after the watch closed it (counted in the status as `late=`); they are merged by
+     *   their counts ([mergeHeartRate]: mean = (m1*n1 + m2*n2) / (n1 + n2), min and max of both). Other kinds keep the
+     *   first row of a time.
+     *   A late heart rate row equal in every field to one already taken (likely with `n=1` and a whole bpm) is taken
      *   for a repeat by the rule above: the mean stays right, only that reading is missing from `n` - accepted
      *   (critic 5, N-5-8).
      * Step totals go into steps between readings by [stepsDelta].
@@ -63,11 +65,23 @@ data class ModHealthBatch(
     fun values(): FloatArray = samples.map { it.value }.toFloatArray()
     fun extras(): Array<String> = samples.map { it.extra }.toTypedArray()
 
-    /** The rows of the kinds this code knows ([KINDS]); a newer watch of the same version may add others. */
+    /**
+     * The rows of the kinds this code knows ([KINDS]); a newer watch of the same version may add others. A kind whose
+     * loss matters goes with a new [VERSION] instead (as [KIND_HR1] did), so an older phone keeps the batch.
+     */
     fun knownSamples(): List<Sample> = samples.filter { it.kind in KINDS }
 
     companion object {
-        const val VERSION = 1
+        /**
+         * The format this code writes. 2 from Watch 7i (critic 7k, C1): its batches carry [KIND_HR1] rows, which a
+         * phone app before 7i would drop without a word while deleting the batch - for such a phone a version above
+         * its own 1 is [Decoded.Newer], left in the Data Layer until the phone app is updated (its drain takes it
+         * then). Read: [MIN_VERSION] (watch apps before 7i, `hr5`) up to this.
+         */
+        const val VERSION = 2
+
+        /** The oldest format still read: 1, the watch apps before Watch 7i. */
+        const val MIN_VERSION = 1
 
         const val KEY_VERSION = "v"
         const val KEY_SEQ = "seq"
@@ -77,13 +91,22 @@ data class ModHealthBatch(
         const val KEY_VALUE = "value"
         const val KEY_EXTRA = "extra"
 
+        /** Heart rate mean of 1 minute (the watch from Watch 7i). */
+        const val KIND_HR1 = "hr1"
+
+        /** Heart rate mean of 5 minutes (watch apps before Watch 7i; the phone still takes it). */
         const val KIND_HR5 = "hr5"
         const val KIND_STEPS_DAY = "steps_day"
         const val KIND_BATTERY = "battery"
         const val KIND_STATUS = "status"
 
         /** The only kinds a batch carries. */
-        val KINDS: Set<String> = setOf(KIND_HR5, KIND_STEPS_DAY, KIND_BATTERY, KIND_STATUS)
+        val KINDS: Set<String> = setOf(KIND_HR1, KIND_HR5, KIND_STEPS_DAY, KIND_BATTERY, KIND_STATUS)
+
+        /** The heart rate mean kinds: one extra format, merged by the counts within one kind ([mergeHeartRate]). */
+        val HR_KINDS: Set<String> = setOf(KIND_HR1, KIND_HR5)
+
+        fun isHeartRate(kind: String): Boolean = kind in HR_KINDS
 
         /** Extra of a [KIND_BATTERY] row when the watch is on its charger. */
         const val CHARGING = "charging"
@@ -107,7 +130,8 @@ data class ModHealthBatch(
             ModHealthBatch(seq, sentAtMs, samples.filter { it.kind in KINDS })
 
         /**
-         * A batch from its fields as an item holds them. A version above [VERSION] is [Decoded.Newer]; version 0 (a
+         * A batch from its fields as an item holds them. Versions [MIN_VERSION]..[VERSION] are read (1 and 2 alike: the
+         * fields are the same, 2 only adds [KIND_HR1]); a version above [VERSION] is [Decoded.Newer]; version 0 (a
          * missing key), a missing array, arrays of different lengths, a null kind or a broken header are
          * [Decoded.Broken] - never an exception.
          */
@@ -121,7 +145,7 @@ data class ModHealthBatch(
             extras: Array<out String?>?,
         ): Decoded {
             if (version > VERSION) return Decoded.Newer(version)
-            if (version < 1) return Decoded.Broken("version")
+            if (version < MIN_VERSION) return Decoded.Broken("version")
             if (kinds == null || times == null || values == null || extras == null) return Decoded.Broken("missing")
             val n = kinds.size
             if (times.size != n || values.size != n || extras.size != n) return Decoded.Broken("lengths")
@@ -197,10 +221,13 @@ data class ModHealthBatch(
         fun stepsDelta(previous: StepsTotal, current: StepsTotal): Double =
             (if (isNewDay(previous, current)) current.total else current.total - previous.total).coerceAtLeast(0.0)
 
-        /** The extra of a [KIND_HR5] row: `n=<count>;min=<bpm>;max=<bpm>` (the watch builds it, the phone reads it). */
+        /**
+         * The extra of a heart rate row ([KIND_HR1], [KIND_HR5]): `n=<count>;min=<bpm>;max=<bpm>` (the watch builds it,
+         * the phone reads it).
+         */
         fun hr5Extra(n: Int, min: Int, max: Int): String = "n=$n;min=$min;max=$max"
 
-        /** The counts of a [KIND_HR5] extra; `null` when `n` is missing or not above 0, or min/max are missing. */
+        /** The counts of a heart rate extra ([HR_KINDS]); `null` when `n` is missing or not above 0, or min/max are missing. */
         fun parseHr5Extra(extra: String?): Hr5? {
             if (extra.isNullOrEmpty()) return null
             val fields = extra.split(';').mapNotNull { part ->
@@ -214,22 +241,23 @@ data class ModHealthBatch(
         }
 
         /**
-         * One window from two [KIND_HR5] rows of the same start ([a] taken first, [b] the late readings): the mean
-         * weighted by the counts, the counts added, min and max of both. `null` when they are not two such rows or an
-         * extra cannot be read (the caller keeps [a]).
+         * One window from two heart rate rows of one kind ([HR_KINDS]) and the same start ([a] taken first, [b] the late
+         * readings): the mean weighted by the counts, the counts added, min and max of both. `null` when they are not
+         * two such rows (an [KIND_HR1] and an [KIND_HR5] row never merge) or an extra cannot be read (the caller keeps
+         * [a]).
          */
-        fun mergeHr5(a: Sample, b: Sample): Sample? {
-            if (a.kind != KIND_HR5 || b.kind != KIND_HR5 || a.timeMs != b.timeMs) return null
+        fun mergeHeartRate(a: Sample, b: Sample): Sample? {
+            if (!isHeartRate(a.kind) || a.kind != b.kind || a.timeMs != b.timeMs) return null
             val x = parseHr5Extra(a.extra) ?: return null
             val y = parseHr5Extra(b.extra) ?: return null
             if (!a.value.isFinite() || !b.value.isFinite()) return null
             val n = x.n + y.n
             val mean = (a.value.toDouble() * x.n + b.value.toDouble() * y.n) / n
-            return Sample(KIND_HR5, a.timeMs, mean.toFloat(), hr5Extra(n, minOf(x.min, y.min), maxOf(x.max, y.max)))
+            return Sample(a.kind, a.timeMs, mean.toFloat(), hr5Extra(n, minOf(x.min, y.min), maxOf(x.max, y.max)))
         }
     }
 
-    /** The counts of one 5-minute heart rate window: readings, lowest and highest beats per minute. */
+    /** The counts of one heart rate window (1 or 5 minutes): readings, lowest and highest beats per minute. */
     data class Hr5(val n: Int, val min: Int, val max: Int)
 
     /** A day total of steps: when ([atMs]), how many since the day start ([total]), that start (`null` - unknown). */

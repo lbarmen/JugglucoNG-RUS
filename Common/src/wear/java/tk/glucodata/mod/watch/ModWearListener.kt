@@ -38,6 +38,7 @@ class ModWearListener : WearableListenerService() {
                     }
                     PhoneBatteryStore.save(context, tick, nowMs)
                     HealthTick.onTick(context, nowMs)
+                    NoOngoingActivity.claim()
                     return true
                 }
                 ModWatchMessages.PATH_ALERTS -> return WatchAlertStore.onMessage(context, data)

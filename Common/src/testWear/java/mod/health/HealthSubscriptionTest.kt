@@ -25,7 +25,53 @@ class HealthSubscriptionTest {
         registeredAt: Long = t0,
         lastDataAt: Long = t0,
         attemptAt: Long = t0,
-    ) = HealthSubscription.registerReason(now, perms, permsAt, registered, registeredAt, lastDataAt, attemptAt)
+        failures: Int = 0,
+    ) = HealthSubscription.registerReason(now, perms, permsAt, registered, registeredAt, lastDataAt, attemptAt, failures)
+
+    @Test
+    fun aFailedAttemptWithoutASubscriptionIsTriedAgainOnTheNextTick() {
+        // Watch log 19.11.2026: the boot attempt did not subscribe, and the next one came only 15 minutes later
+        // ("registered reason=new"); now the next tick tries again.
+        assertNull(reason(t0 + 30_000, registered = false, registeredAt = 0, failures = 1)) // at most once a minute
+        assertEquals("new", reason(t0 + minute, registered = false, registeredAt = 0, failures = 1))
+        assertEquals("new", reason(t0 + 5 * minute, registered = false, registeredAt = 0, failures = 1))
+        // nothing allowed: still nothing to retry
+        assertNull(reason(t0 + 5 * minute, perms = none, registered = false, registeredAt = 0, failures = 1))
+        // a failed renewal of a subscription in place keeps the 15-minute pause
+        assertNull(reason(t0 + 5 * minute, lastDataAt = 0, registeredAt = t0 - 13 * hour, failures = 1))
+        assertEquals("NoTypes", HealthSubscription.ERROR_NO_TYPES)
+    }
+
+    @Test
+    fun aFailureThatStaysWaitsLongerEachTime() {
+        // critic 7k, N2: 1 min, 5 min, then the 15 minutes every attempt waited before 7i
+        assertEquals(minute, HealthSubscription.retryGap(1))
+        assertEquals(5 * minute, HealthSubscription.retryGap(2))
+        assertEquals(15 * minute, HealthSubscription.retryGap(3))
+        assertEquals(15 * minute, HealthSubscription.retryGap(40))
+        assertNull(reason(t0 + 4 * minute, registered = false, registeredAt = 0, failures = 2))
+        assertEquals("new", reason(t0 + 5 * minute, registered = false, registeredAt = 0, failures = 2))
+        assertNull(reason(t0 + 14 * minute, registered = false, registeredAt = 0, failures = 3))
+        assertEquals("new", reason(t0 + 15 * minute, registered = false, registeredAt = 0, failures = 3))
+    }
+
+    @Test
+    fun theFailuresInARowAndTheErrorsOfAnEmptyOffer() {
+        assertEquals(1, HealthSubscription.failuresAfter(0, "TimeoutException"))
+        assertEquals(3, HealthSubscription.failuresAfter(2, "NoTypes"))
+        assertEquals(0, HealthSubscription.failuresAfter(5, "")) // subscribed, or nothing allowed
+        assertEquals("NoTypes", HealthSubscription.errorForNoTypes(permsAny = true))
+        assertEquals("", HealthSubscription.errorForNoTypes(permsAny = false))
+    }
+
+    @Test
+    fun theAllowedKindsNotOfferedAreNamed() {
+        // critic 7k, N1: the subscription goes on with the rest, the watch log names what is missing
+        assertEquals("", HealthSubscription.missingTypes(all, offeredHr = true, offeredSteps = true))
+        assertEquals("steps", HealthSubscription.missingTypes(all, offeredHr = true, offeredSteps = false))
+        assertEquals("hr,steps", HealthSubscription.missingTypes(all, offeredHr = false, offeredSteps = false))
+        assertEquals("", HealthSubscription.missingTypes(none, offeredHr = false, offeredSteps = false)) // not allowed
+    }
 
     @Test
     fun onlyFromAndroid11() {

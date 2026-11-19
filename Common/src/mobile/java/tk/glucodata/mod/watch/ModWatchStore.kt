@@ -208,7 +208,7 @@ object ModWatchStore {
         val dao = db(context)?.dao() ?: return null
         val (dayStart, dayEnd) = ModWatchIntake.dayBounds(nowMs, zone)
         return ModWatchIntake.summary(
-            latestHr5 = dao.latest(ModHealthBatch.KIND_HR5),
+            latestHeartRate = ModWatchIntake.newestHeartRate(dao.latest(ModHealthBatch.KIND_HR1), dao.latest(ModHealthBatch.KIND_HR5)),
             latestSteps = dao.latestBetween(ModHealthBatch.KIND_STEPS_DAY, dayStart, dayEnd),
             latestBattery = dao.latest(ModHealthBatch.KIND_BATTERY),
             lastBatchAt = dao.lastReceivedAt(),

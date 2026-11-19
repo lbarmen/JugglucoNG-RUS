@@ -24,6 +24,10 @@ class HealthCore(
     private val hrLock = Any()
     private val hr: HrAggregator = HrAggregator.decode(state.hrBuckets, state.hrClosedUntil)
 
+    init {
+        queueOldFiveMinuteWindows()
+    }
+
     private val eventLock = Object()
     private var events = 0L
 
@@ -31,7 +35,8 @@ class HealthCore(
     val openHeartRateWindows: Int get() = synchronized(hrLock) { hr.openCount }
 
     /**
-     * Adds heart rate readings and closes the windows ended [graceMs] before [nowMs]; the closed means go to the queue
+     * Adds heart rate readings and closes the windows ended [graceMs] before [nowMs] or by the newest of these readings
+     * ([coveredUntil]: the delivery holds everything up to it); the closed means go to the queue
      * first and only then leave the kept open windows, so the process dying in between repeats a mean instead of
      * losing it. After the restart the window comes back from the last saved [HealthState.hrBuckets] (written with
      * `apply()`, so it may be older than the queued mean) and closes again: with the same readings it is the same row
@@ -43,7 +48,7 @@ class HealthCore(
     fun addHeartRate(readings: List<HealthIntake.HeartRate>, nowMs: Long, graceMs: Long): Int = synchronized(hrLock) {
         var late = 0
         readings.forEach { if (hr.add(it.timeMs, it.bpm, it.noContact)) late++ }
-        val closed = hr.close(nowMs, graceMs)
+        val closed = hr.close(nowMs, graceMs, coveredUntil(readings, nowMs))
         buffer.append(closed)
         state.hrBuckets = hr.encode()
         state.hrClosedUntil = hr.closedUntil
@@ -56,6 +61,22 @@ class HealthCore(
 
     /** Closes the heart rate windows ended [graceMs] before [nowMs] into the queue; returns how many. */
     fun closeHeartRate(nowMs: Long, graceMs: Long): Int = addHeartRate(emptyList(), nowMs, graceMs)
+
+    /**
+     * Once after an update from a watch app before Watch 7i: its open 5-minute windows ([HealthState.hrBucketsOld5])
+     * go to the queue as they are, as `hr5` rows the phone still takes (their readings stay 5-minute means; the rest of
+     * such a window comes as 1-minute rows). Queue first, then the old key is emptied (a death in between repeats the
+     * rows, which the phone drops as repeats).
+     */
+    private fun queueOldFiveMinuteWindows() {
+        val old = state.hrBucketsOld5
+        if (old.isEmpty()) return
+        val rows = HrAggregator.decode(old, windowMs = OLD_HR5_WINDOW_MS, kind = ModHealthBatch.KIND_HR5)
+            .close(nowMs = Long.MAX_VALUE, graceMs = 0L)
+        buffer.append(rows)
+        state.hrBucketsOld5 = ""
+        if (rows.isNotEmpty()) ModWatchLog.i("health old hr5 windows queued=${rows.size}")
+    }
 
     /** The number of deliveries so far (a hand-over waits for it to change after a flush). */
     fun dataEvents(): Long = synchronized(eventLock) { events }
@@ -88,6 +109,17 @@ class HealthCore(
     companion object {
         /** Our queue folder in the app's no-backup storage. */
         const val DIR = "mod_health"
+
+        /** The heart rate window of watch apps before Watch 7i. */
+        const val OLD_HR5_WINDOW_MS = 5 * 60_000L
+
+        /**
+         * The newest reading time of a delivery ([readings], skipped ones too: the sensor was read then), never after
+         * [nowMs] (a reading stamped in the future must not close windows early); [Long.MIN_VALUE] - no readings.
+         * The windows ended by then are complete ([HrAggregator.close]).
+         */
+        fun coveredUntil(readings: List<HealthIntake.HeartRate>, nowMs: Long): Long =
+            readings.maxOfOrNull { it.timeMs }?.coerceAtMost(nowMs) ?: Long.MIN_VALUE
 
         @Volatile
         private var shared: HealthCore? = null

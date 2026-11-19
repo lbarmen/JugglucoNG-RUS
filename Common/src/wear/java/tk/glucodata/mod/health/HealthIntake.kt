@@ -7,9 +7,10 @@ import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (part 4): data from the source ([HealthSource], Health Services in part 4b) into the
- * queue. Heart rate goes into 5-minute means ([HrAggregator]); the day's step count goes as it is - the phone counts
+ * queue. Heart rate goes into 1-minute means ([HrAggregator]); the day's step count goes as it is - the phone counts
  * the differences of totals within one day (part 5, [ModHealthBatch.stepsDelta]). After a delivery a batch goes by
- * itself only when none went for [HealthConfig.SEND_PERIOD_MS] - the 5-minute rhythm is the phone's `/mod/tick`.
+ * itself when none went (or was tried) for [HealthConfig.SEND_AFTER_DATA_GAP_MS] - so the closed minutes leave with
+ * the delivery that closed them; the phone's 5-minute `/mod/tick` is the fallback.
  */
 object HealthIntake {
 
@@ -58,8 +59,8 @@ object HealthIntake {
     }
 
     /**
-     * Queues one delivery received at [nowMs]: heart rate into the means (windows ended 2 minutes ago close), valid step
-     * counts as they are. Returns how many rows went to the queue now.
+     * Queues one delivery received at [nowMs]: heart rate into the means (windows ended by the delivery's newest reading
+     * or 2 minutes ago close), valid step counts as they are. Returns how many rows went to the queue now.
      */
     fun deliverNow(core: HealthCore, heartRate: List<HeartRate>, steps: List<StepsDay>, nowMs: Long): Int {
         if (heartRate.isEmpty() && steps.isEmpty()) return 0
@@ -68,7 +69,7 @@ object HealthIntake {
         val stepRows = steps.mapNotNull { stepsRow(it) }
         core.buffer.append(stepRows)
         core.signalData()
-        ModWatchLog.i("health data hr=${heartRate.size} hr5=$means steps=${stepRows.size}")
+        ModWatchLog.i("health data hr=${heartRate.size} hr1=$means steps=${stepRows.size}")
         return means + stepRows.size
     }
 
