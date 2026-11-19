@@ -86,9 +86,12 @@ internal class FaceIcons {
         /** The icon's width for its [height]. */
         fun width(kind: Kind, height: Float): Float = height * if (kind == Kind.PHONE) 0.52f else 0.62f
 
-        /** A battery has an icon: its percent is known and, in the dim mode, low. */
-        fun shown(percent: Int?, ambient: Boolean): Boolean =
-            percent != null && percent in 0..100 && (!ambient || isLow(percent))
+        /**
+         * A battery has an icon when its percent is known - in the dim mode too (owner's request 19.11.2026, part 7j;
+         * before it the dim mode showed only a low one). [ambient] stays for the callers.
+         */
+        @Suppress("UNUSED_PARAMETER")
+        fun shown(percent: Int?, ambient: Boolean): Boolean = percent != null && percent in 0..100
 
         fun isLow(percent: Int): Boolean = percent < LOW_PERCENT
 

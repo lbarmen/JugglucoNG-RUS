@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.net.Uri
 import tk.glucodata.mod.health.HealthSources
 import tk.glucodata.mod.watch.ModWatchLog
+import tk.glucodata.mod.watch.NoOngoingActivity
 
 /**
  * JugglucoNGmod, watch block (part 4b): starts our heart rate and steps code with the watch process, without a hook in
@@ -24,6 +25,8 @@ class ModHealthStarter : ContentProvider() {
         } catch (t: Throwable) {
             ModWatchLog.w("health source not registered: ${t.javaClass.simpleName}")
         }
+        // part 7j: no ongoing activity (no white dot on the watch faces) - after upstream's registration in onCreate
+        NoOngoingActivity.claimAfterStart()
         return true
     }
 
