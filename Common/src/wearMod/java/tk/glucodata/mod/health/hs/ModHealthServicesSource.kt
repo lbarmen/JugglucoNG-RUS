@@ -47,7 +47,7 @@ object ModHealthServicesSource : HealthSource {
             registeredAt = state.registeredAt,
             lastDataAt = state.lastDataAt,
             attemptAt = state.registerAttemptAt,
-            attemptFailed = state.registerError.isNotEmpty(),
+            failures = state.registerFailures,
         ) ?: return
         register(context, reason)
     }
@@ -69,6 +69,12 @@ object ModHealthServicesSource : HealthSource {
                 hr = DataType.HEART_RATE_BPM in types,
                 steps = DataType.STEPS_DAILY in types,
             )
+            val missing = HealthSubscription.missingTypes(
+                perms,
+                offeredHr = DataType.HEART_RATE_BPM in supported,
+                offeredSteps = DataType.STEPS_DAILY in supported,
+            )
+            if (missing.isNotEmpty()) ModWatchLog.w("health types not offered reason=$reason missing=$missing offered=${names.ifEmpty { "-" }}")
             if (types.isEmpty()) {
                 // Nothing allowed or nothing the watch can give: drop an old subscription so it never runs unseen.
                 if (state.registeredTypes.isNotEmpty()) {
@@ -77,8 +83,8 @@ object ModHealthServicesSource : HealthSource {
                 state.registeredTypes = ""
                 state.registeredPerms = perms.short()
                 // Allowed but nothing offered (Health Services not ready yet after boot, Watch 7i): a failure, tried
-                // again on the next tick; nothing allowed: no error, nothing to retry.
-                state.registerError = if (perms.any) HealthSubscription.ERROR_NO_TYPES else ""
+                // again; nothing allowed: no error, nothing to retry.
+                HealthSubscription.noteAttempt(state, HealthSubscription.errorForNoTypes(perms.any))
                 ModWatchLog.i("health register skipped reason=$reason perms=${perms.short()} supported=${supported.size}")
                 return@synchronized false
             }
@@ -88,11 +94,11 @@ object ModHealthServicesSource : HealthSource {
             state.registeredAt = core.clock()
             state.registeredTypes = names
             state.registeredPerms = perms.short()
-            state.registerError = ""
+            HealthSubscription.noteAttempt(state, "")
             ModWatchLog.i("health registered reason=$reason types=$names perms=${perms.short()}")
             true
         } catch (t: Throwable) {
-            state.registerError = t.javaClass.simpleName
+            HealthSubscription.noteAttempt(state, t.javaClass.simpleName)
             ModWatchLog.w("health register failed reason=$reason: ${t.javaClass.simpleName}")
             false
         }

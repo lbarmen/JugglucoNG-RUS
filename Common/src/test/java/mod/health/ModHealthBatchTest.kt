@@ -61,7 +61,10 @@ class ModHealthBatchTest {
     @Test
     fun newerVersionIsLeftAloneVersionZeroIsBroken() {
         val b = ModHealthBatch(1, at, rows)
-        assertEquals(Decoded.Newer(2), ModHealthBatch.decode(2, 1, at, b.kinds(), b.times(), b.values(), b.extras()))
+        assertEquals(Decoded.Newer(3), ModHealthBatch.decode(3, 1, at, b.kinds(), b.times(), b.values(), b.extras()))
+        // the watch apps before 7i (1) and from 7i (2) are both read
+        assertEquals(Decoded.Ok(ModHealthBatch(1, at, rows, 1)), ModHealthBatch.decode(1, 1, at, b.kinds(), b.times(), b.values(), b.extras()))
+        assertEquals(Decoded.Ok(ModHealthBatch(1, at, rows, 2)), ModHealthBatch.decode(2, 1, at, b.kinds(), b.times(), b.values(), b.extras()))
         assertEquals(Decoded.Broken("version"), ModHealthBatch.decode(0, 1, at, b.kinds(), b.times(), b.values(), b.extras()))
     }
 
@@ -78,7 +81,7 @@ class ModHealthBatchTest {
     fun nullExtraBecomesEmpty() {
         val extras: Array<String?> = arrayOf(null)
         val decoded = ModHealthBatch.decode(1, 3, at, arrayOf("hr5"), longArrayOf(at), floatArrayOf(66f), extras)
-        assertEquals(Decoded.Ok(ModHealthBatch(3, at, listOf(Sample("hr5", at, 66f, "")))), decoded)
+        assertEquals(Decoded.Ok(ModHealthBatch(3, at, listOf(Sample("hr5", at, 66f, "")), version = 1)), decoded)
     }
 
     @Test
@@ -92,21 +95,24 @@ class ModHealthBatchTest {
     }
 
     @Test
-    fun aPhoneAppBeforeOneMinuteRowsDropsThemAndTakesTheRest() {
-        // Watch 7i adds hr1 rows within format version 1: a phone app before it reads the batch (not broken, not
-        // newer) and its knownSamples - the same filter with its own kinds - leaves the hr1 rows out without a word.
+    fun batchesWithOneMinuteRowsGoAsVersion2SoAnOlderPhoneKeepsThem() {
+        // Critic 7k, C1: a phone app before 7i (its VERSION 1) drops hr1 rows in knownSamples and deletes the batch.
+        // Its decode returns Newer for any version above 1 (git show 0dd952f2c: ModHealthBatch.decode), and its
+        // ModWatchStore.receive leaves a Newer item in the Data Layer (ModWatchIntake.outcome -> KEEP, noteNewer) -
+        // so the batch waits there until the phone app is updated.
+        val versionBefore7i = 1
         val hr1 = Sample(ModHealthBatch.KIND_HR1, at, 64f, "n=58;min=60;max=70")
         val batch = ModHealthBatch.forSending(9, at, listOf(hr1) + rows)
         assertEquals(hr1, batch.samples.first()) // the new watch sends it
-        assertEquals(1, batch.version)
-        val read = (decode(batch) as Decoded.Ok).batch
-        val kindsBefore7i = setOf("hr5", "steps_day", "battery", "status")
-        assertEquals(rows, read.samples.filter { it.kind in kindsBefore7i })
-        // and this phone takes it
-        assertEquals(listOf(hr1) + rows, read.knownSamples())
+        assertEquals(2, batch.version)
         val map = DataMap()
         ModHealthDataMap.write(batch, map)
-        assertEquals(Decoded.Ok(batch), ModHealthDataMap.read(map))
+        val written = map.getInt(ModHealthBatch.KEY_VERSION, 0)
+        assertTrue(written > versionBefore7i) // what the older phone compares with its own version
+        // this phone reads it whole
+        val read = ModHealthDataMap.read(map)
+        assertEquals(Decoded.Ok(batch), read)
+        assertEquals(listOf(hr1) + rows, (read as Decoded.Ok).batch.knownSamples())
     }
 
     @Test

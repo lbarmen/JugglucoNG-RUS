@@ -162,6 +162,24 @@ class ModWatchIntakeTest {
     }
 
     @Test
+    fun aVersion2BatchWithOneMinuteRowsAndAVersion1BatchAreBothStored() {
+        // critic 7k, C1: the watch from 7i writes version 2; watch apps before it wrote version 1
+        val hr1 = hr(64f, 58, 60, 70).copy(kind = ModHealthBatch.KIND_HR1)
+        for ((version, row) in listOf(2 to hr1, 1 to hr(72f, 50, 60, 85))) {
+            val batch = ModHealthBatch(5, received, listOf(row), version)
+            val map = DataMap()
+            ModHealthDataMap.write(batch, map)
+            var stored: ModHealthBatch? = null
+            assertEquals(ModWatchIntake.Outcome.DELETE, ModWatchIntake.outcome(ModHealthDataMap.read(map)) { stored = it; true })
+            assertEquals(listOf(row), stored!!.knownSamples())
+            assertEquals(version, stored!!.version)
+        }
+        // a version above this phone's is kept in the Data Layer, never stored
+        assertEquals(ModWatchIntake.Outcome.KEEP,
+            ModWatchIntake.outcome(ModHealthBatch.Decoded.Newer(ModHealthBatch.VERSION + 1)) { true })
+    }
+
+    @Test
     fun theListenerHandsTheItemsOverAndReturnsWithoutWriting() {
         val queued = mutableListOf<Runnable>()
         val later = Executor { queued += it }

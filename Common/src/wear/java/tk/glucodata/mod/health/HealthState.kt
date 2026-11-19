@@ -65,6 +65,9 @@ class HealthState(context: Context) {
     var registerAttemptAt by long("registerAttemptAt")
     var registerError by string("registerError")
 
+    /** Failed subscription attempts in a row (0 after a good one): the pause before the next grows with it. */
+    var registerFailures by int("registerFailures", 0)
+
     /** The page asked for the background permission once (the next time it opens the app settings instead). */
     var askedBackground by boolean("askedBackground")
 

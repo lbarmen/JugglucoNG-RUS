@@ -66,13 +66,22 @@ data class ModHealthBatch(
     fun extras(): Array<String> = samples.map { it.extra }.toTypedArray()
 
     /**
-     * The rows of the kinds this code knows ([KINDS]); a newer watch of the same version may add others (a phone app
-     * before Watch 7i drops [KIND_HR1] rows here without a word and takes the rest of the batch).
+     * The rows of the kinds this code knows ([KINDS]); a newer watch of the same version may add others. A kind whose
+     * loss matters goes with a new [VERSION] instead (as [KIND_HR1] did), so an older phone keeps the batch.
      */
     fun knownSamples(): List<Sample> = samples.filter { it.kind in KINDS }
 
     companion object {
-        const val VERSION = 1
+        /**
+         * The format this code writes. 2 from Watch 7i (critic 7k, C1): its batches carry [KIND_HR1] rows, which a
+         * phone app before 7i would drop without a word while deleting the batch - for such a phone a version above
+         * its own 1 is [Decoded.Newer], left in the Data Layer until the phone app is updated (its drain takes it
+         * then). Read: [MIN_VERSION] (watch apps before 7i, `hr5`) up to this.
+         */
+        const val VERSION = 2
+
+        /** The oldest format still read: 1, the watch apps before Watch 7i. */
+        const val MIN_VERSION = 1
 
         const val KEY_VERSION = "v"
         const val KEY_SEQ = "seq"
@@ -121,7 +130,8 @@ data class ModHealthBatch(
             ModHealthBatch(seq, sentAtMs, samples.filter { it.kind in KINDS })
 
         /**
-         * A batch from its fields as an item holds them. A version above [VERSION] is [Decoded.Newer]; version 0 (a
+         * A batch from its fields as an item holds them. Versions [MIN_VERSION]..[VERSION] are read (1 and 2 alike: the
+         * fields are the same, 2 only adds [KIND_HR1]); a version above [VERSION] is [Decoded.Newer]; version 0 (a
          * missing key), a missing array, arrays of different lengths, a null kind or a broken header are
          * [Decoded.Broken] - never an exception.
          */
@@ -135,7 +145,7 @@ data class ModHealthBatch(
             extras: Array<out String?>?,
         ): Decoded {
             if (version > VERSION) return Decoded.Newer(version)
-            if (version < 1) return Decoded.Broken("version")
+            if (version < MIN_VERSION) return Decoded.Broken("version")
             if (kinds == null || times == null || values == null || extras == null) return Decoded.Broken("missing")
             val n = kinds.size
             if (times.size != n || values.size != n || extras.size != n) return Decoded.Broken("lengths")
