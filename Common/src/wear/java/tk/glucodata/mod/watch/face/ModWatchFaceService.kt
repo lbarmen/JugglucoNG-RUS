@@ -1,5 +1,6 @@
 package tk.glucodata.mod.watch.face
 
+import android.graphics.Color
 import android.view.SurfaceHolder
 import androidx.wear.watchface.ComplicationSlot
 import androidx.wear.watchface.ComplicationSlotsManager
@@ -35,6 +36,16 @@ class ModWatchFaceService : WatchFaceService() {
     ): WatchFace {
         val renderer = ModFaceRenderer(applicationContext, surfaceHolder, watchState, currentUserStyleRepository)
         return WatchFace(WatchFaceType.DIGITAL, renderer).setTapListener(Taps(renderer))
+            // part 7j: the system's icons over this face in a dim grey - above all upstream's ongoing activity icon
+            // at the bottom (a tap opens their app), which Wear OS draws bright white whatever their `novalue`
+            // looks like (our faint copy did not help on the watch); the owner asked for it to be barely visible.
+            // Only on system UIs that honour the overlay style.
+            .setOverlayStyle(WatchFace.OverlayStyle(null, Color.valueOf(OVERLAY_FOREGROUND)))
+    }
+
+    companion object {
+        /** The colour of the system's overlay icons on this face: a dim grey on the black face. */
+        const val OVERLAY_FOREGROUND = 0xFF333333.toInt()
     }
 
     private class Taps(private val renderer: ModFaceRenderer) : WatchFace.TapListener {
