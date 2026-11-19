@@ -13,6 +13,7 @@ import androidx.wear.watchface.WatchState
 import androidx.wear.watchface.style.CurrentUserStyleRepository
 import java.time.ZonedDateTime
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +27,7 @@ import kotlinx.coroutines.launch
 import tk.glucodata.UiRefreshBus
 import tk.glucodata.glucosecomplication.ComplicationRenderer
 import tk.glucodata.mod.watch.ModWatchLog
+import tk.glucodata.mod.watch.SignalBudget
 
 /**
  * JugglucoNGmod, watch block (parts 3b, 3c): draws our face once a minute (upstream's face: the same 60 s frame),
@@ -34,16 +36,23 @@ import tk.glucodata.mod.watch.ModWatchLog
  *
  * The data ([FaceSource.snapshot]: history, the current value, settings) is heavy, so it is read on a background
  * thread and kept; [render] on the main thread only builds the [FaceModel] for this minute from the kept snapshot
- * and paints it. A kept snapshot older than [STALE_MS] asks for a new one at the next frame. A new reading asks for a
- * read at most once per [MIN_READ_MS] (one more at the end of the pause) and never while the face is not visible
- * (the read waits until it is). The face is drawn again only when what it shows changed - not for the graph window
+ * and paints it. A kept snapshot older than [STALE_MS] asks for a new one at the next frame. A new reading is read at
+ * once, up to [READS_PER_WINDOW] reads in any [READ_WINDOW_MS] (part 7o: the phone's calibration and then its values
+ * come a moment apart each minute; the old "read, then a pause of 20 s" left the value 20 s behind the phone); over
+ * that budget (history catching up) the read waits until the oldest read leaves the window, and never while the face
+ * is not visible (the read waits until it is). The face is drawn again only when what it shows changed - not for the graph window
  * moving on, so the dim mode keeps one frame a minute. Our failure never takes the watch face process down: every
  * step is guarded and the coroutines have a handler that swallows what escapes.
  *
  * The dim mode (part 7c, critic 7, S2 and N8): a kept snapshot there is read again only after [AMBIENT_STALE_MS]
  * (new readings still come through [request]), the picture moves one step a minute ([FaceLayout.burnInOffset]). Its
  * snapshots hold the forecast as well (part 7l: the dim mode draws it). The dots' colours come from the limits kept
- * with the snapshot, not from native calls in every frame (critic 7, N7).
+ * with the snapshot, not from native calls in every frame (critic 7, N7). The dim mode draws only on the system's
+ * minute tick (`postInvalidate` draws nothing there, watchface 1.2.1), so a frame that finds a signal newer than its
+ * kept snapshot (the read not done yet or waiting for the budget) reads the snapshot itself first (part 7o).
+ *
+ * The journal (part 7o, [ModWatchLog], no values, no times of events): `face read` for every read, `face frame` for
+ * the first frame of a new reading - the reading's age in seconds, the read's duration, the mode.
  */
 internal class ModFaceRenderer(
     private val context: Context,
@@ -64,12 +73,18 @@ internal class ModFaceRenderer(
 
     override suspend fun createSharedAssets(): Assets = Assets()
 
-    /** A snapshot with the labels of its time, when it was read (the watch's clock) and the traffic light's limits. */
+    /**
+     * A snapshot with the labels of its time, when it was read (the watch's clock) and the traffic light's limits;
+     * [signal] - the count of [request]s when its read began (a later request: data it may not hold), [order] - the
+     * read's place among all reads (a read that began later is never replaced by one that began earlier).
+     */
     private class Kept(
         val snapshot: FaceSnapshot,
         val labels: FaceLabels,
         val readAtMs: Long,
         val limits: ModFaceSource.Limits?,
+        val signal: Long,
+        val order: Long,
     )
 
     private val scope = CoroutineScope(
@@ -86,8 +101,16 @@ internal class ModFaceRenderer(
 
     /** New data waits for a read ([request]); the read clears it. */
     @Volatile private var dirty = false
-    @Volatile private var lastReadAt = Long.MIN_VALUE / 2
+
+    /** How many [request]s there were (written on the main thread only). */
+    @Volatile private var signals = 0L
+    private val reads = AtomicLong()
+    private val keptLock = Any()
+    private val budget = SignalBudget(READS_PER_WINDOW, READ_WINDOW_MS)
     private val pause = ReadPause(scope)
+
+    /** The time of the reading the journal's last `face frame` line was about. */
+    private var framedReadingMs = Long.MIN_VALUE
 
     /** Kept as a field: preferences hold their listeners weakly. */
     private val settingsListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -109,10 +132,12 @@ internal class ModFaceRenderer(
         }
     }
 
-    /** New data (main thread): a read now, after the pause of [MIN_READ_MS], or once the face is visible again. */
+    /** New data (main thread): a read now, once the budget allows it, or once the face is visible again. */
     private fun request() {
+        signals++
         dirty = true
-        val wait = readWait(watchState.isVisible.value == true, lastReadAt, SystemClock.elapsedRealtime()) ?: return
+        val wait = readWait(watchState.isVisible.value == true, budget.lastRuns(), SystemClock.elapsedRealtime())
+            ?: return
         if (wait <= 0L) refresh()
         else pause.arm(wait) { if (dirty) request() }
     }
@@ -136,22 +161,39 @@ internal class ModFaceRenderer(
         }
     }
 
-    private fun load() {
+    /**
+     * Reads a snapshot and keeps it. [inFrame] - called from [render] (the dim mode): no `postInvalidate`, the frame
+     * draws what this read kept.
+     */
+    private fun load(inFrame: Boolean = false) {
+        val signal = signals
+        val order = reads.incrementAndGet()
         dirty = false
-        lastReadAt = SystemClock.elapsedRealtime()
+        val begin = SystemClock.elapsedRealtime()
+        budget.record(begin)
         val now = System.currentTimeMillis()
         val hours = FaceSettings.hours(context)
         graphHours = hours
         val next = guarded {
             val snapshot = FaceSources.get().snapshot(context, now, hours)
-            Kept(snapshot, FaceLabels.from(context), now, guarded { ModFaceSource.limits(snapshot.isMmol) })
+            Kept(snapshot, FaceLabels.from(context), now, guarded { ModFaceSource.limits(snapshot.isMmol) }, signal,
+                order)
         } ?: return
-        val old = kept
-        kept = next
-        if (old == null || old.labels != next.labels || shown(old.snapshot) != shown(next.snapshot)) {
-            guarded { postInvalidate() }
+        val old = synchronized(keptLock) {
+            val prev = kept
+            // a read that began later (the frame's own, or the next background one) is kept already
+            if (prev != null && prev.order > next.order) return
+            kept = next
+            prev
         }
+        val changed = old == null || old.labels != next.labels || shown(old.snapshot) != shown(next.snapshot)
+        ModWatchLog.i("face read age=${ageText(next.snapshot.current, now)} took=${SystemClock.elapsedRealtime() - begin}" +
+            " ms changed=$changed amb=${watchState.isAmbient.value == true}" + if (inFrame) " in-frame" else "")
+        if (changed && !inFrame) guarded { postInvalidate() }
     }
+
+    /** A request came after the read of [data] began: it may not hold the newest data. */
+    private fun behind(data: Kept?): Boolean = signals > (data?.signal ?: 0L)
 
     /** What the face shows from a snapshot, apart from the graph window moving on with the clock. */
     private fun shown(s: FaceSnapshot) = listOf(s.isMmol, s.hour24, s.graphHours, s.current, s.history.lastOrNull(),
@@ -160,9 +202,18 @@ internal class ModFaceRenderer(
     override fun render(canvas: Canvas, bounds: Rect, zonedDateTime: ZonedDateTime, sharedAssets: Assets) {
         try {
             val now = zonedDateTime.toInstant().toEpochMilli()
-            val data = kept
             val ambient = renderParameters.drawMode == DrawMode.AMBIENT
+            // part 7o: the dim mode's next frame is a minute away - what has arrived is read for this one; a failed
+            // read leaves the old snapshot, drawn as before
+            if (ambient && behind(kept)) guarded { load(inFrame = true) }
+            val data = kept
             if (data == null || abs(now - data.readAtMs) >= staleAfter(ambient)) refresh()
+            data?.snapshot?.current?.let { reading ->
+                if (reading.timeMs != framedReadingMs) {
+                    framedReadingMs = reading.timeMs
+                    ModWatchLog.i("face frame age=${ageText(reading, now)} amb=$ambient")
+                }
+            }
             val isMmol = data?.snapshot?.isMmol ?: ComplicationRenderer.isMmol()
             val snapshot = data?.snapshot?.copy(nowMs = now) ?: FaceSnapshot(now, isMmol, true, graphHours, null,
                 emptyList(), emptyList(), 0f, 0f, null, null)
@@ -211,8 +262,9 @@ internal class ModFaceRenderer(
         const val FRAME_MS = 60_000L
 
         /**
-         * A kept snapshot this old is read again at the next frame. That read does not go through [request]; it keeps
-         * the pause all the same because it is never shorter than [MIN_READ_MS] (critic 3c, N2; a test holds it).
+         * A kept snapshot this old is read again at the next frame. That read does not go through [request]; it adds
+         * at most one read to a window of [READ_WINDOW_MS] because it is never shorter than it (critic 3c, N2; a test
+         * holds it), and it counts in the budget like every read.
          */
         const val STALE_MS = 50_000L
 
@@ -226,18 +278,24 @@ internal class ModFaceRenderer(
         internal fun staleAfter(ambient: Boolean): Long = if (ambient) AMBIENT_STALE_MS else STALE_MS
 
         /**
-         * New readings are read at most this often (history arrives in dozens of pieces while it catches up); short
-         * enough that a new value shows within seconds of the minute frame.
+         * The read budget (part 7o): at most [READS_PER_WINDOW] reads in any [READ_WINDOW_MS] - history arrives in
+         * dozens of pieces while it catches up; a normal minute (calibration, then values) takes two.
          */
-        const val MIN_READ_MS = 20_000L
+        const val READ_WINDOW_MS = SignalBudget.WINDOW_MS
+        const val READS_PER_WINDOW = SignalBudget.COUNT
 
         /**
          * What a request for new data does: `null` - nothing until the face is [visible] again (the request stays
-         * pending); 0 - read now; more - read after that many ms, the rest of the pause of [MIN_READ_MS] since the
-         * last read at [lastReadAtMs] ([nowMs] and [lastReadAtMs] on the same clock).
+         * pending); 0 - read now; more - read after that many ms, when the oldest of [lastReadsMs] (the times of the
+         * last [READS_PER_WINDOW] reads, [SignalBudget.NEVER] - none) leaves the window of [READ_WINDOW_MS]
+         * ([nowMs] on the same clock).
          */
-        internal fun readWait(visible: Boolean, lastReadAtMs: Long, nowMs: Long): Long? =
-            if (!visible) null else (lastReadAtMs + MIN_READ_MS - nowMs).coerceAtLeast(0L)
+        internal fun readWait(visible: Boolean, lastReadsMs: LongArray, nowMs: Long): Long? =
+            if (!visible) null else SignalBudget.waitFor(lastReadsMs, nowMs, READ_WINDOW_MS)
+
+        /** The age of [reading] at [nowMs] for the journal: whole seconds, or `none`. */
+        internal fun ageText(reading: FaceReading?, nowMs: Long): String =
+            reading?.let { "${(nowMs - it.timeMs) / 1000L} s" } ?: "none"
 
         /** The graph's tone where upstream gives no range colour. */
         private const val TRACE = 0xFFE3E2DE.toInt()
