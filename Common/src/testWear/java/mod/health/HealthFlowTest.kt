@@ -319,6 +319,38 @@ class HealthFlowTest {
     }
 
     @Test
+    fun aTickRightAfterADeliverySentEverythingOnlyChecksTheSubscription() {
+        // critic 7k, N3: no flush and no batch of one or two rows within a minute of a good send with an empty queue
+        val core = core()
+        val sink = FakeSink()
+        core.buffer.append(listOf(Sample(ModHealthBatch.KIND_HR1, t0, 66f, "n=1;min=66;max=66")))
+        HealthSender.send(core, null, sink, t0)
+        val items = sink.batches.size
+        val source = FakeSource()
+        now = t0 + 30_000
+        HealthHandOver.run(core, source, sink, flushWaitMs = 200)
+        assertEquals(0, source.flushes)
+        assertEquals(now, source.maintainedAt)
+        assertEquals(items, sink.batches.size)
+        // "send now" always runs
+        HealthHandOver.run(core, source, sink, flushWaitMs = 200, forceStatus = true)
+        assertEquals(1, source.flushes)
+        // something waits in the queue: the tick runs
+        val again = FakeSource()
+        now = t0 + 40_000
+        core.state.lastSentAt = t0
+        core.buffer.append(listOf(Sample(ModHealthBatch.KIND_HR1, t0 + minute, 67f, "n=1;min=67;max=67")))
+        HealthHandOver.run(core, again, sink, flushWaitMs = 200)
+        assertEquals(1, again.flushes)
+        // a minute after the send: the tick runs as before
+        val later = FakeSource()
+        core.state.lastSentAt = t0
+        now = t0 + minute
+        HealthHandOver.run(core, later, sink, flushWaitMs = 200)
+        assertEquals(1, later.flushes)
+    }
+
+    @Test
     fun tickWithoutDataWaitsAtMostTheFlushWaitAndStillSends() {
         val core = core()
         core.buffer.append(listOf(Sample(ModHealthBatch.KIND_STEPS_DAY, t0, 1234f, (t0 - 60 * minute).toString())))
@@ -356,6 +388,7 @@ class HealthFlowTest {
         val core = core()
         val sink = FakeSink()
         HealthIntake.deliver(core, listOf(HeartRate(t0 + 4 * minute + 10_000, 60f)), emptyList()) { sink }
+        HealthCore.executor.submit {}.get(10, TimeUnit.SECONDS) // its send went at t0, 5 minutes before the tick
         now = t0 + 5 * minute + HealthConfig.HR_GRACE_REFRESH_MS
         val source = object : FakeSource() {
             override fun flush(context: Context): Boolean {

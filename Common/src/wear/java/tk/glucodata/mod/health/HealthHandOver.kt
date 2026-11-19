@@ -97,6 +97,16 @@ object HealthHandOver {
         flushWaitMs: Long = HealthConfig.FLUSH_WAIT_MS,
         forceStatus: Boolean = false,
     ): HealthSender.Result {
+        // A delivery sent everything less than a minute ago (Watch 7i, critic 7k N3): a tick only checks the
+        // subscription - no flush, no batch of one or two rows; the next delivery sends what comes. "Send now" always runs.
+        if (!forceStatus && HealthSender.sentJustNow(core, core.clock())) {
+            try {
+                source.maintain(core.context, core.clock())
+            } catch (t: Throwable) {
+                ModWatchLog.w("health maintain failed: ${t.javaClass.simpleName}")
+            }
+            return HealthSender.Result(0, 0, 0, false)
+        }
         // A delivery coming in answer to the flush does not send on its own: everything goes in one batch below.
         core.state.lastAttemptAt = core.clock()
         val before = core.dataEvents()

@@ -48,6 +48,15 @@ object HealthSender {
         return send(core, source, sink, nowMs)
     }
 
+    /**
+     * A send went well less than [HealthConfig.SEND_AFTER_DATA_GAP_MS] before [nowMs] and nothing waits in the queue
+     * since (a failed send leaves its file, so a retry is never skipped): a tick has nothing to add (critic 7k, N3).
+     */
+    fun sentJustNow(core: HealthCore, nowMs: Long): Boolean {
+        val last = core.state.lastSentAt
+        return last > 0 && nowMs - last in 0 until HealthConfig.SEND_AFTER_DATA_GAP_MS && core.buffer.count() == 0
+    }
+
     /** A delivery at [nowMs] sends: nothing went yet, the last send or attempt [lastMs] is a minute or more ago, or the clock went back. */
     fun dueAfterData(lastMs: Long, nowMs: Long): Boolean =
         lastMs <= 0 || nowMs - lastMs !in 0 until HealthConfig.SEND_AFTER_DATA_GAP_MS
