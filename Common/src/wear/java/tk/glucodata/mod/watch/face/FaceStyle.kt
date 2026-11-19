@@ -7,8 +7,10 @@ import java.util.Locale
  *
  * The background is always black (the screen stays on, AMOLED); the graph has no frame and no band (part 7a). The dim
  * (ambient) mode keeps the same picture: every colour dimmer by [AMBIENT_DIM], thinner lines, smaller dots, no
- * forecast, no labels on the graph; the number in regular weight and dimmer still, by [AMBIENT_VALUE_DIM] (part 7c,
- * critic 7, S2: the largest lit area of an always-on AMOLED screen).
+ * forecast, no labels on the graph; the number in regular weight (part 7c, critic 7, S2: the largest lit area of an
+ * always-on AMOLED screen; the picture also moves a little every minute). Part 7j, the owner on the watch: "too dim,
+ * nothing visible" (it was 0.6 for all, 0.45 for the number) - now near the xDrip face: the number and the arrow at
+ * [AMBIENT_VALUE_DIM] / [AMBIENT_ARROW_DIM], the rest at [AMBIENT_DIM].
  * Widths and radii are shares of the screen's diameter; [arrowStroke] is a share of the arrow's size.
  */
 data class FaceStyle(
@@ -72,14 +74,14 @@ data class FaceStyle(
     companion object {
         const val BLACK = 0xFF000000.toInt()
 
-        /** How much of each colour channel the ambient mode keeps. */
-        const val AMBIENT_DIM = 0.6f
+        /** How much of each colour channel the ambient mode keeps (part 7j: 0.85, was 0.6). */
+        const val AMBIENT_DIM = 0.85f
 
-        /** How much of the number's colour the ambient mode keeps (part 7c: dimmer than the rest). */
-        const val AMBIENT_VALUE_DIM = 0.45f
+        /** How much of the number's colour the ambient mode keeps (part 7j: 0.95, was 0.45 - too dim on the watch). */
+        const val AMBIENT_VALUE_DIM = 0.95f
 
-        /** How much of the arrow's colour the ambient mode keeps (part 7e: lighter than the rest, still dimmed). */
-        const val AMBIENT_ARROW_DIM = 0.8f
+        /** How much of the arrow's colour the ambient mode keeps (part 7j: as the number; part 7e: lighter than the dots). */
+        const val AMBIENT_ARROW_DIM = 0.95f
 
         private const val WHITE = 0xFFFFFFFF.toInt()
         private const val GREY = 0xFFB4B4B4.toInt()

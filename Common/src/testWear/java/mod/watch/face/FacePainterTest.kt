@@ -304,7 +304,7 @@ class FacePainterTest {
     }
 
     @Test
-    fun batteriesYellowUnderHalfRedUnder30AndOnlyRedInTheDimMode() {
+    fun batteriesYellowUnderHalfRedUnder30AndAlsoInTheDimMode() {
         val layout = FaceLayout.compute(size, size)
         val style = FaceStyle.of(false)
         val half = size / 2
@@ -318,14 +318,15 @@ class FacePainterTest {
         // 64 and 81: neither
         val fine = paint(inRange(), ambient = false)
         assertEquals(0, count(fine, layout.status, style.batteryLow) + count(fine, layout.status, style.batteryWarn))
-        // the dim mode: only the red one, dimmed
+        // the dim mode (part 7j, owner's request: batteries always): both, dimmed, in their colours
         val dim = FaceStyle.of(true)
-        val ambient = paint(lowBatteries, ambient = true, name = "7e_low_batteries_ambient")
-        assertTrue(count(ambient, layout.status, dim.batteryLow, half) > 10)
-        assertEquals(0, count(ambient, layout.status, dim.batteryWarn))
-        val dimNormal = paint(inRange(), ambient = true)
+        val ambient = paint(lowBatteries, ambient = true, name = "7j_low_batteries_ambient")
+        assertTrue("dim watch red", count(ambient, layout.status, dim.batteryLow, half) > 10)
+        assertTrue("dim phone yellow", count(ambient, layout.status, dim.batteryWarn, 0, half) > 10)
+        // fine batteries are drawn in the dim mode too: more lit than with none known
+        val dimNormal = paint(inRange(), ambient = true, name = "7j_batteries_ambient")
         val noBatteries = paint(inRange().copy(phoneBatteryPercent = null, watchBatteryPercent = null), ambient = true)
-        assertEquals(lit(noBatteries, layout.status), lit(dimNormal, layout.status))
+        assertTrue(lit(noBatteries, layout.status) < lit(dimNormal, layout.status))
         // unknown: no icon in the normal mode either
         val unknown = paint(inRange().copy(phoneBatteryPercent = null, watchBatteryPercent = null), ambient = false)
         assertTrue(lit(unknown, layout.status) < lit(fine, layout.status))
