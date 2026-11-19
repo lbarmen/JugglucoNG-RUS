@@ -4,7 +4,6 @@ import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.watch.face.FaceIcons
@@ -25,12 +24,15 @@ class FaceStyleTest {
     }
 
     @Test
-    fun ambientKeepsThePictureWithoutForecastOrLabelsAndWithThinnerLines() {
-        // part 7a: the forecast and the graph's labels only in the normal mode
-        assertNotNull(normal.forecast)
+    fun ambientKeepsTheWholePictureDimmedAndWithThinnerLines() {
+        // part 7l, the owner glances at the dim mode all day: the graph's labels there too, dimmed as the rest
         assertNotNull(normal.hourLabel)
-        assertNull(ambient.forecast)
-        assertNull(ambient.hourLabel)
+        assertEquals(FaceStyle.dim(normal.hourLabel!!, FaceStyle.AMBIENT_DIM), ambient.hourLabel)
+        // part 7l: the forecast as well - dimmed as the rest, thinner
+        assertNotNull(normal.forecast)
+        assertEquals(FaceStyle.dim(normal.forecast!!, FaceStyle.AMBIENT_DIM), ambient.forecast)
+        assertTrue(brightness(ambient.forecast!!) < brightness(normal.forecast!!))
+        assertTrue(ambient.forecastWidth < normal.forecastWidth && ambient.forecastWidth > 0f)
         assertTrue(ambient.dotRadius < normal.dotRadius)
         assertTrue(ambient.rangeLineWidth < normal.rangeLineWidth)
         assertTrue(ambient.arrowStroke < normal.arrowStroke)

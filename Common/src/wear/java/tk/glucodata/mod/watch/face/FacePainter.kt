@@ -142,8 +142,8 @@ internal class FacePainter {
     /**
      * The day and month in the middle (grey, the system's dot between the two words, part 7e), the phone's battery
      * left of it and the watch's right of it, each an icon and its number in the colour of its percent
-     * ([FaceStyle.batteryColor]); a battery without a known percent has neither, the dim mode shows only a low (red)
-     * one.
+     * ([FaceStyle.batteryColor]); a battery without a known percent has neither; the dim mode shows both, dimmed
+     * (part 7j).
      */
     private fun drawStatus(
         canvas: Canvas,
@@ -194,8 +194,8 @@ internal class FacePainter {
     private fun drawValueRow(canvas: Canvas, layout: FaceLayout.Layout, model: FaceModel, style: FaceStyle) {
         val row = layout.value
         val valueColor = if (model.hasValue) style.valueColor(model.valueColor) else style.neutral
-        // the arrow and the change: where the value heads in 30 minutes, as the app's arrow (part 7a)
-        val arrowColor = if (model.hasValue) style.arrowColor(model.arrowColor) else style.neutral
+        // the arrow and the change in the number's range colour, so they change colour only with it (part 7l)
+        val arrowColor = if (model.hasValue) style.arrowColor(model.valueColor) else style.neutral
         // bold, but in the dim mode regular (part 7c, critic 7, S2)
         val bold = style.valueBold
         setText(row.textSize, valueColor, bold)
@@ -296,7 +296,7 @@ internal class FacePainter {
         val yHigh = y(plot.high)
         val yLow = y(plot.low)
 
-        // thin lines at full hours of local time, their hours under the graph (not in the dim mode)
+        // thin lines at full hours of local time, their hours under the graph (in the dim mode too since part 7l)
         val hourLines = FaceLayout.hourLines(plot, model.hourMarks, plotLeft, plotRight)
         stroke.pathEffect = null
         stroke.strokeWidth = (diameter * style.hourLineWidth).coerceAtLeast(1f)
@@ -315,7 +315,7 @@ internal class FacePainter {
         }
         stroke.pathEffect = null
 
-        // upstream's forecast, dashed, from the newest reading on (not in the dim mode)
+        // upstream's forecast, dashed, from the newest reading on (in the dim mode too, dimmed and thinner: part 7l)
         style.forecast?.let { color ->
             if (plot.forecast.isEmpty()) return@let
             path.reset()
@@ -341,7 +341,7 @@ internal class FacePainter {
         }
 
         // the target lines' values small at the left end, just above each line, over the dots with a black edge
-        // round each glyph so a dot never hides them (part 7c; not in the dim mode)
+        // round each glyph so a dot never hides them (part 7c; in the dim mode too since part 7l)
         if (style.hourLabel != null) drawRangeLabels(canvas, layout, diameter, plot, isMmol, style, yHigh, yLow, edgeInset)
     }
 

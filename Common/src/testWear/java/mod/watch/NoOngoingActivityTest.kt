@@ -13,6 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import tk.glucodata.OngoingNotification
 import tk.glucodata.OngoingNotificationAccess
 import tk.glucodata.WearOngoingActivity
 import tk.glucodata.mod.watch.NoOngoingActivity
@@ -41,6 +42,22 @@ class NoOngoingActivityTest {
         OngoingNotificationAccess.register(WearOngoingActivity)
         assertTrue(NoOngoingActivity.claim())
         assertSame(NoOngoingActivity, OngoingNotificationAccess.get())
+    }
+
+    @Test
+    fun aStatusUpdateGoesOnToTheDisplacedOne() {
+        // critic 7l-7m, M1: their ongoing activity may still be attached (a start the claim did not precede)
+        var updates = 0
+        val theirs = object : OngoingNotification {
+            override fun attach(context: Context, notification: Notification, notificationId: Int) = notification
+            override fun updateStatus(context: Context?, notificationId: Int) {
+                updates++
+            }
+        }
+        OngoingNotificationAccess.register(theirs)
+        assertTrue(NoOngoingActivity.claim())
+        NoOngoingActivity.updateStatus(ApplicationProvider.getApplicationContext(), 7)
+        assertTrue(updates == 1)
     }
 
     @Test

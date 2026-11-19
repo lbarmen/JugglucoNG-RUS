@@ -6,11 +6,13 @@ import java.util.Locale
  * JugglucoNGmod, watch block (part 3b, part 7a): colours and line weights of the face, pure values.
  *
  * The background is always black (the screen stays on, AMOLED); the graph has no frame and no band (part 7a). The dim
- * (ambient) mode keeps the same picture: every colour dimmer by [AMBIENT_DIM], thinner lines, smaller dots, no
- * forecast, no labels on the graph; the number in regular weight (part 7c, critic 7, S2: the largest lit area of an
- * always-on AMOLED screen; the picture also moves a little every minute). Part 7j, the owner on the watch: "too dim,
- * nothing visible" (it was 0.6 for all, 0.45 for the number) - now near the xDrip face: the number and the arrow at
- * [AMBIENT_VALUE_DIM] / [AMBIENT_ARROW_DIM], the rest at [AMBIENT_DIM].
+ * (ambient) mode keeps the same picture: every colour dimmer by [AMBIENT_DIM], thinner lines, smaller dots; the number
+ * in regular weight (part 7c, critic 7, S2: the largest lit area of an always-on AMOLED screen; the picture also moves
+ * a little every minute). Part 7l, the owner: the dim mode is what he glances at all day, so it shows all the normal
+ * mode shows - the forecast and the graph's hour and range labels too, dimmed. Part 7j, the owner on the watch: "too
+ * dim, nothing visible" (it was 0.6 for all, 0.45 for the number) - now near the xDrip face: the number and the arrow at
+ * [AMBIENT_VALUE_DIM] / [AMBIENT_ARROW_DIM], the rest at [AMBIENT_DIM]. Part 7l, the owner: the arrow and the change
+ * changed colour too often (by the 30-minute projection) - now they take the number's range colour.
  * Widths and radii are shares of the screen's diameter; [arrowStroke] is a share of the arrow's size.
  */
 data class FaceStyle(
@@ -34,9 +36,9 @@ data class FaceStyle(
     /** The graph's thin lines at full hours (part 3c2). */
     val hourLine: Int = HOUR_LINE,
     val hourLineWidth: Float = 0.0025f,
-    /** The hour labels under those lines and the range labels; `null` - none (the dim mode keeps the lines only). */
+    /** The hour labels under those lines; `null` - neither they nor the range labels are drawn. */
     val hourLabel: Int? = HOUR_LABEL,
-    /** Upstream's forecast, dashed (their chart: the neutral tone, faded); `null` - not drawn (the dim mode). */
+    /** Upstream's forecast, dashed (their chart: the neutral tone, faded); `null` - not drawn. */
     val forecast: Int? = FORECAST,
     val forecastWidth: Float = 0.006f,
     /** A battery icon's outline and fill, and its number. */
@@ -53,8 +55,8 @@ data class FaceStyle(
         rangeColor?.let { if (ambient) dim(it, AMBIENT_VALUE_DIM) else it } ?: neutral
 
     /**
-     * The arrow's and the change's range colour; in ambient dimmed less than the rest, by [AMBIENT_ARROW_DIM] (part
-     * 7e: a dark red arrow sank into the black).
+     * The arrow's and the change's colour: the number's range colour (part 7l), [neutral] without one; in ambient
+     * dimmed less than the rest, by [AMBIENT_ARROW_DIM] (part 7e: a dark red arrow sank into the black).
      */
     fun arrowColor(rangeColor: Int?): Int =
         rangeColor?.let { if (ambient) dim(it, AMBIENT_ARROW_DIM) else it } ?: neutral
@@ -107,8 +109,10 @@ data class FaceStyle(
             ambient = true, background = BLACK, time = dim(WHITE, AMBIENT_DIM), secondary = dim(GREY, AMBIENT_DIM),
             age = dim(GREY, AMBIENT_DIM), ageAlarm = dim(RED, AMBIENT_DIM), neutral = dim(NEUTRAL, AMBIENT_DIM),
             rangeLine = dim(RANGE_LINE, AMBIENT_DIM), mark = dim(ORANGE, AMBIENT_DIM),
-            dotRadius = 0.006f, rangeLineWidth = 0.0025f, arrowStroke = 0.07f,
-            hourLine = dim(HOUR_LINE, AMBIENT_DIM), hourLineWidth = 0.002f, hourLabel = null, forecast = null,
+            // part 7l: thinner than in the normal mode, yet the dots, lines and forecast readable at a glance
+            dotRadius = 0.0075f, rangeLineWidth = 0.003f, arrowStroke = 0.07f,
+            hourLine = dim(HOUR_LINE, AMBIENT_DIM), hourLineWidth = 0.002f, hourLabel = dim(HOUR_LABEL, AMBIENT_DIM),
+            forecast = dim(FORECAST, AMBIENT_DIM), forecastWidth = 0.0045f,
             battery = dim(GREY, AMBIENT_DIM), batteryLow = dim(RED, AMBIENT_DIM), batteryWarn = dim(AMBER, AMBIENT_DIM),
             valueBold = false,
         )
