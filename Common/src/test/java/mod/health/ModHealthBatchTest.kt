@@ -92,6 +92,24 @@ class ModHealthBatchTest {
     }
 
     @Test
+    fun aPhoneAppBeforeOneMinuteRowsDropsThemAndTakesTheRest() {
+        // Watch 7i adds hr1 rows within format version 1: a phone app before it reads the batch (not broken, not
+        // newer) and its knownSamples - the same filter with its own kinds - leaves the hr1 rows out without a word.
+        val hr1 = Sample(ModHealthBatch.KIND_HR1, at, 64f, "n=58;min=60;max=70")
+        val batch = ModHealthBatch.forSending(9, at, listOf(hr1) + rows)
+        assertEquals(hr1, batch.samples.first()) // the new watch sends it
+        assertEquals(1, batch.version)
+        val read = (decode(batch) as Decoded.Ok).batch
+        val kindsBefore7i = setOf("hr5", "steps_day", "battery", "status")
+        assertEquals(rows, read.samples.filter { it.kind in kindsBefore7i })
+        // and this phone takes it
+        assertEquals(listOf(hr1) + rows, read.knownSamples())
+        val map = DataMap()
+        ModHealthDataMap.write(batch, map)
+        assertEquals(Decoded.Ok(batch), ModHealthDataMap.read(map))
+    }
+
+    @Test
     fun seqFromPath() {
         assertEquals(12L, ModHealthBatch.seqFromPath("/mod/health/batch/12"))
         assertEquals("/mod/health/batch/12", ModHealthBatch.path(12))

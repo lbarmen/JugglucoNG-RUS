@@ -90,7 +90,7 @@ class HealthFlowTest {
         val dayStart = t0 - 9 * 60 * minute
         val queued = HealthIntake.deliverNow(
             core,
-            listOf(HeartRate(t0 + minute, 64f), HeartRate(t0 + 2 * minute, 68f)),
+            listOf(HeartRate(t0 + 2 * minute + 10_000, 64f), HeartRate(t0 + 2 * minute + 40_000, 68f)),
             listOf(StepsDay(t0 + 3 * minute, 4321, dayStart), StepsDay(t0, -1, dayStart), StepsDay(dayStart - 1, 10, dayStart)),
             now,
         )
@@ -103,24 +103,75 @@ class HealthFlowTest {
     }
 
     @Test
-    fun windowClosesTwoMinutesAfterItsEndOnANormalDelivery() {
+    fun aDeliveryClosesTheMinutesItCoversAtOnce() {
+        // Health Services hands over 2.5 minutes of readings, one a second, right after the newest one
         val core = core()
-        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + minute, 70f)), emptyList(), t0 + 6 * minute)
+        val readings = (0 until 150).map { HeartRate(t0 + it * 1_000L, if (it < 60) 60f else 70f) }
+        val queued = HealthIntake.deliverNow(core, readings, emptyList(), t0 + 150_000)
+        assertEquals(2, queued) // t0 and t0+1 min; t0+2 min waits for the next delivery
         assertEquals(1, core.openHeartRateWindows)
-        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + 7 * minute, 72f)), emptyList(), t0 + 7 * minute)
         val rows = core.buffer.takeOutbox(now).flatMap { core.buffer.read(it) }
-        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 70f, "n=1;min=70;max=70")), rows)
+        assertEquals(
+            listOf(
+                Sample(ModHealthBatch.KIND_HR1, t0, 60f, "n=60;min=60;max=60"),
+                Sample(ModHealthBatch.KIND_HR1, t0 + minute, 70f, "n=60;min=70;max=70"),
+            ),
+            rows,
+        )
+    }
+
+    @Test
+    fun aReadingStampedInTheFutureClosesNothingEarly() {
+        val core = core()
+        val queued = HealthIntake.deliverNow(
+            core, listOf(HeartRate(t0 + 10_000, 60f), HeartRate(t0 + 10 * minute, 70f)), emptyList(), t0 + 20_000,
+        )
+        assertEquals(0, queued)
+        assertEquals(2, core.openHeartRateWindows)
+    }
+
+    @Test
+    fun aWindowNoDeliveryCoveredClosesTwoMinutesAfterItsEnd() {
+        val core = core()
+        // the readings stop (watch off the wrist): the last window is not covered by a later reading
+        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + minute, 70f)), emptyList(), t0 + 3 * minute)
         assertEquals(1, core.openHeartRateWindows)
+        val dayStart = t0 - 9 * 60 * minute
+        HealthIntake.deliverNow(core, emptyList(), listOf(StepsDay(t0 + 4 * minute, 4321, dayStart)), t0 + 4 * minute)
+        val rows = core.buffer.takeOutbox(now).flatMap { core.buffer.read(it) }
+        assertEquals(
+            listOf(
+                Sample(ModHealthBatch.KIND_HR1, t0 + minute, 70f, "n=1;min=70;max=70"),
+                Sample(ModHealthBatch.KIND_STEPS_DAY, t0 + 4 * minute, 4321f, dayStart.toString()),
+            ),
+            rows,
+        )
+        assertEquals(0, core.openHeartRateWindows)
     }
 
     @Test
     fun openWindowsSurviveAProcessRestart() {
         HealthIntake.deliverNow(core(), listOf(HeartRate(t0 + minute, 60f)), emptyList(), t0 + minute)
         val restarted = core()
-        HealthIntake.deliverNow(restarted, listOf(HeartRate(t0 + 2 * minute, 80f)), emptyList(), t0 + 2 * minute)
+        HealthIntake.deliverNow(restarted, listOf(HeartRate(t0 + minute + 30_000, 80f)), emptyList(), t0 + minute + 30_000)
         restarted.closeHeartRate(t0 + 6 * minute, HealthConfig.HR_GRACE_REFRESH_MS)
         val rows = restarted.buffer.takeOutbox(now).flatMap { restarted.buffer.read(it) }
-        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 70f, "n=2;min=60;max=80")), rows)
+        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR1, t0 + minute, 70f, "n=2;min=60;max=80")), rows)
+    }
+
+    @Test
+    fun openFiveMinuteWindowsOfAnOlderAppGoOnceAsHr5() {
+        // what a watch app before Watch 7i kept under the old key: one open 5-minute window, 2 readings
+        HealthState(context).hrBucketsOld5 = "$t0:130.0:2:60.0:70.0"
+        val core = core()
+        assertEquals("", core.state.hrBucketsOld5)
+        assertEquals(0, core.openHeartRateWindows) // never read as a 1-minute window
+        val queued = core.buffer.count()
+        assertEquals(1, queued)
+        core() // a second start queues nothing more
+        assertEquals(queued, core.buffer.count())
+        val rows = core.buffer.takeOutbox(now).flatMap { core.buffer.read(it) }
+        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 65f, "n=2;min=60;max=70")), rows)
     }
 
     @Test
@@ -194,22 +245,57 @@ class HealthFlowTest {
     }
 
     @Test
-    fun deliveryDoesNotSendWithinFiveMinutesOfTheLastAttempt() {
+    fun deliveryDoesNotSendWithinAMinuteOfTheLastAttempt() {
+        assertEquals(60_000L, HealthConfig.SEND_AFTER_DATA_GAP_MS)
         val core = core()
         val sink = FakeSink()
-        core.buffer.append(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 66f, "n=1;min=66;max=66")))
+        core.buffer.append(listOf(Sample(ModHealthBatch.KIND_HR1, t0, 66f, "n=1;min=66;max=66")))
         HealthSender.send(core, null, sink, t0)
         val items = sink.batches.size
-        core.buffer.append(listOf(Sample(ModHealthBatch.KIND_HR5, t0 + 5 * minute, 67f, "n=1;min=67;max=67")))
-        assertNull(HealthSender.sendIfDue(core, null, sink, t0 + 5 * minute - 1))
+        core.buffer.append(listOf(Sample(ModHealthBatch.KIND_HR1, t0 + minute, 67f, "n=1;min=67;max=67")))
+        assertNull(HealthSender.sendIfDue(core, null, sink, t0 + minute - 1))
         assertEquals(items, sink.batches.size)
-        assertTrue(HealthSender.sendIfDue(core, null, sink, t0 + 5 * minute)!!.items > 0)
+        assertTrue(HealthSender.sendIfDue(core, null, sink, t0 + minute)!!.items > 0)
+    }
+
+    @Test
+    fun theMinuteRuleOfASendAfterADelivery() {
+        assertTrue(HealthSender.dueAfterData(lastMs = 0L, nowMs = t0)) // nothing went yet
+        assertFalse(HealthSender.dueAfterData(lastMs = t0, nowMs = t0))
+        assertFalse(HealthSender.dueAfterData(lastMs = t0, nowMs = t0 + 59_999))
+        assertTrue(HealthSender.dueAfterData(lastMs = t0, nowMs = t0 + minute))
+        assertTrue(HealthSender.dueAfterData(lastMs = t0, nowMs = t0 - minute)) // the clock went back
+    }
+
+    @Test
+    fun eachDeliverySendsTheClosedMinutesAtMostOnceAMinute() {
+        val core = core()
+        val sink = FakeSink()
+        fun deliverAt(atMs: Long, vararg readings: Long) {
+            now = atMs
+            HealthIntake.deliver(core, readings.map { HeartRate(it, 70f) }, emptyList()) { sink }
+            HealthCore.executor.submit {}.get(10, TimeUnit.SECONDS) // the send queued by the delivery is done
+        }
+        // a batch every 1.5-3.5 minutes (watch log 19.11.2026)
+        deliverAt(t0 + 90_000, t0 + 10_000, t0 + minute)
+        assertEquals(listOf(t0), sink.rows(ModHealthBatch.KIND_HR1).map { it.timeMs })
+        assertEquals(t0 + 90_000, core.state.lastSentAt)
+        val afterFirst = sink.batches.size
+        // 40 s later: the minute it closes is queued, not sent
+        deliverAt(t0 + 2 * minute + 10_000, t0 + minute + 10_000, t0 + 2 * minute)
+        assertEquals(afterFirst, sink.batches.size)
+        assertTrue(core.buffer.count() > 0)
+        // 2 minutes after the first send: the waiting minute goes with this one's
+        deliverAt(t0 + 3 * minute + 30_000, t0 + 2 * minute + 10_000, t0 + 3 * minute)
+        assertEquals(listOf(t0, t0 + minute, t0 + 2 * minute), sink.rows(ModHealthBatch.KIND_HR1).map { it.timeMs })
+        assertEquals(t0 + 3 * minute + 30_000, core.state.lastSentAt)
+        assertEquals(0, core.buffer.count())
     }
 
     @Test
     fun tickFlushesWaitsForTheDataClosesTheWindowWithFiveSecondsGraceAndSends() {
         val core = core()
-        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + minute, 60f)), emptyList(), t0 + minute)
+        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + 4 * minute + 10_000, 60f)), emptyList(), t0 + 4 * minute + 10_000)
         now = t0 + 5 * minute + HealthConfig.HR_GRACE_REFRESH_MS
         val source = object : FakeSource() {
             override fun flush(context: Context): Boolean {
@@ -217,7 +303,7 @@ class HealthFlowTest {
                 // Health Services answers the flush a little later, from its own thread.
                 Thread {
                     Thread.sleep(100)
-                    HealthIntake.deliverNow(core, listOf(HeartRate(t0 + 4 * minute, 70f)), emptyList(), now)
+                    HealthIntake.deliverNow(core, listOf(HeartRate(t0 + 4 * minute + 50_000, 70f)), emptyList(), now)
                 }.start()
                 return true
             }
@@ -227,7 +313,8 @@ class HealthFlowTest {
         assertFalse(r.failed)
         assertEquals(1, source.flushes)
         assertEquals(now, source.maintainedAt)
-        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 65f, "n=2;min=60;max=70")), sink.rows(ModHealthBatch.KIND_HR5))
+        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR1, t0 + 4 * minute, 65f, "n=2;min=60;max=70")), sink.rows(ModHealthBatch.KIND_HR1))
+        assertTrue(sink.rows(ModHealthBatch.KIND_HR5).isEmpty()) // the watch makes no 5-minute rows any more
         assertEquals(0, core.openHeartRateWindows)
     }
 
@@ -268,14 +355,14 @@ class HealthFlowTest {
         // HealthIntake.deliver from Health Services' own thread and must not queue behind that wait.
         val core = core()
         val sink = FakeSink()
-        HealthIntake.deliver(core, listOf(HeartRate(t0 + minute, 60f)), emptyList()) { sink }
+        HealthIntake.deliver(core, listOf(HeartRate(t0 + 4 * minute + 10_000, 60f)), emptyList()) { sink }
         now = t0 + 5 * minute + HealthConfig.HR_GRACE_REFRESH_MS
         val source = object : FakeSource() {
             override fun flush(context: Context): Boolean {
                 super.flush(context)
                 Thread {
                     Thread.sleep(100)
-                    HealthIntake.deliver(core, listOf(HeartRate(t0 + 4 * minute, 70f)), emptyList()) { sink }
+                    HealthIntake.deliver(core, listOf(HeartRate(t0 + 4 * minute + 50_000, 70f)), emptyList()) { sink }
                 }.start()
                 return true
             }
@@ -286,7 +373,7 @@ class HealthFlowTest {
         HealthCore.executor.submit {}.get(10, TimeUnit.SECONDS) // the send queued by the delivery is done too
         assertFalse(r.failed)
         assertTrue("took $tookMs ms", tookMs < 3_000)
-        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR5, t0, 65f, "n=2;min=60;max=70")), sink.rows(ModHealthBatch.KIND_HR5))
+        assertEquals(listOf(Sample(ModHealthBatch.KIND_HR1, t0 + 4 * minute, 65f, "n=2;min=60;max=70")), sink.rows(ModHealthBatch.KIND_HR1))
         assertEquals(0L, core.state.hrLate)
     }
 
@@ -314,8 +401,17 @@ class HealthFlowTest {
     fun lateReadingsAreCountedAndShownInTheStatus() {
         val core = core()
         HealthIntake.deliverNow(core, listOf(HeartRate(t0 + minute, 60f)), emptyList(), t0 + 8 * minute)
-        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + 2 * minute, 62f), HeartRate(t0 + 3 * minute, 64f)), emptyList(), t0 + 9 * minute)
+        // two more readings of the minute already closed and queued: a second hr1 row of that start (the phone merges it)
+        HealthIntake.deliverNow(core, listOf(HeartRate(t0 + minute + 10_000, 62f), HeartRate(t0 + minute + 20_000, 64f)), emptyList(), t0 + 9 * minute)
         assertEquals(2L, core.state.hrLate)
+        val rows = core.buffer.takeOutbox(now).flatMap { core.buffer.read(it) }
+        assertEquals(
+            listOf(
+                Sample(ModHealthBatch.KIND_HR1, t0 + minute, 60f, "n=1;min=60;max=60"),
+                Sample(ModHealthBatch.KIND_HR1, t0 + minute, 63f, "n=2;min=62;max=64"),
+            ),
+            rows,
+        )
         assertEquals(2L, core().state.hrLate) // kept across a restart
         val sink = FakeSink()
         HealthSender.send(core, FakeSource(), sink, t0 + 9 * minute)

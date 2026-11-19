@@ -43,7 +43,8 @@ abstract class ModWatchDatabase : RoomDatabase() {
 
 /**
  * One row from the watch as it came ([ModHealthBatch.Sample]): kind, watch time, value, extra; the batch number and
- * when the phone took it. One row per kind and time; a late [ModHealthBatch.KIND_HR5] row is merged into it, and
+ * when the phone took it. One row per kind and time; a late heart rate row of the same kind ([ModHealthBatch.HR_KINDS]:
+ * `hr1`, and `hr5` of an older watch app - a kind is a string, so a new kind needs no migration) is merged into it, and
  * [parts] remembers every row merged in (value and extra, [ModWatchIntake.signature]), so a repeat of any of them is
  * known.
  */

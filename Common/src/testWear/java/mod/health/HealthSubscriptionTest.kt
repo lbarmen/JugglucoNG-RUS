@@ -25,7 +25,22 @@ class HealthSubscriptionTest {
         registeredAt: Long = t0,
         lastDataAt: Long = t0,
         attemptAt: Long = t0,
-    ) = HealthSubscription.registerReason(now, perms, permsAt, registered, registeredAt, lastDataAt, attemptAt)
+        attemptFailed: Boolean = false,
+    ) = HealthSubscription.registerReason(now, perms, permsAt, registered, registeredAt, lastDataAt, attemptAt, attemptFailed)
+
+    @Test
+    fun aFailedAttemptWithoutASubscriptionIsTriedAgainOnTheNextTick() {
+        // Watch log 19.11.2026: the boot attempt did not subscribe, and the next one came only 15 minutes later
+        // ("registered reason=new"); now the next tick tries again.
+        assertNull(reason(t0 + 30_000, registered = false, registeredAt = 0, attemptFailed = true)) // at most once a minute
+        assertEquals("new", reason(t0 + minute, registered = false, registeredAt = 0, attemptFailed = true))
+        assertEquals("new", reason(t0 + 5 * minute, registered = false, registeredAt = 0, attemptFailed = true))
+        // nothing allowed: still nothing to retry
+        assertNull(reason(t0 + 5 * minute, perms = none, registered = false, registeredAt = 0, attemptFailed = true))
+        // a failed renewal of a subscription in place keeps the 15-minute pause
+        assertNull(reason(t0 + 5 * minute, lastDataAt = 0, registeredAt = t0 - 13 * hour, attemptFailed = true))
+        assertEquals("NoTypes", HealthSubscription.ERROR_NO_TYPES)
+    }
 
     @Test
     fun onlyFromAndroid11() {
