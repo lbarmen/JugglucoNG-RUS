@@ -41,6 +41,8 @@ class ModWatchStarter : ContentProvider() {
                 ModWatchShortcut.publishAsync(app)
                 // part 7b: an alert sound setting changed here goes to the watch at once, not with the next tick
                 WatchAlertSettings.watchChanges(app)
+                // watch face: the pump's active insulin goes to the watch soon after it changed
+                PumpIobPhone.start(app)
             }
         } catch (_: Throwable) {
             // our code must not take upstream's app down

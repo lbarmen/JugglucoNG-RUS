@@ -6,6 +6,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.watch.ModWatchMessages
+import tk.glucodata.mod.watch.ModWatchMessages.PumpIob
 import tk.glucodata.mod.watch.ModWatchMessages.SnoozeDone
 import tk.glucodata.mod.watch.ModWatchMessages.SnoozeRequest
 import tk.glucodata.mod.watch.ModWatchMessages.Tick
@@ -179,6 +180,58 @@ class ModWatchMessagesTest {
     fun anUnknownTickTailIsIgnored() {
         val tick = Tick(33, false, at, ModWatchMessages.REASON_START)
         assertEquals(tick, ModWatchMessages.decodeTick(ModWatchMessages.encodeTick(tick) + ByteArray(20) { 0x11 }))
+    }
+
+    @Test
+    fun tickWithThePumpsActiveInsulinRoundTrip() {
+        for (iob in listOf(PumpIob(0, 0), PumpIob(23, 45), PumpIob(125, 720), PumpIob(1000, 1),
+            PumpIob(ModWatchMessages.IOB_MAX_TENTHS, ModWatchMessages.IOB_MAX_AGE_SEC))) {
+            val tick = Tick(57, false, at, ModWatchMessages.REASON_IOB, iob)
+            val bytes = ModWatchMessages.encodeTick(tick)
+            assertEquals(1 + 1 + 1 + 8 + 1 + 1 + 4 + 4, bytes.size)
+            assertEquals(tick, ModWatchMessages.decodeTick(bytes))
+        }
+        // out of range on the way out: clamped, never a broken message
+        val clamped = ModWatchMessages.decodeTick(ModWatchMessages.encodeTick(Tick(57, false, at, 1, PumpIob(-5, -1))))
+        assertEquals(PumpIob(0, 0), clamped!!.iob)
+    }
+
+    @Test
+    fun tickIobWireFormat() {
+        val bytes = ModWatchMessages.encodeTick(
+            Tick(42, true, 0x0102030405060708L, ModWatchMessages.REASON_IOB, PumpIob(0x0123, 0x0456)),
+        )
+        assertArrayEquals(byteArrayOf(1, 42, 1, 1, 2, 3, 4, 5, 6, 7, 8, 5, 0x49, 0, 0, 1, 0x23, 0, 0, 4, 0x56), bytes)
+    }
+
+    @Test
+    fun anOlderReaderTakesTheFirstFieldsOfATickWithTheActiveInsulin() {
+        // an older watch reads the 12 bytes it knows: they are the same as a tick without the field
+        val with = ModWatchMessages.encodeTick(Tick(60, true, at, ModWatchMessages.REASON_CYCLE, PumpIob(23, 45)))
+        val without = ModWatchMessages.encodeTick(Tick(60, true, at, ModWatchMessages.REASON_CYCLE))
+        assertArrayEquals(without, with.copyOf(without.size))
+        assertEquals(ModWatchMessages.VERSION, with[0].toInt())
+    }
+
+    @Test
+    fun aTickOfAnOlderPhoneHasNoActiveInsulin() {
+        val old = ModWatchMessages.encodeTick(Tick(60, true, at, ModWatchMessages.REASON_CYCLE))
+        assertEquals(12, old.size)
+        assertNull(ModWatchMessages.decodeTick(old)!!.iob)
+    }
+
+    @Test
+    fun aBrokenOrCutActiveInsulinIsNoneAndTheTickStays() {
+        val good = ModWatchMessages.encodeTick(Tick(60, true, at, ModWatchMessages.REASON_CYCLE, PumpIob(23, 45)))
+        val base = Tick(60, true, at, ModWatchMessages.REASON_CYCLE)
+        // cut short anywhere in the field
+        for (n in 12 until good.size) assertEquals("$n bytes", base, ModWatchMessages.decodeTick(good.copyOf(n)))
+        // another mark, tenths or age out of range
+        assertEquals(base, ModWatchMessages.decodeTick(good.copyOf().also { it[12] = 0x11 }))
+        val tooMany = good.copyOf().also { java.nio.ByteBuffer.wrap(it).putInt(13, ModWatchMessages.IOB_MAX_TENTHS + 1) }
+        assertEquals(base, ModWatchMessages.decodeTick(tooMany))
+        val negative = good.copyOf().also { java.nio.ByteBuffer.wrap(it).putInt(17, -1) }
+        assertEquals(base, ModWatchMessages.decodeTick(negative))
     }
 
     @Test

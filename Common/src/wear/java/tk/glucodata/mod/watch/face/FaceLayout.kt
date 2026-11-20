@@ -50,6 +50,23 @@ object FaceLayout {
     private const val VALUE_TEXT = 0.20f
     private const val ARROW = 0.10f
     private const val SIDE_TEXT = 0.058f
+
+    /**
+     * The pump's active insulin beside the number (20.11, "1a with fixes", critics' shares of the diameter): three rows
+     * on fixed places - change / age / active insulin - their text [SIDE_TEXT_IOB] (24.3 px on 450, so the number is
+     * not shrunk even at "11,7 · 12 мин · 12,5 ЕД"), their centres [SIDE_STEP] apart around [SIDE_CENTER] from the top,
+     * the active insulin row [IOB_EXTRA] lower still (~2 px). Without the active insulin the two rows stay as before.
+     */
+    const val SIDE_TEXT_IOB = 0.054f
+    const val SIDE_STEP = 0.060f
+    const val SIDE_CENTER = 0.295f
+    const val IOB_EXTRA = 0.0045f
+
+    /** The age while not red, share of the side text (20.11: "a couple of points smaller"); red - full size, bold. */
+    const val AGE_SMALL = 0.88f
+
+    /** The arrow's slot when the three rows would make the value row too wide (20.11: its drawing is 30-34 px). */
+    const val ARROW_TIGHT = 0.085f
     private const val GRAPH_LABEL_TEXT = 0.038f
     private const val HOURS_TEXT = 0.035f
     private const val MARK_TEXT = 0.035f
@@ -119,6 +136,23 @@ object FaceLayout {
     ) {
         /** A battery icon's height in pixels (part 7e). */
         val statusIcon: Float get() = STATUS_ICON * radius * 2f
+
+        /** The side text with the active insulin row, pixels (20.11). */
+        val sideTextIob: Float get() = SIDE_TEXT_IOB * radius * 2f
+
+        /** The arrow's narrower slot, pixels ([ARROW_TIGHT]). */
+        val arrowTight: Float get() = ARROW_TIGHT * radius * 2f
+
+        /**
+         * The centres (y, pixels) of the three side rows with the active insulin: change, age, active insulin
+         * ([SIDE_CENTER], [SIDE_STEP], [IOB_EXTRA]); fixed, so a missing change leaves its place empty.
+         */
+        val sideRows: List<Float>
+            get() {
+                val d = radius * 2f
+                val c = centerY - radius + SIDE_CENTER * d
+                return listOf(c - SIDE_STEP * d, c, c + SIDE_STEP * d + IOB_EXTRA * d)
+            }
 
         /** The drawn rows, top to bottom. */
         val rows: List<Row> get() = listOf(time, value, graph, hours, status, mark)

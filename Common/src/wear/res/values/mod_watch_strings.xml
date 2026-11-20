@@ -36,6 +36,12 @@
     <string name="mod_watch_face_percent">%1$d%%</string>
     <!-- How old the glucose value is, "2 min" -->
     <string name="mod_watch_face_minutes">%1$d min</string>
+    <!-- The same under two minutes while the screen is lit, "45 s" -->
+    <string name="mod_watch_face_seconds">%1$d s</string>
+    <!-- The same from 100 minutes on, in whole hours, "1 h" -->
+    <string name="mod_watch_face_hours">%1$d h</string>
+    <!-- The pump's active insulin beside the glucose value: "2.3 U", "99+ U", "— U" (unknown or too old) -->
+    <string name="mod_watch_face_iob">%1$s U</string>
     <!-- Battery row words: "phone 64%   watch 81%" -->
     <string name="mod_watch_face_phone">phone</string>
     <string name="mod_watch_face_watch">watch</string>

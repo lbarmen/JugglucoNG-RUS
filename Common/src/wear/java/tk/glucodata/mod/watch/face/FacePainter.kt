@@ -200,12 +200,25 @@ internal class FacePainter {
         val bold = style.valueBold
         setText(row.textSize, valueColor, bold)
         val valueWidth = text.measureText(model.valueText)
-        val arrowWidth = if (model.rate.isFinite()) layout.arrowSize else 0f
-        setText(layout.sideTextSize, style.secondary, bold = false)
+        val hasArrow = model.rate.isFinite()
         val delta = model.deltaText
         val age = model.ageText
-        val sideWidth = maxOf(delta?.let { text.measureText(it) } ?: 0f, age?.let { text.measureText(it) } ?: 0f)
-        val place = FaceLayout.placeValueRow(row, valueWidth, arrowWidth, sideWidth, layout.radius * 0.04f)
+        val iob = model.iobText
+        // 20.11, 1a with fixes: with the active insulin three rows of a smaller text; the age paler and smaller unless
+        // red (then full size and bold), the active insulin never larger than the age
+        val side = if (iob != null) layout.sideTextIob else layout.sideTextSize
+        val ageSize = if (model.ageAlarm) side else side * FaceLayout.AGE_SMALL
+        val ageBold = model.ageAlarm
+        val iobSize = side * FaceLayout.AGE_SMALL
+        val sideWidth = maxOf(measure(delta, side, false), measure(age, ageSize, ageBold), measure(iob, iobSize, false))
+        val gap = layout.radius * 0.04f
+        var arrowSlot = if (hasArrow) layout.arrowSize else 0f
+        var place = FaceLayout.placeValueRow(row, valueWidth, arrowSlot, sideWidth, gap)
+        if (iob != null && hasArrow && place.scale < 1f) {
+            // tight: the arrow's slot narrower before the number shrinks (its drawing stays as large)
+            arrowSlot = layout.arrowTight
+            place = FaceLayout.placeValueRow(row, valueWidth, arrowSlot, sideWidth, gap)
+        }
         val centerY = row.top + row.height / 2f
 
         // the number, its digits centred on the row
@@ -213,27 +226,53 @@ internal class FacePainter {
         text.getTextBounds(model.valueText, 0, model.valueText.length, bounds)
         canvas.drawText(model.valueText, place.valueX, centerY - bounds.exactCenterY(), text)
 
-        if (arrowWidth > 0f) {
+        if (arrowSlot > 0f) {
             val size = layout.arrowSize * place.scale
-            drawArrow(canvas, place.arrowX, centerY - size / 2f, size, model.rate, arrowColor, style.arrowStroke)
+            val left = place.arrowX + (arrowSlot * place.scale - size) / 2f
+            drawArrow(canvas, left, centerY - size / 2f, size, model.rate, arrowColor, style.arrowStroke)
         }
 
-        // change over age, one above the other beside the number
-        val sideSize = layout.sideTextSize * place.scale
-        setText(sideSize, arrowColor, bold = false)
+        val ageColor = if (model.ageAlarm) style.ageAlarm else style.age
+        val s = place.scale
+        if (iob != null) {
+            // three rows on fixed places: change / age / active insulin; a missing change leaves its place empty
+            val (deltaY, ageY, iobY) = layout.sideRows
+            delta?.let { sideText(canvas, it, place.sideX, deltaY, side * s, arrowColor, false) }
+            age?.let { sideText(canvas, it, place.sideX, ageY, ageSize * s, ageColor, ageBold) }
+            sideText(canvas, iob, place.sideX, iobY, iobSize * s, style.iobColor(model.iobState), false)
+            return
+        }
+
+        // change over age, one above the other beside the number (as before 20.11)
+        setText(side * s, arrowColor, bold = false)
         text.getTextBounds("0", 0, 1, bounds)
         val capHeight = bounds.height().toFloat()
         val lineGap = capHeight * 0.6f
-        val ageColor = if (model.ageAlarm) style.ageAlarm else style.age
         if (delta != null && age != null) {
             val upper = centerY - lineGap / 2f
             canvas.drawText(delta, place.sideX, upper, text)
-            text.color = ageColor
-            canvas.drawText(age, place.sideX, upper + lineGap + capHeight, text)
-        } else if (delta != null || age != null) {
-            text.color = if (age != null) ageColor else arrowColor
-            canvas.drawText(age ?: delta!!, place.sideX, centerY + capHeight / 2f, text)
+            setText(ageSize * s, ageColor, ageBold)
+            text.getTextBounds("0", 0, 1, bounds)
+            canvas.drawText(age, place.sideX, upper + lineGap + bounds.height(), text)
+        } else if (delta != null) {
+            canvas.drawText(delta, place.sideX, centerY + capHeight / 2f, text)
+        } else if (age != null) {
+            sideText(canvas, age, place.sideX, centerY, ageSize * s, ageColor, ageBold)
         }
+    }
+
+    /** The measured width of [s] at [size] (0 - none). */
+    private fun measure(s: String?, size: Float, bold: Boolean): Float {
+        if (s == null) return 0f
+        setText(size, 0, bold)
+        return text.measureText(s)
+    }
+
+    /** [s] from [left] with its digits' middle on [centerY]. */
+    private fun sideText(canvas: Canvas, s: String, left: Float, centerY: Float, size: Float, color: Int, bold: Boolean) {
+        setText(size, color, bold)
+        text.getTextBounds("0", 0, 1, bounds)
+        canvas.drawText(s, left, centerY + bounds.height() / 2f, text)
     }
 
     /**

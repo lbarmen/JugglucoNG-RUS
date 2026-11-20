@@ -9,7 +9,8 @@ import com.google.android.gms.wearable.WearableListenerService
  * Common/src/wearMod/AndroidManifest.xml; upstream's MessageReceiver never sees these paths). Runs on a background
  * thread. A path we do not know yet is ignored: later parts add theirs here.
  *
- * `/mod/tick` (part 2): the phone battery goes to [PhoneBatteryStore] with the watch's time of receipt, and the tick
+ * `/mod/tick` (part 2): the phone battery goes to [PhoneBatteryStore] with the watch's time of receipt, the pump's
+ * active insulin to [PumpIobStore] (watch face, 20.11; a tick without it removes the kept one), and the tick
  * wakes the heart rate and steps hand-over ([HealthTick], filled by part 4) and the history hole check
  * ([HistoryGapFill]).
  *
@@ -38,6 +39,12 @@ class ModWearListener : WearableListenerService() {
                         return false
                     }
                     PhoneBatteryStore.save(context, tick, nowMs)
+                    // the pump's active insulin for the face; a tick without it removes the kept one
+                    try {
+                        PumpIobStore.save(context, tick, nowMs)
+                    } catch (t: Throwable) {
+                        ModWatchLog.w("pump iob not kept: ${t.javaClass.simpleName}")
+                    }
                     HealthTick.onTick(context, nowMs)
                     HistoryGapFill.onTick(context, nowMs)
                     NoOngoingActivity.claim()
