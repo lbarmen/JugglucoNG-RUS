@@ -33,18 +33,25 @@ import tk.glucodata.ui.AlarmActivityHost
  * later (the deferred `initproc` above), every data refresh claims the slot again ([watch]); until then their screen
  * shows - the alarm is never lost, only drawn the old way. A failure here leaves their screen in place.
  *
- * Our screen opens theirs when it fails itself ([openUpstream]).
+ * Our screen opens theirs when it fails itself ([openUpstream]); while their screen is open, our entry hands new
+ * alarms to it ([AlarmScreens]).
  */
 object ModAlarmScreen : AlarmActivityHost {
 
-    override fun newAlarmActivityIntent(context: Context): Intent = Intent(context, ModAlarmActivity::class.java)
+    /** Ours; theirs while their screen is open, so a new alarm lands on it and never opens a second one ([AlarmScreens]). */
+    override fun newAlarmActivityIntent(context: Context): Intent =
+        if (AlarmScreens.upstreamOpen()) Intent(context, AlarmActivity::class.java)
+        else Intent(context, ModAlarmActivity::class.java)
 
     @Volatile
     private var watching = false
 
-    /** The registry gives our screen now. */
-    fun isOurs(context: Context): Boolean =
-        AlarmActivityAccess.newIntent(context)?.component?.className == ModAlarmActivity::class.java.name
+    /** The registry gives our screen now (or theirs only because their screen is open: our entry routes there). */
+    fun isOurs(context: Context): Boolean {
+        val name = AlarmActivityAccess.newIntent(context)?.component?.className
+        return name == ModAlarmActivity::class.java.name ||
+            (name == AlarmActivity::class.java.name && AlarmScreens.upstreamOpen())
+    }
 
     /** Puts ours in upstream's slot unless it is there; true when it was set now. Any thread; never throws. */
     fun claim(context: Context): Boolean = try {

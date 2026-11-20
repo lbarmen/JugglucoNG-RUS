@@ -31,11 +31,12 @@ import tk.glucodata.ui.AlarmActivityAccess
  * "Snooze alarm" button closes this screen as theirs: `OngoingAlert.snooze` -> `AlarmActivityAccess.acknowledge`.
  *
  * Any failure of ours (content, view, drawing) opens their screen with the same extras ([ModAlarmScreen.openUpstream])
- * and closes this one: the alarm must never be lost to our code. No dim mode.
+ * and closes this one: the alarm must never be lost to our code. Never two alarm screens at once ([AlarmScreens]):
+ * shown, ours closes an open screen of theirs; theirs opening closes ours. No dim mode.
  */
 class ModAlarmActivity : Activity() {
 
-    /** Their screen was opened in our place: it owns the "alarm UI visible" flag from now on. */
+    /** Their screen was opened in our place: without [AlarmScreens] it owns the "alarm UI visible" flag from now on. */
     private var handedOver = false
     private var handingOver = false
 
@@ -82,7 +83,10 @@ class ModAlarmActivity : Activity() {
     override fun onStop() {
         try {
             AlarmActivityAccess.removeObserver(this)
-            if (!handedOver) Notify.setAlarmUiVisible(false)
+            // Followed screens: cleared always - when theirs is started, the stop callback (super.onStop below) sets
+            // it again; when their screen never came up after a hand-over, it stays cleared and their missed-window
+            // notification can show (critic 8, finding 3). Not followed: after a hand-over the flag is theirs.
+            if (AlarmScreens.isTracking || !handedOver) Notify.setAlarmUiVisible(false)
             window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         } catch (t: Throwable) {
             ModWatchLog.w("alarm screen stop failed: ${t.javaClass.simpleName}")
@@ -126,6 +130,8 @@ class ModAlarmActivity : Activity() {
                 onFailure = { fallBack("view", it) },
             )
         )
+        // an older alarm on their screen (opened by an old notification of ours over it): ours is the newer one
+        AlarmScreens.closeUpstream()
     }
 
     /** Their `sendAlarmAction`: the action to their receiver, then close (also when the send fails). */

@@ -16,7 +16,11 @@ class ModAlarmStarter : ContentProvider() {
 
     override fun onCreate(): Boolean {
         try {
-            context?.let { ModAlarmScreen.claimAfterStart(it) }
+            context?.let {
+                // the Application exists before any provider: follow the alarm screens from the first activity on
+                AlarmScreens.register(it)
+                ModAlarmScreen.claimAfterStart(it)
+            }
         } catch (t: Throwable) {
             ModWatchLog.w("alarm screen starter failed: ${t.javaClass.simpleName}")
         }

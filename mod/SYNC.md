@@ -61,7 +61,9 @@ app; what to check on the phone before installing (risk flags, spec 3.6). A cand
 `WearAlarmActivityHost.kt`, `Specific.registerBridges`, `AlarmActionReceiver`, `AlarmLaunchReceiver.launchFlags` or
 their `.ui.AlarmActivity` manifest entries changed: compare with `ModAlarmActivity.kt` / `AlarmContent.kt` / our
 `wearMod/AndroidManifest.xml` entry and carry the change over (new extras, a new lifecycle step, another way to
-register); `ModAlarmContractTest` turns red on most such changes.
+register); `ModAlarmContractTest` turns red on most such changes. Rollback to a watch build without our screen
+(theirs, or ours before part 8) installed over it: an alarm notification already showing names `ModAlarmActivity`, so
+tapping it opens nothing until the next alarm builds a new one - tell the owner, nothing to fix.
 
 **Once a month** — `python -X utf8 mod/juggluco-summary.py` (the Juggluco summary; there is no `python3` in Git Bash
 on this machine): carry over only a fix of the sensor, alarms or watch that JugglucoNG does not have, and by the

@@ -33,6 +33,7 @@ import tk.glucodata.alerts.AlertType
 import tk.glucodata.alerts.SnoozeManager
 import tk.glucodata.mod.watch.OngoingAlert
 import tk.glucodata.mod.watch.alarm.AlarmScreenLayout
+import tk.glucodata.mod.watch.alarm.AlarmScreens
 import tk.glucodata.mod.watch.alarm.ModAlarmActivity
 import tk.glucodata.mod.watch.alarm.ModAlarmScreen
 import tk.glucodata.receivers.AlarmActionReceiver
@@ -56,6 +57,7 @@ class ModAlarmActivityTest {
 
     private lateinit var app: Context
     private val controllers = mutableListOf<ActivityController<ModAlarmActivity>>()
+    private val theirControllers = mutableListOf<ActivityController<AlarmActivity>>()
 
     @Before
     fun setUp() {
@@ -66,6 +68,8 @@ class ModAlarmActivityTest {
         OngoingAlertTest.resetAlertState()
         ModAlarmActivity.contentHook = null
         ModAlarmScreen.resetForTest()
+        AlarmScreens.resetForTest()
+        Notify.unitlabel = "mmol/L"
         alarmUiVisible = false
     }
 
@@ -73,8 +77,14 @@ class ModAlarmActivityTest {
     fun tearDown() {
         ModAlarmActivity.contentHook = null
         controllers.forEach { runCatching { it.pause().stop().destroy() } }
+        theirControllers.forEach { runCatching { it.pause().stop().destroy() } }
+        AlarmScreens.resetForTest()
         OngoingAlertTest.resetAlertState()
     }
+
+    /** Upstream's watch alarm screen, created only (their Compose content runs as in their own test). */
+    private fun createTheirs(intent: Intent = alarmIntent()): ActivityController<AlarmActivity> =
+        Robolectric.buildActivity(AlarmActivity::class.java, intent).create().also { theirControllers += it }
 
     // ------------------------------------------------------------------ helpers
 
@@ -292,5 +302,90 @@ class ModAlarmActivityTest {
         // a second failure report does nothing more
         activity.fallBack("view", IllegalStateException("again"))
         assertNull(shadowOf(activity).nextStartedActivity)
+    }
+
+    // ------------------------------------------------------------------ never two screens (critic 8)
+
+    @Test
+    fun whileTheirScreenIsOpenNewAlarmsGoToIt() {
+        assertTrue(AlarmScreens.register(app))
+        AlarmActivityAccess.register(ModAlarmScreen)
+        assertEquals(ModAlarmActivity::class.java.name, AlarmActivityAccess.newIntent(app)?.component?.className)
+        // their screen is open (our hand-over, a late registration of theirs, or their old full-screen notification)
+        val theirs = createTheirs().start().resume()
+        assertTrue(AlarmScreens.upstreamOpen())
+        assertEquals(AlarmActivity::class.java.name, AlarmActivityAccess.newIntent(app)?.component?.className)
+        // our entry is still the one registered: no claim needed
+        assertTrue(ModAlarmScreen.isOurs(app))
+        assertFalse(ModAlarmScreen.claim(app))
+        // stopped (the screen went dark) it is still open: the next alarm still goes to it
+        theirs.pause().stop()
+        assertEquals(AlarmActivity::class.java.name, AlarmActivityAccess.newIntent(app)?.component?.className)
+        theirs.destroy()
+        assertFalse(AlarmScreens.upstreamOpen())
+        assertEquals(ModAlarmActivity::class.java.name, AlarmActivityAccess.newIntent(app)?.component?.className)
+    }
+
+    @Test
+    fun ourScreenOverTheirsClosesTheirsAndTheFlagStaysSet() {
+        AlarmScreens.register(app)
+        val theirs = createTheirs().start().resume()
+        assertTrue(alarmUiVisible)
+        // an old notification of ours opens ours over theirs: the system pauses theirs, ours comes up
+        theirs.pause()
+        val ours = open()
+        assertTrue(theirs.get().isFinishing)
+        assertFalse(ours.get().isFinishing)
+        // their onStop clears the flag while ours is on screen: set again at once
+        theirs.stop()
+        assertTrue(alarmUiVisible)
+        theirs.destroy()
+        assertFalse(AlarmScreens.upstreamOpen())
+        assertTrue(alarmUiVisible)
+        // ours closing clears it as usual
+        ours.pause().stop()
+        assertFalse(alarmUiVisible)
+    }
+
+    @Test
+    fun theirScreenOpeningClosesOursAndTheFlagStaysSet() {
+        AlarmScreens.register(app)
+        val ours = open()
+        assertTrue(alarmUiVisible)
+        // their old full-screen notification opens theirs over ours
+        ours.pause()
+        val theirs = createTheirs()
+        assertTrue(ours.get().isFinishing)
+        theirs.start().resume()
+        ours.stop()
+        assertTrue(alarmUiVisible)
+        theirs.pause().stop()
+        assertFalse(alarmUiVisible)
+    }
+
+    @Test
+    fun aHandOverWhoseScreenNeverCameUpClearsTheFlagOnStop() {
+        // critic 8, finding 3: the hand-over came after the flag was set, their window never showed - the flag must
+        // not stay set, or their missed-window notification is held back
+        AlarmScreens.register(app)
+        val controller = open()
+        assertTrue(alarmUiVisible)
+        controller.get().fallBack("start", IllegalStateException("test"))
+        assertOpensUpstreamWithTheSameExtras(shadowOf(controller.get()).nextStartedActivity)
+        controller.pause().stop()
+        assertFalse(alarmUiVisible)
+    }
+
+    @Test
+    fun aHandOverToTheirScreenThatCameUpKeepsTheFlag() {
+        AlarmScreens.register(app)
+        val controller = open()
+        controller.get().fallBack("view", IllegalStateException("test"))
+        val started = shadowOf(controller.get()).nextStartedActivity
+        assertOpensUpstreamWithTheSameExtras(started)
+        controller.pause()
+        createTheirs(started).start().resume()
+        controller.stop()
+        assertTrue(alarmUiVisible)
     }
 }
