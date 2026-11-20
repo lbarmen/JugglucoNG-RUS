@@ -213,8 +213,9 @@ class FacePainterTest {
             paint.textSize = size
             return paint.measureText(s)
         }
-        val ageSize = if (model.ageAlarm) side else side * FaceLayout.AGE_SMALL
-        val sideWidth = maxOf(width(model.deltaText, side, false), width(model.ageText, ageSize, model.ageAlarm),
+        val three = model.iobText != null
+        val ageSize = if (three && !model.ageAlarm) side * FaceLayout.AGE_SMALL else side
+        val sideWidth = maxOf(width(model.deltaText, side, false), width(model.ageText, ageSize, three && model.ageAlarm),
             width(model.iobText, side * FaceLayout.AGE_SMALL, false))
         return FaceLayout.placeValueRow(layout.value, valueWidth, layout.arrowSize, sideWidth, layout.radius * 0.04f)
             .arrowX.toInt()
@@ -452,6 +453,12 @@ class FacePainterTest {
         // the number keeps its pixels: as many green ones as without the active insulin (not shrunk)
         val without = paint(usual(iob = null), ambient = false, name = "9_no_iob")
         assertEquals(0, count(without, layout.value, iobFresh) + count(without, layout.value, iobStale))
+        // critic 9, L4: without the active insulin the age as before 20.11 (grey); pale only in the three rows
+        val style = FaceStyle.of(false)
+        assertTrue(count(without, layout.value, style.age) > 10)
+        assertEquals(0, count(without, layout.value, style.agePale))
+        assertTrue(count(bitmap, layout.value, style.agePale) > 10)
+        assertEquals(0, count(bitmap, layout.value, style.age))
         assertTrue(count(bitmap, layout.value, green) >= count(without, layout.value, green) * 0.95f)
     }
 

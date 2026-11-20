@@ -205,10 +205,12 @@ internal class FacePainter {
         val age = model.ageText
         val iob = model.iobText
         // 20.11, 1a with fixes: with the active insulin three rows of a smaller text; the age paler and smaller unless
-        // red (then full size and bold), the active insulin never larger than the age
-        val side = if (iob != null) layout.sideTextIob else layout.sideTextSize
-        val ageSize = if (model.ageAlarm) side else side * FaceLayout.AGE_SMALL
-        val ageBold = model.ageAlarm
+        // red (then full size and bold), the active insulin never larger than the age. Without it the two rows as
+        // before (the owner: "no IOB - two rows, as now"): the age grey, full size, regular
+        val three = iob != null
+        val side = if (three) layout.sideTextIob else layout.sideTextSize
+        val ageSize = if (three && !model.ageAlarm) side * FaceLayout.AGE_SMALL else side
+        val ageBold = three && model.ageAlarm
         val iobSize = side * FaceLayout.AGE_SMALL
         val sideWidth = maxOf(measure(delta, side, false), measure(age, ageSize, ageBold), measure(iob, iobSize, false))
         val gap = layout.radius * 0.04f
@@ -232,7 +234,11 @@ internal class FacePainter {
             drawArrow(canvas, left, centerY - size / 2f, size, model.rate, arrowColor, style.arrowStroke)
         }
 
-        val ageColor = if (model.ageAlarm) style.ageAlarm else style.age
+        val ageColor = when {
+            model.ageAlarm -> style.ageAlarm
+            three -> style.agePale
+            else -> style.age
+        }
         val s = place.scale
         if (iob != null) {
             // three rows on fixed places: change / age / active insulin; a missing change leaves its place empty

@@ -103,15 +103,28 @@ class PumpIobPhoneTest {
         ticks.sent(a)
         // the same number, also with time going on: nothing
         assertFalse(ticks.due(a, now + 10 * minute, now))
-        // a new value or a new time: an extra tick, but not within a minute of any tick
+        // a new value: an extra tick, but not within a minute of any tick
         assertFalse(ticks.due(b, now + 30_000L, now))
         assertTrue(ticks.due(b, now + minute, now))
-        assertTrue(ticks.due(Reading(23, now + 5 * minute), now + minute, now))
+        // critic 9, M1: only a new time of the same tenths (each CareLink poll) - none; the cycle tick brings it
+        assertFalse(ticks.due(Reading(23, now + 5 * minute), now + minute, now))
         // gone: a tick that removes it on the watch
         assertTrue(ticks.due(null, now + minute, now))
         // claimed: not asked again every minute, even without a watch
         ticks.sent(b)
         assertFalse(ticks.due(b, now + 3 * minute, now))
+        // came after none
+        ticks.sent(null)
+        assertTrue(ticks.due(a, now + 3 * minute, now))
+    }
+
+    @Test
+    fun theDifferenceRule() {
+        assertFalse(PumpIobTicks.differs(null, null))
+        assertTrue(PumpIobTicks.differs(null, Reading(0, now)))
+        assertTrue(PumpIobTicks.differs(Reading(0, now), null))
+        assertFalse(PumpIobTicks.differs(Reading(23, now), Reading(23, now + 5 * minute)))
+        assertTrue(PumpIobTicks.differs(Reading(23, now), Reading(24, now)))
     }
 
     private fun withoutComments(code: String) =

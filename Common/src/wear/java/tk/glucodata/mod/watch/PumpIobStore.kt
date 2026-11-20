@@ -64,3 +64,31 @@ object PumpIobStore {
         return old.tenths != next.tenths || Math.abs(old.valueAtMs - next.valueAtMs) > SAME_TIME_MS
     }
 }
+
+/**
+ * JugglucoNGmod, watch block (critic 9, L3): `/mod/tick` in the phone's order. The phone sends ticks from two threads
+ * (the 5-minute cycle and the extra ticks), so an older one can arrive after a newer one; it must not put back the
+ * older battery or active insulin. A tick is taken when its phone time ([ModWatchMessages.Tick.sentAtMs]) is not older
+ * than the last taken - or older by more than [CLOCK_JUMP_MS]: the phone's clock was set back, and refusing would
+ * leave the face without new ticks until the clock caught up.
+ */
+object TickOrder {
+
+    private const val KEY_SENT_AT = "tick_sent_at"
+
+    /** Older than the last taken by more than this: the phone's clock moved back, the tick is taken. */
+    const val CLOCK_JUMP_MS = 10 * 60_000L
+
+    /** Whether the tick sent at [sentAtMs] (phone time) is taken; a taken one becomes the last. */
+    fun accept(context: Context, sentAtMs: Long): Boolean {
+        val prefs = PhoneBatteryStore.prefs(context)
+        val last = if (prefs.contains(KEY_SENT_AT)) prefs.getLong(KEY_SENT_AT, 0L) else null
+        if (!inOrder(last, sentAtMs)) return false
+        prefs.edit().putLong(KEY_SENT_AT, sentAtMs).apply()
+        return true
+    }
+
+    /** The rule of [accept]: [lastMs] - the last taken tick's phone time, `null` - none yet. */
+    fun inOrder(lastMs: Long?, sentAtMs: Long): Boolean =
+        lastMs == null || sentAtMs >= lastMs || lastMs - sentAtMs > CLOCK_JUMP_MS
+}

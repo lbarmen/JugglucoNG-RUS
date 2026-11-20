@@ -62,7 +62,10 @@ object FaceLayout {
     const val SIDE_CENTER = 0.295f
     const val IOB_EXTRA = 0.0045f
 
-    /** The age while not red, share of the side text (20.11: "a couple of points smaller"); red - full size, bold. */
+    /**
+     * The age while not red beside the active insulin, share of the side text (20.11: "a couple of points smaller");
+     * red - full size, bold. Without the active insulin the age is as before 20.11.
+     */
     const val AGE_SMALL = 0.88f
 
     /** The arrow's slot when the three rows would make the value row too wide (20.11: its drawing is 30-34 px). */

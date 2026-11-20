@@ -33,8 +33,9 @@ import tk.glucodata.drivers.api.ApiGlucoseSourceRegistry
  *
  * **Extra ticks.** Upstream has no listener on the slot and CareLink's code is not ours to touch here, so the slot is
  * looked at from this side: once a minute on our own thread and on every new reading on the phone
- * (`UiRefreshBus.revision`, which also runs while the device dozes between sensor packets). A changed number (a new
- * value or a new time, or gone) sends a tick with [ModWatchMessages.REASON_IOB] - not within
+ * (`UiRefreshBus.revision`, which also runs while the device dozes between sensor packets). A changed number (other
+ * tenths, or it came or went; a new time alone waits for the cycle tick) sends a tick with
+ * [ModWatchMessages.REASON_IOB] - not within
  * [WatchTicker.MIN_EXTRA_GAP_MS] of any tick ([PumpIobTicks.due]). The log has no doses.
  */
 object PumpIobPhone {
@@ -215,9 +216,10 @@ class PumpIobMemory(initial: Reading? = null) {
 }
 
 /**
- * When the number's change sends an extra tick (pure): it differs from what the last tick carried or the last extra
- * tick claimed ([sent]) and no tick of any reason went within [WatchTicker.MIN_EXTRA_GAP_MS] - a change within that
- * minute waits for the next check.
+ * When the number's change sends an extra tick (pure): its tenths differ from what the last tick carried or the last
+ * extra tick claimed ([sent]), or it came or went, and no tick of any reason went within [WatchTicker.MIN_EXTRA_GAP_MS] -
+ * a change within that minute waits for the next check. Only a new time of the same number sends none (critic 9, M1:
+ * CareLink gives each 5-minute poll a new time; the 5-minute cycle tick brings the fresher time anyway).
  */
 class PumpIobTicks {
 
@@ -235,7 +237,13 @@ class PumpIobTicks {
      * Before the first tick of the process (no watch found yet) nothing is due: the tick that finds one carries it.
      */
     fun due(current: PumpIobMemory.Reading?, nowMs: Long, lastTickAtMs: Long): Boolean {
-        if (!anySent || current == lastSent) return false
+        if (!anySent || !differs(current, lastSent)) return false
         return WatchTicker.gapPassed(nowMs, lastTickAtMs)
+    }
+
+    companion object {
+        /** [a] and [b] differ for the watch's eye: one is there and the other not, or other tenths. */
+        fun differs(a: PumpIobMemory.Reading?, b: PumpIobMemory.Reading?): Boolean =
+            if (a == null || b == null) (a == null) != (b == null) else a.tenths != b.tenths
     }
 }

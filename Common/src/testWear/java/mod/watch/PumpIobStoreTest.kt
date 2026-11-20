@@ -18,6 +18,7 @@ import tk.glucodata.mod.watch.ModWatchMessages.Tick
 import tk.glucodata.mod.watch.ModWearListener
 import tk.glucodata.mod.watch.PhoneBatteryStore
 import tk.glucodata.mod.watch.PumpIobStore
+import tk.glucodata.mod.watch.TickOrder
 
 /**
  * JugglucoNGmod, watch face (20.11): the pump's active insulin from `/mod/tick` on the watch - kept with its own time on
@@ -61,7 +62,7 @@ class PumpIobStoreTest {
     fun anOlderPhonesTickHasNoneAndIsStillATick() {
         ModWearListener.handle(context, ModWatchMessages.PATH_TICK, tick(PumpIob(23, 45)), now)
         // 12 bytes, as an older phone sends it
-        val old = byteArrayOf(1, 64, 0, 0, 0, 1, -94, 53, 69, 0, 0, 1)
+        val old = ModWatchMessages.encodeTick(Tick(64, false, now - 2_000L, ModWatchMessages.REASON_CYCLE))
         assertEquals(12, old.size)
         assertTrue(ModWearListener.handle(context, ModWatchMessages.PATH_TICK, old, now))
         assertNull(PumpIobStore.read(context))
@@ -85,6 +86,45 @@ class PumpIobStoreTest {
         assertTrue(r3 > r2)
         ModWearListener.handle(context, ModWatchMessages.PATH_TICK, tick(null), now + 15 * minute)
         assertTrue(PumpIobStore.revision.value > r3)
+    }
+
+    @Test
+    fun anOlderTickArrivingLaterChangesNothing() {
+        // critic 9, L3: the cycle tick and an extra tick from two threads on the phone, the older one last
+        val newer = ModWatchMessages.encodeTick(Tick(60, false, now, ModWatchMessages.REASON_IOB, PumpIob(31, 10)))
+        val older = ModWatchMessages.encodeTick(Tick(64, false, now - 5_000L, ModWatchMessages.REASON_CYCLE,
+            PumpIob(23, 300)))
+        assertTrue(ModWearListener.handle(context, ModWatchMessages.PATH_TICK, newer, now + 1_000L))
+        assertTrue(ModWearListener.handle(context, ModWatchMessages.PATH_TICK, older, now + 2_000L))
+        assertEquals(31, PumpIobStore.read(context)!!.tenths)
+        assertEquals(60, PhoneBatteryStore.read(context, now + 2_000L))
+        // the phone's clock set back by more than CLOCK_JUMP_MS: taken
+        val setBack = ModWatchMessages.encodeTick(Tick(58, false, now - TickOrder.CLOCK_JUMP_MS - minute,
+            ModWatchMessages.REASON_CYCLE, PumpIob(20, 5)))
+        ModWearListener.handle(context, ModWatchMessages.PATH_TICK, setBack, now + 3_000L)
+        assertEquals(20, PumpIobStore.read(context)!!.tenths)
+    }
+
+    @Test
+    fun theOrderRule() {
+        assertTrue(TickOrder.inOrder(null, now))
+        assertTrue(TickOrder.inOrder(now, now))
+        assertTrue(TickOrder.inOrder(now, now + 1))
+        assertFalse(TickOrder.inOrder(now, now - 1))
+        assertFalse(TickOrder.inOrder(now, now - TickOrder.CLOCK_JUMP_MS))
+        assertTrue(TickOrder.inOrder(now, now - TickOrder.CLOCK_JUMP_MS - 1))
+    }
+
+    @Test
+    fun theActiveInsulinsOwnTickStartsNeitherTheHandOverNorTheHoleCheck() {
+        // critic 9, M1: by the listener's code - only a tick of another reason calls them
+        val code = listOf(java.io.File("src/wear/java/tk/glucodata/mod/watch/ModWearListener.kt"),
+            java.io.File("Common/src/wear/java/tk/glucodata/mod/watch/ModWearListener.kt")).first { it.isFile }.readText()
+        assertTrue(code.contains("val cycle = tick.reason != ModWatchMessages.REASON_IOB"))
+        assertTrue(code.contains("if (cycle) HealthTick.onTick(context, nowMs)"))
+        assertTrue(code.contains("if (cycle) HistoryGapFill.onTick(context, nowMs)"))
+        assertEquals(1, Regex("HealthTick\\.onTick\\(").findAll(code).count())
+        assertEquals(1, Regex("HistoryGapFill\\.onTick\\(").findAll(code).count())
     }
 
     @Test

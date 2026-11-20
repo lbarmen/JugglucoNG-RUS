@@ -15,7 +15,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import tk.glucodata.mod.watch.SignalBudget
 import tk.glucodata.mod.watch.face.FaceLabels
 import tk.glucodata.mod.watch.face.FaceModel
 import tk.glucodata.mod.watch.face.FacePoint
@@ -195,18 +194,28 @@ class FaceSecondsIobTest {
 
     @Test
     fun aDimFrameReadsWhatArrivedOnceAMinute() {
-        val never = SignalBudget.NEVER
-        val t = 5_000_000L
+        val none = ModFaceRenderer.NO_MINUTE
+        val m = 29_000_000L
         // no snapshot yet: read
-        assertTrue(ModFaceRenderer.ambientReadDue(false, false, false, never, t))
+        assertTrue(ModFaceRenderer.ambientReadDue(false, false, false, none, m))
         // nothing new: no read
-        assertFalse(ModFaceRenderer.ambientReadDue(true, false, false, never, t))
+        assertFalse(ModFaceRenderer.ambientReadDue(true, false, false, none, m))
         // something arrived: read in this frame
-        assertTrue(ModFaceRenderer.ambientReadDue(true, true, false, never, t))
-        assertTrue(ModFaceRenderer.ambientReadDue(true, false, true, never, t))
-        // an extra dim frame soon after: waits for the next minute
-        assertFalse(ModFaceRenderer.ambientReadDue(true, true, false, t, t + 30_000L))
-        assertTrue(ModFaceRenderer.ambientReadDue(true, true, false, t, t + 60_000L))
+        assertTrue(ModFaceRenderer.ambientReadDue(true, true, false, none, m))
+        assertTrue(ModFaceRenderer.ambientReadDue(true, false, true, none, m))
+        // an extra dim frame in the same minute: waits for the next minute
+        assertFalse(ModFaceRenderer.ambientReadDue(true, true, false, m, m))
+        assertTrue(ModFaceRenderer.ambientReadDue(true, true, false, m, m + 1))
+    }
+
+    @Test
+    fun aReadWhenEnteringTheDimModeDoesNotHoldBackTheNextMinutesRead() {
+        // critic 9, L1: the frame that entered the dim mode at :50 read; a value came a moment later; the minute tick
+        // 10 s later reads it (by the old 50 s rule it waited for the tick after, up to ~110 s)
+        val enterMs = 29_000_000L * 60_000L + 50_000L
+        val tickMs = enterMs + 10_000L
+        val entered = Math.floorDiv(enterMs, 60_000L)
+        assertTrue(ModFaceRenderer.ambientReadDue(true, true, false, entered, Math.floorDiv(tickMs, 60_000L)))
     }
 
     @Test
@@ -214,7 +223,7 @@ class FaceSecondsIobTest {
         // the phone's calibration, values and the alert echo each minute: before 20.11 three reads, now one
         var signals = 0L
         var readSignal = 0L
-        var lastRead = SignalBudget.NEVER
+        var lastRead = ModFaceRenderer.NO_MINUTE
         var reads = 0
         var maxBehindMs = 0L
         var arrivedAt = -1L
@@ -225,17 +234,19 @@ class FaceSecondsIobTest {
             if (arrivedAt < 0) arrivedAt = minuteStart + 20_000L
             // the next minute tick's frame
             val frame = minuteStart + 60_000L
-            if (ModFaceRenderer.ambientReadDue(true, signals > readSignal, false, lastRead, frame)) {
+            // and an extra dim frame 10 s later in the same minute, after one more signal: no second read
+            for (at in listOf(frame, frame + 10_000L)) {
+                if (at != frame) signals++
+                if (!ModFaceRenderer.ambientReadDue(true, signals > readSignal, false, lastRead, at / 60_000L)) continue
                 reads++
-                lastRead = frame
+                lastRead = at / 60_000L
                 readSignal = signals
-                maxBehindMs = maxOf(maxBehindMs, frame - arrivedAt)
+                maxBehindMs = maxOf(maxBehindMs, at - arrivedAt)
                 arrivedAt = -1L
             }
         }
         assertEquals(60, reads)
         assertTrue("behind $maxBehindMs", maxBehindMs <= 60_000L)
-        assertTrue(ModFaceRenderer.AMBIENT_READ_GAP_MS < 60_000L)
     }
 
     // ------------------------------------------------------------------ helpers

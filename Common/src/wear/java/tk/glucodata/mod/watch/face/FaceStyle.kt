@@ -53,6 +53,8 @@ data class FaceStyle(
     val iobFresh: Int = IOB_FRESH,
     /** ... 15-30 minutes old and "— ЕД" (20.11: a dim blue, not grey - grey sank into the pale age). */
     val iobStale: Int = IOB_STALE,
+    /** The age while not red in the three rows with the active insulin (20.11: paler than the change above it). */
+    val agePale: Int = AGE_PALE,
 ) {
     /** The colour of the active insulin row by its [state]. */
     fun iobColor(state: FaceValues.IobState?): Int =
@@ -95,7 +97,7 @@ data class FaceStyle(
 
         private const val WHITE = 0xFFFFFFFF.toInt()
         private const val GREY = 0xFFB4B4B4.toInt()
-        /** The age while not red (20.11, 1a with fixes: paler than the change above it). */
+        /** The age while not red beside the active insulin (20.11, 1a with fixes: paler than the change above it). */
         private const val AGE_PALE = 0xFF8E8E8E.toInt()
         /** The pump's active insulin: fresh light blue, stale a dim blue still read as blue beside the pale age. */
         private const val IOB_FRESH = 0xFF7CC4FF.toInt()
@@ -113,14 +115,14 @@ data class FaceStyle(
         private const val FORECAST = 0xFF7D7C7A.toInt()
 
         private val NORMAL = FaceStyle(
-            ambient = false, background = BLACK, time = WHITE, secondary = GREY, age = AGE_PALE, ageAlarm = RED,
+            ambient = false, background = BLACK, time = WHITE, secondary = GREY, age = GREY, ageAlarm = RED,
             neutral = NEUTRAL, rangeLine = RANGE_LINE, mark = ORANGE,
             dotRadius = 0.0095f, rangeLineWidth = 0.004f, arrowStroke = 0.12f,
         )
 
         private val AMBIENT = FaceStyle(
             ambient = true, background = BLACK, time = dim(WHITE, AMBIENT_DIM), secondary = dim(GREY, AMBIENT_DIM),
-            age = dim(AGE_PALE, AMBIENT_DIM), ageAlarm = dim(RED, AMBIENT_DIM), neutral = dim(NEUTRAL, AMBIENT_DIM),
+            age = dim(GREY, AMBIENT_DIM), ageAlarm = dim(RED, AMBIENT_DIM), neutral = dim(NEUTRAL, AMBIENT_DIM),
             rangeLine = dim(RANGE_LINE, AMBIENT_DIM), mark = dim(ORANGE, AMBIENT_DIM),
             // part 7l: thinner than in the normal mode, yet the dots, lines and forecast readable at a glance
             dotRadius = 0.0075f, rangeLineWidth = 0.003f, arrowStroke = 0.07f,
@@ -129,6 +131,7 @@ data class FaceStyle(
             battery = dim(GREY, AMBIENT_DIM), batteryLow = dim(RED, AMBIENT_DIM), batteryWarn = dim(AMBER, AMBIENT_DIM),
             valueBold = false,
             iobFresh = dim(IOB_FRESH, AMBIENT_DIM), iobStale = dim(IOB_STALE, AMBIENT_DIM),
+            agePale = dim(AGE_PALE, AMBIENT_DIM),
         )
 
         fun of(ambient: Boolean): FaceStyle = if (ambient) AMBIENT else NORMAL

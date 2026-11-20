@@ -103,7 +103,11 @@ object ModWatchMessages {
     const val REASON_BATTERY = 2
     const val REASON_START = 3
     const val REASON_WATCH = 4
-    /** The pump's active insulin changed on the phone (a new number or a new time of it, at most once a minute). */
+    /**
+     * The pump's active insulin changed on the phone (other tenths, or it came or went; at most once a minute). The
+     * watch keeps the battery and the active insulin of such a tick, but it does not start the heart rate hand-over
+     * or the history hole check (critic 9, M1).
+     */
     const val REASON_IOB = 5
 
     private const val TICK_BYTES = 1 + 1 + Long.SIZE_BYTES + 1

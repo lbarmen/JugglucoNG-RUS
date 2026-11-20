@@ -143,8 +143,8 @@ internal class ModFaceRenderer(
         }
     }
 
-    /** The elapsed time of the last read made by a dim frame ([ambientReadDue]). */
-    private var ambientReadAt = SignalBudget.NEVER
+    /** The minute (of the frame's clock) of the last read made by a dim frame ([ambientReadDue]). */
+    private var ambientReadMinute = NO_MINUTE
 
     /**
      * New data (main thread): a read now, once the budget allows it, or once the face is visible again. In the dim
@@ -238,10 +238,10 @@ internal class ModFaceRenderer(
                 // has arrived since the last read (or a snapshot gone stale) is read for this frame; a failed read
                 // leaves the old snapshot, drawn as before
                 val prev = kept
-                val elapsed = SystemClock.elapsedRealtime()
+                val minute = Math.floorDiv(now, 60_000L)
                 val stale = prev != null && abs(now - prev.readAtMs) >= staleAfter(true)
-                if (ambientReadDue(prev != null, behind(prev), stale, ambientReadAt, elapsed)) {
-                    ambientReadAt = elapsed
+                if (ambientReadDue(prev != null, behind(prev), stale, ambientReadMinute, minute)) {
+                    ambientReadMinute = minute
                     guarded { load(inFrame = true) }
                 }
             }
@@ -323,27 +323,27 @@ internal class ModFaceRenderer(
         /** How old a kept snapshot may get before a frame reads a new one. */
         internal fun staleAfter(ambient: Boolean): Long = if (ambient) AMBIENT_STALE_MS else STALE_MS
 
-        /**
-         * The least time between two reads of dim frames (battery item 1 of 20.11): the system draws the dim mode on
-         * its minute tick, so this keeps it at one read a minute even when an extra dim frame comes between.
-         */
-        const val AMBIENT_READ_GAP_MS = 50_000L
+        /** "No dim read yet" for [ambientReadDue]. */
+        const val NO_MINUTE = Long.MIN_VALUE
 
         /**
          * A dim frame reads the data: there is no snapshot yet ([hasKept] false), or something arrived since the last
-         * read ([behind]) or the snapshot is [stale] - and no dim frame read within [AMBIENT_READ_GAP_MS] before
-         * [nowElapsedMs] ([lastAmbientReadMs], [SignalBudget.NEVER] - none). Requests in the dim mode never read.
+         * read ([behind]) or the snapshot is [stale] - and no dim frame of this minute ([nowMinute], minutes since the
+         * epoch of the frame's clock) read yet ([lastReadMinute], [NO_MINUTE] - none). One read a minute (battery
+         * item 1 of 20.11) even when an extra dim frame comes between; a minute by its number, not 50 s by the clock,
+         * so a read in the frame that entered the dim mode never holds back the next minute's (critic 9, L1). Requests
+         * in the dim mode never read.
          */
         internal fun ambientReadDue(
             hasKept: Boolean,
             behind: Boolean,
             stale: Boolean,
-            lastAmbientReadMs: Long,
-            nowElapsedMs: Long,
+            lastReadMinute: Long,
+            nowMinute: Long,
         ): Boolean {
             if (!hasKept) return true
             if (!behind && !stale) return false
-            return nowElapsedMs - lastAmbientReadMs >= AMBIENT_READ_GAP_MS
+            return nowMinute != lastReadMinute
         }
 
         /** What a request does in the dim mode: nothing but noting it (`false` - no read until a frame). */
