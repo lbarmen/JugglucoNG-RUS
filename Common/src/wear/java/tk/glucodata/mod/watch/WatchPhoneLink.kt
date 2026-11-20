@@ -6,6 +6,7 @@ import com.google.android.gms.wearable.CapabilityClient
 import com.google.android.gms.wearable.Wearable
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import tk.glucodata.WearMessagePath
 
 /**
  * JugglucoNGmod, watch block: our messages from the watch to the phone. The phone is every reachable node with the
@@ -37,6 +38,13 @@ object WatchPhoneLink {
             }
         }
     }
+
+    /**
+     * Sends upstream's history request [data] (`/sync2/req`, built by [HistoryGapFill.encodeRequest]) to the phone
+     * and waits for it on the caller's thread - never the main one. Returns true when a phone took it.
+     */
+    fun sendSyncRequest(context: Context, data: ByteArray): Boolean =
+        send(context.applicationContext ?: context, WearMessagePath.SYNC2_REQ.wire, data)
 
     /** Returns true when at least one phone node took the message. */
     private fun send(context: Context, path: String, data: ByteArray): Boolean {

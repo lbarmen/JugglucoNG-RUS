@@ -10,7 +10,8 @@ import com.google.android.gms.wearable.WearableListenerService
  * thread. A path we do not know yet is ignored: later parts add theirs here.
  *
  * `/mod/tick` (part 2): the phone battery goes to [PhoneBatteryStore] with the watch's time of receipt, and the tick
- * wakes the heart rate and steps hand-over ([HealthTick], filled by part 4).
+ * wakes the heart rate and steps hand-over ([HealthTick], filled by part 4) and the history hole check
+ * ([HistoryGapFill]).
  *
  * `/mod/alerts` (parts 7b, 7d): the phone's alert settings, written into upstream's alert preferences and native
  * thresholds of the watch unless overtaken ([WatchAlertStore]) - their Notify and AlertRepository read them at the
@@ -38,6 +39,7 @@ class ModWearListener : WearableListenerService() {
                     }
                     PhoneBatteryStore.save(context, tick, nowMs)
                     HealthTick.onTick(context, nowMs)
+                    HistoryGapFill.onTick(context, nowMs)
                     NoOngoingActivity.claim()
                     return true
                 }
