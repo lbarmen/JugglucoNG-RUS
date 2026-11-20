@@ -9,9 +9,13 @@ import tk.glucodata.mod.watch.ModWatchLog
 
 /**
  * JugglucoNGmod, watch block (part 4): the queue to the phone. Each batch is a Data Layer item of its own,
- * `/mod/health/batch/<seq>` ([ModHealthBatch.path]), urgent - it goes at once when the phone is near; when it is not,
- * the Data Layer keeps it and delivers it on the next connection. The phone deletes the item once stored (part 5).
- * The batch number grows and survives a restart of the process ([HealthState.nextSeq]).
+ * `/mod/health/batch/<seq>` ([ModHealthBatch.path]); when the phone is not near, the Data Layer keeps it and delivers
+ * it on the next connection. The phone deletes the item once stored (part 5). The batch number grows and survives a
+ * restart of the process ([HealthState.nextSeq]).
+ *
+ * Not urgent (owner's decision 20.11): the system batches the items of routine sends (deliveries, ticks) and wakes
+ * the phone less; heart rate, steps and sleep are history, a delay of minutes costs nothing. Only the "Send now"
+ * button ([HealthHandOver.sendNow]) asks for urgent - the owner waits for it on the screen.
  */
 object HealthSender {
 
@@ -25,11 +29,14 @@ object HealthSender {
 
     private val sendLock = Any()
 
-    /** The real sink: DataClient.putDataItem, urgent, waiting up to [HealthConfig.PUT_TIMEOUT_MS]. Not on the main thread. */
-    fun dataClient(context: Context): Sink = Sink { batch ->
+    /**
+     * The real sink: DataClient.putDataItem, waiting up to [HealthConfig.PUT_TIMEOUT_MS] for the local accept; [urgent]
+     * only for the "Send now" button. Not on the main thread.
+     */
+    fun dataClient(context: Context, urgent: Boolean = false): Sink = Sink { batch ->
         val request = PutDataMapRequest.create(batch.path)
         ModHealthDataMap.write(batch, request.dataMap)
-        request.setUrgent()
+        if (urgent) request.setUrgent()
         Tasks.await(
             Wearable.getDataClient(context).putDataItem(request.asPutDataRequest()),
             HealthConfig.PUT_TIMEOUT_MS,

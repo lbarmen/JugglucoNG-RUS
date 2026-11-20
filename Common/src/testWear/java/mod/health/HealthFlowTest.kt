@@ -450,4 +450,21 @@ class HealthFlowTest {
         HealthSender.send(core, FakeSource(), sink, t0 + 9 * minute)
         assertTrue(sink.rows(ModHealthBatch.KIND_STATUS).single().extra.contains(";late=2;"))
     }
+
+    @Test
+    fun onlyTheSendNowButtonAsksTheDataLayerForUrgent() {
+        // owner's decision 20.11: routine batches wait for the system's batching; "Send now" alone is urgent
+        fun source(path: String) =
+            listOf(File("src/$path"), File("Common/src/$path")).first { it.isFile }.readText()
+        val sender = source("wear/java/tk/glucodata/mod/health/HealthSender.kt")
+        assertTrue(sender.contains("fun dataClient(context: Context, urgent: Boolean = false)"))
+        assertEquals(1, Regex("""setUrgent\(\)""").findAll(sender).count())
+        assertTrue(sender.contains("if (urgent) request.setUrgent()"))
+        val handOver = source("wear/java/tk/glucodata/mod/health/HealthHandOver.kt")
+        assertTrue(handOver.contains("HealthSender.dataClient(core.context, urgent = forceStatus)"))
+        // forceStatus = true comes from the button only; a tick and its fallback pass false
+        assertEquals(1, Regex("""safeRun\(app, source, forceStatus = true\)""").findAll(handOver).count())
+        val intake = source("wear/java/tk/glucodata/mod/health/HealthIntake.kt")
+        assertFalse(intake.contains("urgent"))
+    }
 }

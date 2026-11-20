@@ -18,7 +18,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.watch.face.FaceGraph
 import tk.glucodata.mod.watch.face.FaceLayout
+import tk.glucodata.mod.watch.SignalBudget
 import tk.glucodata.mod.watch.face.FacePoint
+import tk.glucodata.mod.watch.face.FaceReading
 import tk.glucodata.mod.watch.face.FaceStyle
 import tk.glucodata.mod.watch.face.ModFaceRenderer
 import tk.glucodata.mod.watch.face.ReadPause
@@ -212,15 +214,107 @@ class FaceHoursAndRangeTest {
 
     // ------------------------------------------------------------------ read pacing (critic 3c, N1/N2/N7)
 
+    // part 7o: a budget of reads instead of "read, then a pause of 20 s"
+
+    /** The renderer's pacing on one clock: requests at [signalsMs]; returns the times of the reads. */
+    private fun simulateReads(signalsMs: List<Long>, visible: Boolean = true): List<Long> {
+        val budget = SignalBudget(ModFaceRenderer.READS_PER_WINDOW, ModFaceRenderer.READ_WINDOW_MS)
+        val reads = mutableListOf<Long>()
+        var pausedUntil: Long? = null
+        var dirty = false
+        fun read(at: Long) {
+            budget.record(at)
+            reads += at
+            dirty = false
+        }
+        fun request(at: Long) {
+            dirty = true
+            val wait = ModFaceRenderer.readWait(visible, budget.lastRuns(), at) ?: return
+            if (wait <= 0L) read(at) else if (pausedUntil == null) pausedUntil = at + wait
+        }
+        val queue = signalsMs.sorted().toMutableList()
+        while (queue.isNotEmpty() || pausedUntil != null) {
+            val pause = pausedUntil
+            if (pause != null && (queue.isEmpty() || pause <= queue.first())) {
+                pausedUntil = null
+                if (dirty) request(pause)
+            } else {
+                request(queue.removeAt(0))
+            }
+        }
+        return reads
+    }
+
+    /** One minute's signals at [t]: the calibration, the values a moment later, the echo of upstream's alert path. */
+    private fun minute(t: Long) = listOf(t, t + 400L, t + 410L)
+
     @Test
-    fun aRequestReadsNowAfterThePauseOrWhenTheFaceIsVisibleAgain() {
-        val last = 1_000_000L
-        assertNull(ModFaceRenderer.readWait(visible = false, lastReadAtMs = last, nowMs = last + 999_999L))
-        assertEquals(0L, ModFaceRenderer.readWait(true, last, last + ModFaceRenderer.MIN_READ_MS))
-        assertEquals(0L, ModFaceRenderer.readWait(true, last, last + 10 * ModFaceRenderer.MIN_READ_MS))
-        assertEquals(ModFaceRenderer.MIN_READ_MS - 5_000L, ModFaceRenderer.readWait(true, last, last + 5_000L))
+    fun aNormalMinuteReadsTheValuesAtOnce() {
+        val t = 1_000_000L
+        // all three read at once, the new value with no pause
+        assertEquals(minute(t), simulateReads(minute(t)))
+        // minute after minute the same
+        val minutes = (0 until 10).flatMap { minute(t + it * 60_000L) }
+        assertEquals(minutes, simulateReads(minutes))
+        // critic 7o, S1: two wrist raises in the 20 s before the data still leave room for the values
+        val raised = listOf(t - 15_000L, t - 5_000L) + minute(t)
+        assertEquals(raised, simulateReads(raised))
+    }
+
+    @Test
+    fun historyCatchingUpKeepsToTheBudget() {
+        val t = 1_000_000L
+        val budget = ModFaceRenderer.READS_PER_WINDOW
+        val signals = (0 until 60).map { t + it * 100L } // 60 pieces in 6 s
+        val reads = simulateReads(signals)
+        // never more than the budget in any window
+        for (r in reads) {
+            assertTrue(reads.count { it >= r && it < r + ModFaceRenderer.READ_WINDOW_MS } <= budget)
+        }
+        // the first ones at once, the last piece read once the oldest read leaves the window
+        assertEquals((0 until budget).map { t + it * 100L }, reads.take(budget))
+        assertEquals(t + ModFaceRenderer.READ_WINDOW_MS, reads.last())
+        assertEquals(budget + 1, reads.size)
+    }
+
+    @Test
+    fun aReadWaitsUntilTheOldestLeavesTheWindow() {
+        val t = 1_000_000L
+        val n = ModFaceRenderer.READS_PER_WINDOW
+        assertEquals(5, n)
+        val full = LongArray(n) { t + it * 1_000L }
+        assertEquals(ModFaceRenderer.READ_WINDOW_MS - 5_000L, ModFaceRenderer.readWait(true, full, t + 5_000L))
+        assertEquals(0L, ModFaceRenderer.readWait(true, full, t + ModFaceRenderer.READ_WINDOW_MS))
+        assertEquals(0L, ModFaceRenderer.readWait(true, full, t + 10 * ModFaceRenderer.READ_WINDOW_MS))
+        // one read short of the budget in the window: the next at once
+        val short = LongArray(n) { if (it == 0) SignalBudget.NEVER else t + it * 1_000L }
+        assertEquals(0L, ModFaceRenderer.readWait(true, short, t + 6_000L))
         // never read yet: at once
-        assertEquals(0L, ModFaceRenderer.readWait(true, Long.MIN_VALUE / 2, last))
+        assertEquals(0L, ModFaceRenderer.readWait(true, LongArray(n) { SignalBudget.NEVER }, t))
+    }
+
+    @Test
+    fun anInvisibleFaceReadsNothing() {
+        val t = 1_000_000L
+        val n = ModFaceRenderer.READS_PER_WINDOW
+        assertNull(ModFaceRenderer.readWait(visible = false, LongArray(n) { SignalBudget.NEVER }, t))
+        assertNull(ModFaceRenderer.readWait(false, LongArray(n) { t }, t + 999_999L))
+        assertTrue(simulateReads(minute(t), visible = false).isEmpty())
+    }
+
+    @Test
+    fun aLastingReadFailureIsJournalledOnceAMinute() {
+        val t = 1_000_000L
+        assertTrue(ModFaceRenderer.shouldLogFailure(SignalBudget.NEVER, t))
+        assertFalse(ModFaceRenderer.shouldLogFailure(t, t + ModFaceRenderer.FAILURE_LOG_MS - 1L))
+        assertTrue(ModFaceRenderer.shouldLogFailure(t, t + ModFaceRenderer.FAILURE_LOG_MS))
+    }
+
+    @Test
+    fun theJournalAgeIsInWholeSecondsWithoutTheValue() {
+        val reading = FaceReading(1_000_000L, 7.2f, "7,2", 0f, 0)
+        assertEquals("12 s", ModFaceRenderer.ageText(reading, 1_012_999L))
+        assertEquals("none", ModFaceRenderer.ageText(null, 1_012_999L))
     }
 
     @Test
@@ -256,7 +350,7 @@ class FaceHoursAndRangeTest {
 
     @Test
     fun theStaleReadOfAFrameNeverBreaksThePause() {
-        assertTrue(ModFaceRenderer.STALE_MS >= ModFaceRenderer.MIN_READ_MS)
+        assertTrue(ModFaceRenderer.STALE_MS >= ModFaceRenderer.READ_WINDOW_MS)
         assertTrue(ModFaceRenderer.STALE_MS < ModFaceRenderer.FRAME_MS)
         // the dim mode reads again only every few frames (part 7c, critic 7, N8)
         assertEquals(ModFaceRenderer.STALE_MS, ModFaceRenderer.staleAfter(false))

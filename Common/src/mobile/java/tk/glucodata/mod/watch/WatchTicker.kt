@@ -20,7 +20,8 @@ import tk.glucodata.MessageSender
  *
  * Sent by the 5-minute cycle ([WatchTickWorker]), at the app's start ([ModWatchStarter]), when our watch app appears
  * ([ModPhoneListener]) and when the battery moved [BATTERY_STEP] points from the last tick sent (at most once a
- * [MIN_EXTRA_GAP_MS], while the process lives, and not while no watch answered - [WatchTickMemory]). The watch is every
+ * [MIN_EXTRA_GAP_MS], while the process lives, and not while no watch answered - [WatchTickMemory]) or the pump's active
+ * insulin changed ([PumpIobPhone], which also fills the tick's active insulin field). The watch is every
  * reachable node with the watch app's capability: the Data Layer links only apps of the same package and signature, so
  * a node found is our watch app. Nothing goes while the user has the watch companion switched off on the phone (as
  * upstream's own sender). The log has counts and reason codes only, never the battery.
@@ -68,8 +69,10 @@ object WatchTicker {
                 return false
             }
             memory.watchFound()
+            // the pump's active insulin for the watch face (only the pump's number; none - the watch drops its copy)
+            val iob = PumpIobPhone.forTick(context, nowMs)
             val data = ModWatchMessages.encodeTick(
-                ModWatchMessages.Tick(battery?.percent, battery?.charging == true, nowMs, reason)
+                ModWatchMessages.Tick(battery?.percent, battery?.charging == true, nowMs, reason, iob)
             )
             val client = Wearable.getMessageClient(context)
             val reached = ArrayList<String>(nodes.size)
@@ -175,6 +178,9 @@ object WatchTicker {
         if (Math.abs(percent - lastSentPercent) < BATTERY_STEP) return false
         return gapPassed(nowMs, lastTickAtMs)
     }
+
+    /** The last tick attempt of any reason in this process (0 - none): the pump's extra ticks keep a minute from it. */
+    fun lastTickAtMs(): Long = memory.lastAttemptAtMs
 
     /** [MIN_EXTRA_GAP_MS] has passed since [lastMs] (a clock set back counts as passed). */
     fun gapPassed(nowMs: Long, lastMs: Long): Boolean = nowMs - lastMs !in 0 until MIN_EXTRA_GAP_MS

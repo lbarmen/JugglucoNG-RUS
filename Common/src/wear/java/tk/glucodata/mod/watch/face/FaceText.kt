@@ -1,6 +1,7 @@
 package tk.glucodata.mod.watch.face
 
 import android.content.Context
+import java.text.DecimalFormatSymbols
 import java.time.Instant
 import java.time.ZoneId
 import java.util.Locale
@@ -22,6 +23,12 @@ data class FaceLabels(
     /** The battery row's words before the two percents (part 3b). */
     val phone: String = "phone",
     val watch: String = "watch",
+    /** The age under two minutes, one integer ("%1$d s"; 20.11). */
+    val secondsFormat: String = "%1\$d s",
+    /** The age from 100 minutes, one integer of whole hours ("%1$d h"; 20.11). */
+    val hoursFormat: String = "%1\$d h",
+    /** The pump's active insulin, one string - the number, "99+" or "-" ("%1$s U"; 20.11). */
+    val iobFormat: String = "%1\$s U",
 ) {
     companion object {
         /** The labels for the context's current locale. */
@@ -34,6 +41,9 @@ data class FaceLabels(
                 res.getString(R.string.mod_watch_face_minutes),
                 res.getString(R.string.mod_watch_face_phone),
                 res.getString(R.string.mod_watch_face_watch),
+                res.getString(R.string.mod_watch_face_seconds),
+                res.getString(R.string.mod_watch_face_hours),
+                res.getString(R.string.mod_watch_face_iob),
             )
         }
     }
@@ -80,10 +90,53 @@ object FaceText {
     fun batteries(phoneText: String, watchText: String, labels: FaceLabels): String =
         "${labels.phone} $phoneText   ${labels.watch} $watchText"
 
-    /** The age of the value, "2 min" / "2 мин"; `null` when there has been no reading at all. */
+    /**
+     * The age of the value in whole [minutes], "2 min" / "2 мин", from [FaceValues.HOURS_FROM_MINUTES] in whole hours,
+     * "1 h" / "1 ч" (20.11); `null` when there has been no reading at all.
+     */
     fun age(minutes: Int?, labels: FaceLabels): String? {
         if (minutes == null || minutes < 0) return null
+        if (minutes >= FaceValues.HOURS_FROM_MINUTES) {
+            val hours = minutes / 60
+            return formatInt(labels.hoursFormat, hours, "$hours h")
+        }
         return formatInt(labels.minutesFormat, minutes, "$minutes min")
+    }
+
+    /**
+     * The age of the value [ageMs] old: with [seconds] (the screen lit) and under [FaceValues.SECONDS_UNTIL_MS] in whole
+     * seconds, "45 s" / "45 с" (20.11), else as [age]; a reading from the future counts as 0; `null` - no reading.
+     */
+    fun ageOf(ageMs: Long?, seconds: Boolean, labels: FaceLabels): String? {
+        if (ageMs == null) return null
+        val ms = ageMs.coerceAtLeast(0L)
+        if (seconds && ms < FaceValues.SECONDS_UNTIL_MS) {
+            val s = (ms / 1000L).toInt()
+            return formatInt(labels.secondsFormat, s, "$s s")
+        }
+        return age((ms / 60_000L).coerceAtMost(Int.MAX_VALUE.toLong()).toInt(), labels)
+    }
+
+    /** From this many tenths the active insulin is written [IOB_OVER] (100 units). */
+    const val IOB_OVER_TENTHS = 1000
+    const val IOB_OVER = "99+"
+
+    /**
+     * The pump's active insulin: always one decimal in the locale's separator, "0,0 ЕД" a known zero, "12,5 ЕД"; from
+     * 100 units "99+ ЕД"; `null` [tenths] (unknown or too old) "— ЕД" (20.11; never upstream's "under 0.05 hidden" or
+     * "3" for "3.0" - not for a dose decision).
+     */
+    fun iob(tenths: Int?, labels: FaceLabels, locale: Locale = Locale.getDefault()): String {
+        val number = when {
+            tenths == null || tenths < 0 -> FaceValues.NONE
+            tenths >= IOB_OVER_TENTHS -> IOB_OVER
+            else -> "${tenths / 10}${DecimalFormatSymbols.getInstance(locale).decimalSeparator}${tenths % 10}"
+        }
+        return try {
+            String.format(Locale.ROOT, labels.iobFormat, number)
+        } catch (_: Throwable) {
+            "$number U"
+        }
     }
 
     private fun formatInt(pattern: String, value: Int, fallback: String): String = try {

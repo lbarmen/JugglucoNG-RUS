@@ -9,8 +9,11 @@ import com.google.android.gms.wearable.WearableListenerService
  * Common/src/wearMod/AndroidManifest.xml; upstream's MessageReceiver never sees these paths). Runs on a background
  * thread. A path we do not know yet is ignored: later parts add theirs here.
  *
- * `/mod/tick` (part 2): the phone battery goes to [PhoneBatteryStore] with the watch's time of receipt, and the tick
- * wakes the heart rate and steps hand-over ([HealthTick], filled by part 4).
+ * `/mod/tick` (part 2): the phone battery goes to [PhoneBatteryStore] with the watch's time of receipt, the pump's
+ * active insulin to [PumpIobStore] (watch face, 20.11; a tick without it removes the kept one; neither from a tick
+ * older than one already taken, [TickOrder]), and the tick - not one sent for the active insulin alone -
+ * wakes the heart rate and steps hand-over ([HealthTick], filled by part 4) and the history hole check
+ * ([HistoryGapFill]).
  *
  * `/mod/alerts` (parts 7b, 7d): the phone's alert settings, written into upstream's alert preferences and native
  * thresholds of the watch unless overtaken ([WatchAlertStore]) - their Notify and AlertRepository read them at the
@@ -36,8 +39,28 @@ class ModWearListener : WearableListenerService() {
                         ModWatchLog.w("watch listener: bad $path message")
                         return false
                     }
-                    PhoneBatteryStore.save(context, tick, nowMs)
-                    HealthTick.onTick(context, nowMs)
+                    // critic 9, L3: a tick older than one already taken (two sending threads on the phone) leaves
+                    // the battery and the active insulin as they are
+                    val inOrder = try {
+                        TickOrder.accept(context, tick.sentAtMs)
+                    } catch (_: Throwable) {
+                        true
+                    }
+                    if (inOrder) {
+                        PhoneBatteryStore.save(context, tick, nowMs)
+                        // the pump's active insulin for the face; a tick without it removes the kept one
+                        try {
+                            PumpIobStore.save(context, tick, nowMs)
+                        } catch (t: Throwable) {
+                            ModWatchLog.w("pump iob not kept: ${t.javaClass.simpleName}")
+                        }
+                    } else {
+                        ModWatchLog.i("watch listener: tick out of order")
+                    }
+                    // critic 9, M1: the active insulin's own tick does not start the hand-over and the hole check
+                    val cycle = tick.reason != ModWatchMessages.REASON_IOB
+                    if (cycle) HealthTick.onTick(context, nowMs)
+                    if (cycle) HistoryGapFill.onTick(context, nowMs)
                     NoOngoingActivity.claim()
                     return true
                 }

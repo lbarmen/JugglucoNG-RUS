@@ -28,6 +28,7 @@ import tk.glucodata.mod.watch.face.FaceLayout
 import tk.glucodata.mod.watch.face.FaceModel
 import tk.glucodata.mod.watch.face.FacePainter
 import tk.glucodata.mod.watch.face.FacePoint
+import tk.glucodata.mod.watch.face.FacePumpIob
 import tk.glucodata.mod.watch.face.FaceReading
 import tk.glucodata.mod.watch.face.FaceSnapshot
 import tk.glucodata.mod.watch.face.FaceStyle
@@ -120,7 +121,7 @@ class FacePainterTest {
         offset: Pair<Float, Float> = 0f to 0f,
     ): Bitmap {
         val bitmap = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
-        val model = FaceModel.build(snapshot, zone, labels())
+        val model = FaceModel.build(snapshot, zone, labels(), ambient)
         val limits = ModFaceSource.limits(true)
         FacePainter().draw(Canvas(bitmap), px, px, model, true, ambient, showData = true, trial = trial,
             traceColor = { ModFaceSource.trafficColor(it, true, limits) }, offsetX = offset.first, offsetY = offset.second)
@@ -198,15 +199,24 @@ class FacePainterTest {
      * the row: right of it only the arrow, the change and the age, none of the number.
      */
     private fun arrowX(snapshot: FaceSnapshot, layout: FaceLayout.Layout, bold: Boolean): Int {
-        val model = FaceModel.build(snapshot, zone, labels())
+        val model = FaceModel.build(snapshot, zone, labels(), ambient = !bold)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG)
         paint.typeface = if (bold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
         paint.textSize = layout.value.textSize
         val valueWidth = paint.measureText(model.valueText)
-        paint.typeface = Typeface.DEFAULT
-        paint.textSize = layout.sideTextSize
-        val sideWidth = maxOf(model.deltaText?.let { paint.measureText(it) } ?: 0f,
-            model.ageText?.let { paint.measureText(it) } ?: 0f)
+        // the side texts as the painter sizes them (20.11): with the active insulin smaller; the age smaller and
+        // regular unless red (full and bold), the active insulin as the small age
+        val side = if (model.iobText != null) layout.sideTextIob else layout.sideTextSize
+        fun width(s: String?, size: Float, b: Boolean): Float {
+            if (s == null) return 0f
+            paint.typeface = if (b) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            paint.textSize = size
+            return paint.measureText(s)
+        }
+        val three = model.iobText != null
+        val ageSize = if (three && !model.ageAlarm) side * FaceLayout.AGE_SMALL else side
+        val sideWidth = maxOf(width(model.deltaText, side, false), width(model.ageText, ageSize, three && model.ageAlarm),
+            width(model.iobText, side * FaceLayout.AGE_SMALL, false))
         return FaceLayout.placeValueRow(layout.value, valueWidth, layout.arrowSize, sideWidth, layout.radius * 0.04f)
             .arrowX.toInt()
     }
@@ -407,6 +417,109 @@ class FacePainterTest {
         val none = paint(FaceSnapshot(now, true, true, 3, null, emptyList(), emptyList(), 3.9f, 10f, null, null),
             ambient = true, name = "7e_no_data")
         assertTrue(lit(none, layout.value) > 10)
+    }
+
+    // ------------------------------------------------------------------ 20.11: seconds and the pump's active insulin
+
+    /** [snapshot] with its reading [ageSec] old (history stays a minute apart before it). */
+    private fun aged(snapshot: FaceSnapshot, ageSec: Int): FaceSnapshot =
+        snapshot.copy(current = snapshot.current!!.copy(timeMs = now - ageSec * 1000L))
+
+    private fun iob(tenths: Int, ageMin: Int) = FacePumpIob(tenths, now - ageMin * minute)
+
+    /** 6,2 · 45 с · 2,3 ЕД. */
+    private fun usual(iob: FacePumpIob? = iob(23, 3)) = aged(inRange(), 45).copy(pumpIob = iob)
+
+    /** 11,7 · 12 мин (red) · 12,5 ЕД: the widest value row of the critics. */
+    private fun hard() = scenario(
+        curve = { back -> if (back > 60) calm(back) else calm(60) + (11.7f - calm(60)) * (1f - (back - 12) / 48f) },
+        rate = 1.2f,
+        forecast = null,
+        ageMin = 12,
+    ).copy(pumpIob = iob(125, 4))
+
+    private val iobFresh = FaceStyle.of(false).iobFresh
+    private val iobStale = FaceStyle.of(false).iobStale
+
+    @Test
+    fun theActiveInsulinFreshInLightBlueAsTheThirdRow() {
+        val layout = FaceLayout.compute(size, size)
+        val bitmap = paint(usual(), ambient = false, name = "9_usual")
+        assertTrue(count(bitmap, layout.value, iobFresh) > 10)
+        assertEquals(0, count(bitmap, layout.value, iobStale))
+        // only beside the number, nowhere else
+        assertEquals(0, count(bitmap, layout.graph, iobFresh) + count(bitmap, layout.time, iobFresh))
+        assertEquals(0, litOutside(bitmap, 0.01f * size))
+        // the number keeps its pixels: as many green ones as without the active insulin (not shrunk)
+        val without = paint(usual(iob = null), ambient = false, name = "9_no_iob")
+        assertEquals(0, count(without, layout.value, iobFresh) + count(without, layout.value, iobStale))
+        // critic 9, L4: without the active insulin the age as before 20.11 (grey); pale only in the three rows
+        val style = FaceStyle.of(false)
+        assertTrue(count(without, layout.value, style.age) > 10)
+        assertEquals(0, count(without, layout.value, style.agePale))
+        assertTrue(count(bitmap, layout.value, style.agePale) > 10)
+        assertEquals(0, count(bitmap, layout.value, style.age))
+        assertTrue(count(bitmap, layout.value, green) >= count(without, layout.value, green) * 0.95f)
+    }
+
+    @Test
+    fun theHardCaseKeepsTheNumberAndTheRedAgeInside() {
+        val layout = FaceLayout.compute(size, size)
+        val bitmap = paint(hard(), ambient = false, name = "9_hard")
+        assertTrue("red age", count(bitmap, layout.value, FaceStyle.of(false).ageAlarm) > 10)
+        assertTrue("active insulin", count(bitmap, layout.value, iobFresh) > 10)
+        assertTrue("number", count(bitmap, layout.value, yellow) > 200)
+        assertEquals(0, litOutside(bitmap, 0.01f * size))
+        // the number is not shrunk by the third row (critics, 20.11)
+        val model = FaceModel.build(hard(), zone, labels())
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        p.typeface = Typeface.DEFAULT_BOLD
+        p.textSize = layout.value.textSize
+        val valueWidth = p.measureText(model.valueText)
+        p.textSize = layout.sideTextIob
+        val delta = p.measureText(model.deltaText ?: "")
+        val age = p.measureText(model.ageText!!)
+        p.typeface = Typeface.DEFAULT
+        p.textSize = layout.sideTextIob * FaceLayout.AGE_SMALL
+        val iobWidth = p.measureText(model.iobText!!)
+        val place = FaceLayout.placeValueRow(layout.value, valueWidth, layout.arrowSize, maxOf(delta, age, iobWidth),
+            layout.radius * 0.04f)
+        assertEquals(1f, place.scale)
+    }
+
+    @Test
+    fun aStaleActiveInsulinInDimBlueAndAnUnknownOneAsADash() {
+        val layout = FaceLayout.compute(size, size)
+        val stale = paint(usual(iob(23, 20)), ambient = false, name = "9_iob_stale")
+        assertTrue(count(stale, layout.value, iobStale) > 10)
+        assertEquals(0, count(stale, layout.value, iobFresh))
+        val unknown = paint(usual(iob(23, 40)), ambient = false, name = "9_iob_unknown")
+        assertTrue(count(unknown, layout.value, iobStale) > 5)
+        // "— ЕД" is narrower than "2,3 ЕД": fewer blue pixels
+        assertTrue(count(unknown, layout.value, iobStale) < count(stale, layout.value, iobStale))
+        val over = paint(usual(iob(1234, 2)), ambient = false, name = "9_iob_99plus")
+        assertTrue(count(over, layout.value, iobFresh) > 10)
+        assertEquals(0, litOutside(over, 0.01f * size))
+    }
+
+    @Test
+    fun theDimModeShowsMinutesAndTheActiveInsulinDimmed() {
+        val layout = FaceLayout.compute(size, size)
+        val ambient = paint(usual(), ambient = true, name = "9_ambient")
+        assertEquals("0 мин", FaceModel.build(usual(), zone, labels(), ambient = true).ageText)
+        assertEquals("45 с", FaceModel.build(usual(), zone, labels()).ageText)
+        assertEquals(0, count(ambient, layout.value, iobFresh))
+        assertTrue(count(ambient, layout.value, FaceStyle.of(true).iobFresh) > 10)
+    }
+
+    @Test
+    fun anAgeOver99MinutesIsWrittenInHours() {
+        val layout = FaceLayout.compute(size, size)
+        val old = scenario(::calm, 0.3f, forecast = null, ageMin = 100).copy(pumpIob = iob(23, 100))
+        assertEquals("1 ч", FaceModel.build(old, zone, labels()).ageText)
+        val bitmap = paint(old, ambient = false, name = "9_age_hours")
+        assertTrue(count(bitmap, layout.value, FaceStyle.of(false).ageAlarm) > 10)
+        assertEquals(0, litOutside(bitmap, 0.01f * size))
     }
 
     companion object {

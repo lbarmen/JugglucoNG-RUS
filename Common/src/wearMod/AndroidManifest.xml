@@ -116,6 +116,27 @@
             android:name="tk.glucodata.mod.health.hs.ModHealthStarter"
             android:authorities="${applicationId}.modhealthstarter"
             android:exported="false" />
+        <!-- Our alarm screen (part 8): opened instead of upstream's tk.glucodata.ui.AlarmActivity (their registry,
+             filled by ModAlarmStarter below), declared as theirs is in the watch build (their wear and main manifests
+             merged): private, own task without affinity, out of recents, over the lock screen, screen on, one
+             instance, their theme. A test reads this block. -->
+        <activity
+            android:name="tk.glucodata.mod.watch.alarm.ModAlarmActivity"
+            android:exported="false"
+            android:taskAffinity=""
+            android:excludeFromRecents="true"
+            android:autoRemoveFromRecents="true"
+            android:showOnLockScreen="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:launchMode="singleTask"
+            android:theme="@style/Theme.AppCompat.NoActionBar" />
+        <!-- Puts our alarm screen in upstream's slot at process start (no hook in their Application); its own
+             provider, so a failure here or in the health starter never stops the other. -->
+        <provider
+            android:name="tk.glucodata.mod.watch.alarm.ModAlarmStarter"
+            android:authorities="${applicationId}.modalarmstarter"
+            android:exported="false" />
         <!-- Watch restart or app update: subscribe again. -->
         <receiver
             android:name="tk.glucodata.mod.health.hs.ModHealthBootReceiver"

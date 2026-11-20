@@ -34,6 +34,51 @@ object FaceValues {
     /** The "no value" text, in place of the number, a missing battery and a missing change alike. */
     const val NONE = "—"
 
+    /**
+     * The age is written in seconds below this ("119 s", then "2 min"; watch face, 20.11), only while the screen is
+     * lit: the dim mode draws once a minute and would leave the seconds up to 59 s behind.
+     */
+    const val SECONDS_UNTIL_MS = 2 * 60_000L
+
+    /** From this many whole minutes the age is written in whole hours ("99 min", then "1 h"; 20.11, 1a with fixes). */
+    const val HOURS_FROM_MINUTES = 100
+
+    /** A frame a second while the age is written in seconds, else a frame a minute (upstream's face too). */
+    const val SECONDS_FRAME_MS = 1_000L
+    const val MINUTE_FRAME_MS = 60_000L
+
+    /**
+     * How often the lit face is drawn ([ambient] - the dim mode, which the system draws once a minute whatever this
+     * says): every second while the age ([ageMs], `null` - no reading) is written in seconds, else every minute.
+     */
+    fun frameDelayMs(ageMs: Long?, ambient: Boolean): Long =
+        if (secondsShown(ageMs, ambient)) SECONDS_FRAME_MS else MINUTE_FRAME_MS
+
+    /** The age [ageMs] is written in seconds: the screen lit ([ambient] false) and younger than [SECONDS_UNTIL_MS]. */
+    fun secondsShown(ageMs: Long?, ambient: Boolean): Boolean =
+        !ambient && ageMs != null && ageMs < SECONDS_UNTIL_MS
+
+    /** The pump's active insulin is fresh (light blue) while younger than this many minutes (20.11). */
+    const val IOB_FRESH_MINUTES = 15
+
+    /** ... stale (dim blue) while younger than this, after it "- U" (the phone's slot lasts 30 minutes too). */
+    const val IOB_UNKNOWN_MINUTES = 30
+
+    /** How the face shows the pump's active insulin by its age. */
+    enum class IobState { FRESH, STALE, UNKNOWN }
+
+    /**
+     * The state of an active insulin [ageMs] old (whole minutes, as the glucose age): under [IOB_FRESH_MINUTES] fresh,
+     * under [IOB_UNKNOWN_MINUTES] stale, else unknown; a time ahead of the watch's clock by more than a minute (the
+     * clock set back after receipt) is unknown too - its age cannot be told.
+     */
+    fun iobState(ageMs: Long): IobState = when {
+        ageMs < -60_000L -> IobState.UNKNOWN
+        ageMs < IOB_FRESH_MINUTES * 60_000L -> IobState.FRESH
+        ageMs < IOB_UNKNOWN_MINUTES * 60_000L -> IobState.STALE
+        else -> IobState.UNKNOWN
+    }
+
     /** Whole minutes from [readingMs] to [nowMs]; a reading "from the future" (clocks apart) counts as 0. */
     fun ageMinutes(nowMs: Long, readingMs: Long): Int {
         val age = nowMs - readingMs
