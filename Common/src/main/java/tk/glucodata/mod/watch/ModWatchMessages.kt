@@ -27,9 +27,12 @@ object ModWatchMessages {
      */
     const val PATH_SNOOZE_DONE = "/mod/snooze/done"
     /**
-     * Phone -> watch, every 5 minutes (and on a battery step, at start, when the watch appears): wake-up and phone
-     * battery. Body: battery percent (byte, 0-100 or [BATTERY_UNKNOWN]), charging (byte, 0/1), phone time (ms, long),
-     * reason (byte, [REASON_CYCLE] ...; a reason this code does not know is kept as it is).
+     * Phone -> watch, every 5 minutes (and on a battery step, at start, when the watch appears, when the pump's active
+     * insulin changed): wake-up and phone battery. Body: battery percent (byte, 0-100 or [BATTERY_UNKNOWN]), charging
+     * (byte, 0/1), phone time (ms, long), reason (byte, [REASON_CYCLE] ...; a reason this code does not know is kept as
+     * it is); then, only when the phone has one, the pump's active insulin: [IOB_FIELD] (byte), tenths of a unit
+     * (int), its age in seconds at sending (int). An older watch reads the first fields and ignores the rest; a tick
+     * without the active insulin (an older phone too) means "none".
      */
     const val PATH_TICK = "/mod/tick"
     /**
@@ -100,23 +103,58 @@ object ModWatchMessages {
     const val REASON_BATTERY = 2
     const val REASON_START = 3
     const val REASON_WATCH = 4
+    /**
+     * The pump's active insulin changed on the phone (other tenths, or it came or went; at most once a minute). The
+     * watch keeps the battery and the active insulin of such a tick, but it does not start the heart rate hand-over
+     * or the history hole check (critic 9, M1).
+     */
+    const val REASON_IOB = 5
 
     private const val TICK_BYTES = 1 + 1 + Long.SIZE_BYTES + 1
 
+    /** The mark before the active insulin in a tick ('I'): a tail without it is not read as one. */
+    const val IOB_FIELD: Int = 0x49
+    private const val IOB_BYTES = 1 + Int.SIZE_BYTES + Int.SIZE_BYTES
+
+    /** The most tenths of a unit a tick carries (the face writes "99+" from 100 units). */
+    const val IOB_MAX_TENTHS = 99_999
+
+    /** The oldest active insulin a tick carries, seconds (a week: the phone keeps one much shorter). */
+    const val IOB_MAX_AGE_SEC = 7 * 24 * 3600
+
+    /**
+     * The pump's active insulin as the phone has it: [tenths] of a unit (0 - a known zero) and its [ageSec] at
+     * sending, counted on the phone's clock (the watch adds the time since receipt on its own clock).
+     */
+    data class PumpIob(val tenths: Int, val ageSec: Int)
+
     /**
      * [batteryPercent] - phone battery 0-100, `null` when unknown; [charging] - the phone is charging (or full on the
-     * charger); [sentAtMs] - phone time; [reason] - one of the REASON_ codes (an unknown one is passed through).
+     * charger); [sentAtMs] - phone time; [reason] - one of the REASON_ codes (an unknown one is passed through);
+     * [iob] - the pump's active insulin, `null` - the phone has none.
      */
-    data class Tick(val batteryPercent: Int?, val charging: Boolean, val sentAtMs: Long, val reason: Int)
+    data class Tick(
+        val batteryPercent: Int?,
+        val charging: Boolean,
+        val sentAtMs: Long,
+        val reason: Int,
+        val iob: PumpIob? = null,
+    )
 
     fun encodeTick(tick: Tick): ByteArray {
         val percent = tick.batteryPercent?.takeIf { it in 0..100 } ?: BATTERY_UNKNOWN
-        return allocate(TICK_BYTES)
+        val iob = tick.iob
+        val buffer = allocate(TICK_BYTES + if (iob != null) IOB_BYTES else 0)
             .put(percent.toByte())
             .put((if (tick.charging) 1 else 0).toByte())
             .putLong(tick.sentAtMs)
             .put(tick.reason.coerceIn(0, 0xff).toByte())
-            .array()
+        if (iob != null) {
+            buffer.put(IOB_FIELD.toByte())
+                .putInt(iob.tenths.coerceIn(0, IOB_MAX_TENTHS))
+                .putInt(iob.ageSec.coerceIn(0, IOB_MAX_AGE_SEC))
+        }
+        return buffer.array()
     }
 
     fun decodeTick(data: ByteArray?): Tick? {
@@ -128,7 +166,17 @@ object ModWatchMessages {
         if (percent != BATTERY_UNKNOWN && percent !in 0..100) return null
         if (charging != 0 && charging != 1) return null
         if (at < 0) return null
-        return Tick(if (percent == BATTERY_UNKNOWN) null else percent, charging == 1, at, reason)
+        return Tick(if (percent == BATTERY_UNKNOWN) null else percent, charging == 1, at, reason, decodeIob(body))
+    }
+
+    /** The active insulin after the tick's fields: `null` when there is none, it is cut short or out of range. */
+    private fun decodeIob(body: ByteBuffer): PumpIob? {
+        if (body.remaining() < IOB_BYTES) return null
+        if ((body.get().toInt() and 0xff) != IOB_FIELD) return null
+        val tenths = body.int
+        val age = body.int
+        if (tenths !in 0..IOB_MAX_TENTHS || age !in 0..IOB_MAX_AGE_SEC) return null
+        return PumpIob(tenths, age)
     }
 
     /** [kind] is one of the standard alert kinds a snooze can name. */

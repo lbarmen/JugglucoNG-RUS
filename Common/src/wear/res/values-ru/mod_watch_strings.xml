@@ -30,6 +30,9 @@
     </string-array>
     <string name="mod_watch_face_percent">%1$d %%</string>
     <string name="mod_watch_face_minutes">%1$d мин</string>
+    <string name="mod_watch_face_seconds">%1$d с</string>
+    <string name="mod_watch_face_hours">%1$d ч</string>
+    <string name="mod_watch_face_iob">%1$s ЕД</string>
     <string name="mod_watch_face_phone">телефон</string>
     <string name="mod_watch_face_watch">часы</string>
 

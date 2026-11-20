@@ -14,6 +14,7 @@ import tk.glucodata.NotificationHistorySource
 import tk.glucodata.glucosecomplication.ComplicationRenderer
 import tk.glucodata.mod.watch.ModBattery
 import tk.glucodata.mod.watch.PhoneBatteryStore
+import tk.glucodata.mod.watch.PumpIobStore
 import tk.glucodata.ui.WearPrediction
 import tk.glucodata.ui.WearSensorSelection
 
@@ -32,6 +33,8 @@ import tk.glucodata.ui.WearSensorSelection
  *   app, part 7a; the arrow and the change take it too, part 7l), range `Natives.targetlow/targethigh` with
  *   `GlucoseRangeColors` defaults (as `ComplicationRenderer.drawSparkline`), clock mode `Applic.hour24` (as `WatchRenderer.watchtime`);
  * - batteries: [PhoneBatteryStore] (from `/mod/tick`) and [ModBattery] (this watch);
+ * - the pump's active insulin: [PumpIobStore] (from `/mod/tick`, only the pump's number; never upstream's journal
+ *   computation on the watch, `WearJournalIob`);
  * - forecast: upstream's `WearPrediction.forecast` of the lane, only with their "Prediction" setting on (as their
  *   chart screen on the watch, `ChartScreen`); the dim mode draws it as well (part 7l).
  *
@@ -70,6 +73,7 @@ internal object ModFaceSource : FaceSource {
             phoneBatteryPercent = guard { PhoneBatteryStore.read(context, nowMs) },
             watchBatteryPercent = guard { ModBattery.read(context)?.percent },
             forecast = forecast,
+            pumpIob = guard { PumpIobStore.read(context) }?.let { FacePumpIob(it.tenths, it.valueAtMs) },
         )
     }
 

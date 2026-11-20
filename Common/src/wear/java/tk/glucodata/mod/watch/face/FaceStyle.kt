@@ -49,7 +49,17 @@ data class FaceStyle(
     val batteryWarn: Int = AMBER,
     /** The number in bold (not in the dim mode, part 7c). */
     val valueBold: Boolean = true,
+    /** The pump's active insulin under 15 minutes (20.11: light blue). */
+    val iobFresh: Int = IOB_FRESH,
+    /** ... 15-30 minutes old and "— ЕД" (20.11: a dim blue, not grey - grey sank into the pale age). */
+    val iobStale: Int = IOB_STALE,
+    /** The age while not red in the three rows with the active insulin (20.11: paler than the change above it). */
+    val agePale: Int = AGE_PALE,
 ) {
+    /** The colour of the active insulin row by its [state]. */
+    fun iobColor(state: FaceValues.IobState?): Int =
+        if (state == FaceValues.IobState.FRESH) iobFresh else iobStale
+
     /** The value's own range colour, dimmed in ambient more than the rest (part 7c); [neutral] without one. */
     fun valueColor(rangeColor: Int?): Int =
         rangeColor?.let { if (ambient) dim(it, AMBIENT_VALUE_DIM) else it } ?: neutral
@@ -87,6 +97,11 @@ data class FaceStyle(
 
         private const val WHITE = 0xFFFFFFFF.toInt()
         private const val GREY = 0xFFB4B4B4.toInt()
+        /** The age while not red beside the active insulin (20.11, 1a with fixes: paler than the change above it). */
+        private const val AGE_PALE = 0xFF8E8E8E.toInt()
+        /** The pump's active insulin: fresh light blue, stale a dim blue still read as blue beside the pale age. */
+        private const val IOB_FRESH = 0xFF7CC4FF.toInt()
+        private const val IOB_STALE = 0xFF4D7AA8.toInt()
         private const val RED = 0xFFFF5252.toInt()
         private const val AMBER = 0xFFFFC940.toInt()
         /** Upstream's neutral value tone on a dark face (as [ModFaceSource]). */
@@ -115,6 +130,8 @@ data class FaceStyle(
             forecast = dim(FORECAST, AMBIENT_DIM), forecastWidth = 0.0045f,
             battery = dim(GREY, AMBIENT_DIM), batteryLow = dim(RED, AMBIENT_DIM), batteryWarn = dim(AMBER, AMBIENT_DIM),
             valueBold = false,
+            iobFresh = dim(IOB_FRESH, AMBIENT_DIM), iobStale = dim(IOB_STALE, AMBIENT_DIM),
+            agePale = dim(AGE_PALE, AMBIENT_DIM),
         )
 
         fun of(ambient: Boolean): FaceStyle = if (ambient) AMBIENT else NORMAL

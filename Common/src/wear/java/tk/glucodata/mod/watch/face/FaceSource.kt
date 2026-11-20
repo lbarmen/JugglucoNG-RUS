@@ -40,6 +40,12 @@ data class FaceReading(
 data class FacePoint(val timeMs: Long, val value: Float)
 
 /**
+ * The pump's active insulin (watch face, 20.11): [tenths] of a unit (0 - a known zero) and its own time on the watch's
+ * clock ([valueAtMs]); only the pump's number from CareLink, never the journal's (`PumpIobStore`).
+ */
+data class FacePumpIob(val tenths: Int, val valueAtMs: Long)
+
+/**
  * Everything the face needs at [nowMs] (the watch's clock).
  *
  * [current] - upstream's current reading, at most [FaceValues.SOURCE_MAX_AGE_MS] old, `null` when there is none;
@@ -47,7 +53,8 @@ data class FacePoint(val timeMs: Long, val value: Float)
  * [FaceValues.HISTORY_MIN_MS] back; [graphPoints] - the same window as the user's graph smoothing draws it;
  * [low] / [high] - the user's target range in display units; batteries - percent or `null` when unknown or too old;
  * [forecast] - upstream's watch forecast from the end of [history] (`WearPrediction.forecast`, part 7a), oldest first,
- * empty when their "Prediction" setting is off or there is too little to project from.
+ * empty when their "Prediction" setting is off or there is too little to project from; [pumpIob] - the pump's active
+ * insulin of any age, `null` - none (the face then shows two rows beside the number).
  */
 data class FaceSnapshot(
     val nowMs: Long,
@@ -62,6 +69,7 @@ data class FaceSnapshot(
     val phoneBatteryPercent: Int?,
     val watchBatteryPercent: Int?,
     val forecast: List<FacePoint> = emptyList(),
+    val pumpIob: FacePumpIob? = null,
 )
 
 /**

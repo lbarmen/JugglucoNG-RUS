@@ -27,6 +27,7 @@ import kotlinx.coroutines.launch
 import tk.glucodata.UiRefreshBus
 import tk.glucodata.glucosecomplication.ComplicationRenderer
 import tk.glucodata.mod.watch.ModWatchLog
+import tk.glucodata.mod.watch.PumpIobStore
 import tk.glucodata.mod.watch.SignalBudget
 
 /**
@@ -48,8 +49,15 @@ import tk.glucodata.mod.watch.SignalBudget
  * (new readings still come through [request]), the picture moves one step a minute ([FaceLayout.burnInOffset]). Its
  * snapshots hold the forecast as well (part 7l: the dim mode draws it). The dots' colours come from the limits kept
  * with the snapshot, not from native calls in every frame (critic 7, N7). The dim mode draws only on the system's
- * minute tick (`postInvalidate` draws nothing there, watchface 1.2.1), so a frame that finds a signal newer than its
- * kept snapshot (the read not done yet or waiting for the budget) reads the snapshot itself first (part 7o).
+ * minute tick (`postInvalidate` draws nothing there, watchface 1.2.1), so since battery item 1 of 20.11 it reads only
+ * in its frame: a request there is just noted, and the next frame that finds a signal newer than its kept snapshot
+ * reads once ([ambientReadDue]) - one read a minute instead of one for each of the ~3 signals a minute, and what
+ * arrived is never more than a minute behind. No dim frame on arrival (owner, 20.11: "proposal A" not done).
+ *
+ * The lit face (20.11): the age in seconds under two minutes, so a frame a second while it is ([FaceValues.frameDelayMs]
+ * through `interactiveDrawModeUpdateDelayMillis`), a frame a minute otherwise; a frame only paints the kept snapshot.
+ * The pump's active insulin ([tk.glucodata.mod.watch.PumpIobStore]) arriving or changing is a request like a new
+ * reading.
  *
  * The journal (part 7o, [ModWatchLog], no values, no times of events): `face read` for every read, `face frame` for
  * the first frame of a new reading - the reading's age in seconds, the read's duration, the mode.
@@ -124,19 +132,28 @@ internal class ModFaceRenderer(
 
     init {
         guarded {
-            // leaving the dim mode: as new data (its snapshot may be up to AMBIENT_STALE_MS old)
+            // leaving the dim mode: as new data (its snapshot may be up to a minute old)
             scope.launch { watchState.isAmbient.collect { ambient -> if (ambient == false) request() } }
             scope.launch { watchState.isVisible.collect { visible -> if (visible == true && dirty) request() } }
             scope.launch { UiRefreshBus.revision.drop(1).collect { request() } }
+            // 20.11: the pump's active insulin came or changed - as a new reading
+            scope.launch { PumpIobStore.revision.drop(1).collect { request() } }
             guarded { FaceSettings.prefs(context).registerOnSharedPreferenceChangeListener(settingsListener) }
             refresh()
         }
     }
 
-    /** New data (main thread): a read now, once the budget allows it, or once the face is visible again. */
+    /** The minute (of the frame's clock) of the last read made by a dim frame ([ambientReadDue]). */
+    private var ambientReadMinute = NO_MINUTE
+
+    /**
+     * New data (main thread): a read now, once the budget allows it, or once the face is visible again. In the dim
+     * mode only noted: its next frame (on the minute tick) reads it ([ambientReadDue], battery item 1 of 20.11).
+     */
     private fun request() {
         signals++
         dirty = true
+        if (!requestReads(watchState.isAmbient.value == true)) return
         val wait = readWait(watchState.isVisible.value == true, budget.lastRuns(), SystemClock.elapsedRealtime())
             ?: return
         if (wait <= 0L) refresh()
@@ -209,17 +226,28 @@ internal class ModFaceRenderer(
 
     /** What the face shows from a snapshot, apart from the graph window moving on with the clock. */
     private fun shown(s: FaceSnapshot) = listOf(s.isMmol, s.hour24, s.graphHours, s.current, s.history.lastOrNull(),
-        s.graphPoints.lastOrNull(), s.low, s.high, s.phoneBatteryPercent, s.watchBatteryPercent, s.forecast.lastOrNull())
+        s.graphPoints.lastOrNull(), s.low, s.high, s.phoneBatteryPercent, s.watchBatteryPercent, s.forecast.lastOrNull(),
+        s.pumpIob)
 
     override fun render(canvas: Canvas, bounds: Rect, zonedDateTime: ZonedDateTime, sharedAssets: Assets) {
         try {
             val now = zonedDateTime.toInstant().toEpochMilli()
             val ambient = renderParameters.drawMode == DrawMode.AMBIENT
-            // part 7o: the dim mode's next frame is a minute away - what has arrived is read for this one; a failed
-            // read leaves the old snapshot, drawn as before
-            if (ambient && behind(kept)) guarded { load(inFrame = true) }
+            if (ambient) {
+                // part 7o and battery item 1 of 20.11: the dim mode reads only here, once a minute at most - what
+                // has arrived since the last read (or a snapshot gone stale) is read for this frame; a failed read
+                // leaves the old snapshot, drawn as before
+                val prev = kept
+                val minute = Math.floorDiv(now, 60_000L)
+                val stale = prev != null && abs(now - prev.readAtMs) >= staleAfter(true)
+                if (ambientReadDue(prev != null, behind(prev), stale, ambientReadMinute, minute)) {
+                    ambientReadMinute = minute
+                    guarded { load(inFrame = true) }
+                }
+            }
             val data = kept
-            if (data == null || abs(now - data.readAtMs) >= staleAfter(ambient)) refresh()
+            // a frame a second must not queue a read behind the one still running
+            if (!ambient && !refreshing.get() && (data == null || abs(now - data.readAtMs) >= staleAfter(false))) refresh()
             data?.snapshot?.current?.let { reading ->
                 if (reading.timeMs != framedReadingMs) {
                     framedReadingMs = reading.timeMs
@@ -230,7 +258,13 @@ internal class ModFaceRenderer(
             val snapshot = data?.snapshot?.copy(nowMs = now) ?: FaceSnapshot(now, isMmol, true, graphHours, null,
                 emptyList(), emptyList(), 0f, 0f, null, null)
             val labels = data?.labels ?: FaceLabels.from(context)
-            val model = FaceModel.build(snapshot, zonedDateTime.zone, labels)
+            val model = FaceModel.build(snapshot, zonedDateTime.zone, labels, ambient)
+            // 20.11: a frame a second while the age is written in seconds, else a minute (the dim mode: the system's
+            // minute tick whatever this says)
+            if (!ambient) {
+                val delay = FaceValues.frameDelayMs(model.ageMs, ambient = false)
+                if (interactiveDrawModeUpdateDelayMillis != delay) interactiveDrawModeUpdateDelayMillis = delay
+            }
             val limits = data?.limits
             val shift = if (ambient) {
                 FaceLayout.burnInOffset(Math.floorDiv(now, 60_000L), minOf(bounds.width(), bounds.height()).toFloat(),
@@ -288,6 +322,32 @@ internal class ModFaceRenderer(
 
         /** How old a kept snapshot may get before a frame reads a new one. */
         internal fun staleAfter(ambient: Boolean): Long = if (ambient) AMBIENT_STALE_MS else STALE_MS
+
+        /** "No dim read yet" for [ambientReadDue]. */
+        const val NO_MINUTE = Long.MIN_VALUE
+
+        /**
+         * A dim frame reads the data: there is no snapshot yet ([hasKept] false), or something arrived since the last
+         * read ([behind]) or the snapshot is [stale] - and no dim frame of this minute ([nowMinute], minutes since the
+         * epoch of the frame's clock) read yet ([lastReadMinute], [NO_MINUTE] - none). One read a minute (battery
+         * item 1 of 20.11) even when an extra dim frame comes between; a minute by its number, not 50 s by the clock,
+         * so a read in the frame that entered the dim mode never holds back the next minute's (critic 9, L1). Requests
+         * in the dim mode never read.
+         */
+        internal fun ambientReadDue(
+            hasKept: Boolean,
+            behind: Boolean,
+            stale: Boolean,
+            lastReadMinute: Long,
+            nowMinute: Long,
+        ): Boolean {
+            if (!hasKept) return true
+            if (!behind && !stale) return false
+            return nowMinute != lastReadMinute
+        }
+
+        /** What a request does in the dim mode: nothing but noting it (`false` - no read until a frame). */
+        internal fun requestReads(ambient: Boolean): Boolean = !ambient
 
         /**
          * The read budget (part 7o): at most [READS_PER_WINDOW] reads in any [READ_WINDOW_MS] - history arrives in

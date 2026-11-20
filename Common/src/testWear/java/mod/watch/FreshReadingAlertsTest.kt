@@ -10,6 +10,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import tk.glucodata.mod.watch.CoalescedRunner
+import tk.glucodata.mod.watch.FreshReadingAlerts
 import tk.glucodata.mod.watch.RevisionGate
 import tk.glucodata.mod.watch.SignalBudget
 
@@ -122,6 +123,101 @@ class FreshReadingAlertsTest {
         dataArrives()
         Thread.sleep(300L)
         assertEquals(3, checks.get())
+    }
+
+    /**
+     * The phone's calibration, then ~0.1 s later its values (each bumps the revision); the check hands a new reading on
+     * (the echo bump, on its thread) when the values are stored. [quietMs] - the runner's quiet window; [checkMs] - how
+     * long a check takes. Returns the number of checks and whether one of them saw the values.
+     */
+    private fun calibrationThenValues(quietMs: Long, checkMs: Long): Pair<Int, Boolean> {
+        val revision = AtomicLong()
+        val stored = java.util.concurrent.atomic.AtomicBoolean(false)
+        val sawValues = java.util.concurrent.atomic.AtomicBoolean(false)
+        val gate = RevisionGate()
+        val checks = AtomicInteger()
+        lateinit var runner: CoalescedRunner
+        runner = CoalescedRunner(
+            "test", SignalBudget(3, 20_000L), ::now, due = { gate.due(revision.get()) },
+            quietMs = quietMs, maxDelayMs = 2_000L,
+        ) {
+            checks.incrementAndGet()
+            val seen = stored.get()
+            Thread.sleep(checkMs)
+            if (seen) {
+                sawValues.set(true)
+                revision.incrementAndGet() // the hand-over's echo
+                runner.signal()
+            }
+            gate.checked(revision.get())
+        }
+        revision.incrementAndGet() // /sync2/cal
+        runner.signal()
+        Thread.sleep(100L)
+        stored.set(true) // /sync2/chunk: stored, then the bump
+        revision.incrementAndGet()
+        runner.signal()
+        Thread.sleep(1_500L)
+        return checks.get() to sawValues.get()
+    }
+
+    @Test
+    fun withoutAQuietWindowTheValuesDuringTheCalibrationsCheckWereMissed() {
+        // watch measurement 20.11: the check started by the calibration took the values' bump for its echo
+        val (checks, saw) = calibrationThenValues(quietMs = 0L, checkMs = 300L)
+        assertEquals(1, checks)
+        assertFalse(saw)
+    }
+
+    @Test
+    fun calibrationAndValuesAMomentApartAreOneCheckThatSeesTheValues() {
+        val (checks, saw) = calibrationThenValues(quietMs = FreshReadingAlerts.QUIET_MS, checkMs = 300L)
+        assertEquals(1, checks)
+        assertTrue(saw)
+    }
+
+    @Test
+    fun theQuietWindowRunsOnceAfterTheLastSignal() {
+        val times = java.util.Collections.synchronizedList(mutableListOf<Long>())
+        val runner = CoalescedRunner("test", SignalBudget(3, 20_000L), ::now, quietMs = 300L, maxDelayMs = 5_000L) {
+            times += now()
+        }
+        runner.signal()
+        Thread.sleep(150L)
+        val last = now()
+        runner.signal()
+        Thread.sleep(1_000L)
+        assertEquals("times $times", 1, times.size)
+        assertTrue("waited ${times[0] - last} ms", times[0] - last >= 280L)
+    }
+
+    @Test
+    fun aStreamOfSignalsWaitsNoLongerThanTheMaxDelay() {
+        val times = java.util.Collections.synchronizedList(mutableListOf<Long>())
+        val runner = CoalescedRunner("test", SignalBudget(3, 20_000L), ::now, quietMs = 300L, maxDelayMs = 600L) {
+            times += now()
+        }
+        val first = now()
+        // a signal every ~50 ms for 1.5 s (a busy wait: Thread.sleep is coarse on Windows) - never quiet for 300 ms
+        while (now() - first < 1_500L) {
+            runner.signal()
+            val until = System.nanoTime() + 50_000_000L
+            while (System.nanoTime() < until) Unit
+        }
+        Thread.sleep(800L)
+        assertTrue("times $times", times.isNotEmpty())
+        assertTrue("first run after ${times[0] - first} ms", times[0] - first in 580L..1_000L)
+        // one run per max delay at most, plus the one after the stream
+        assertTrue("runs ${times.size}", times.size in 2..4)
+    }
+
+    @Test
+    fun theWatchWaitsForTheSignalsToSettle() {
+        val alerts = file("wear/java/tk/glucodata/mod/watch/FreshReadingAlerts.kt")
+        assertTrue(alerts.contains("quietMs = QUIET_MS"))
+        assertTrue(alerts.contains("maxDelayMs = MAX_DELAY_MS"))
+        assertTrue(FreshReadingAlerts.QUIET_MS in 200L..1_000L)
+        assertTrue(FreshReadingAlerts.MAX_DELAY_MS >= FreshReadingAlerts.QUIET_MS)
     }
 
     @Test
