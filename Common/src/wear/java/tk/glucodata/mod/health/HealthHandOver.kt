@@ -83,7 +83,9 @@ object HealthHandOver {
     private fun safeRun(context: Context, source: HealthSource, forceStatus: Boolean) {
         try {
             val core = HealthCore.get(context)
-            run(core, source, HealthSender.dataClient(core.context), forceStatus = forceStatus)
+            // urgent only for "Send now" (forceStatus is set by the button alone): a tick's batches wait for the
+            // system's own batching (owner's decision 20.11, HealthSender)
+            run(core, source, HealthSender.dataClient(core.context, urgent = forceStatus), forceStatus = forceStatus)
         } catch (t: Throwable) {
             ModWatchLog.w("health hand-over failed: ${t.javaClass.simpleName}")
         }
