@@ -30,7 +30,9 @@ MOD_WEAR_COMPONENTS = ['tk.glucodata.mod.watch.SnoozeButtonActivity', 'tk.glucod
                        'tk.glucodata.mod.watch.face.FaceSettingsActivity',
                        # heart rate and steps (watch part 4b)
                        'tk.glucodata.mod.health.HealthActivity', 'tk.glucodata.mod.health.hs.ModHealthListenerService',
-                       'tk.glucodata.mod.health.hs.ModHealthStarter', 'tk.glucodata.mod.health.hs.ModHealthBootReceiver']
+                       'tk.glucodata.mod.health.hs.ModHealthStarter', 'tk.glucodata.mod.health.hs.ModHealthBootReceiver',
+                       # our alarm screen and its starter (watch part 8)
+                       'tk.glucodata.mod.watch.alarm.ModAlarmActivity', 'tk.glucodata.mod.watch.alarm.ModAlarmStarter']
 # Permissions the wear APK must request, exact names (watch part 4b; upstream's watch manifest has
 # 'BODY_SENSORS_BACKGROUND ' with a trailing space, which no system knows).
 MOD_WEAR_PERMISSIONS = ['android.permission.BODY_SENSORS', 'android.permission.BODY_SENSORS_BACKGROUND',
@@ -264,7 +266,24 @@ def check_wear_components(apk):
           'our watch face editor: not a face editor by action (no WEARABLE_CONFIGURATION, no WATCH_FACE_EDITOR)')
     check('android.intent.action.MAIN' in editor and 'android.intent.category.LAUNCHER' in editor,
           'our watch face editor: own launcher entry "Graph hours" (watch part 3c2)')
+    check_wear_alarm(apk, out)
     check_wear_health(apk, out)
+
+
+def check_wear_alarm(apk, xmltree):
+    """Our alarm screen (watch part 8): private, over the lock screen, turns the screen on, one instance - as
+    upstream's; its starter private."""
+    blocks = component_blocks(xmltree)
+    screen = blocks.get('tk.glucodata.mod.watch.alarm.ModAlarmActivity', '')
+    false = r'=(?:false|\(type 0x12\)0x0)\b'
+    true = r'=(?:true|\(type 0x12\)0xffffffff)\b'
+    check(re.search(r'exported\([^)]*\)' + false, screen) is not None
+          and re.search(r'showWhenLocked\([^)]*\)' + true, screen) is not None
+          and re.search(r'turnScreenOn\([^)]*\)' + true, screen) is not None
+          and re.search(r'launchMode\([^)]*\)=(?:2|\(type 0x10\)0x2|singleTask)\b', screen) is not None,
+          'our alarm screen: not exported, showWhenLocked, turnScreenOn, singleTask')
+    starter = blocks.get('tk.glucodata.mod.watch.alarm.ModAlarmStarter', '')
+    check(re.search(r'exported\([^)]*\)' + false, starter) is not None, 'alarm screen starter: not exported')
 
 
 def check_phone_components(apk):
