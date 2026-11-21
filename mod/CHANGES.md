@@ -10,6 +10,10 @@ A new line goes into the "After …" section, in the same pull request (PR) as t
 
 ## After candidate 2 (in `main`, no tag yet)
 For the user:
+- 2026-11-18 — launcher icon of the phone and the watch: the author's icon with an orange "M" badge in the
+  bottom-right corner, to tell JugglucoNGmod apart from the official JugglucoNG (`Common/src/mod/res/`: the author's
+  foreground picture is layered under our badge, so a new author's icon comes through; the badge stays inside the
+  round mask of the watch).
 - 2026-11-17 — renamed to JugglucoNGmod (candidates 1-2 were built under the former name and package): app name
   "JugglucoNGmod" (watch face too), package `tk.glucodata.ng.mod` (installs as a new app), repository
   `lbarmen/JugglucoNGmod`; inside: folder `mod/`, build type `mod`, hook mark `MOD-HOOK`, tags `mod-X.Y.Z-N`. The
